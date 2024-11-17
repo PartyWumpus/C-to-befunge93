@@ -4,14 +4,18 @@ pub struct OpBuilder {
     ops: String,
     branch_labels: HashMap<String, usize>,
     branch_points: HashMap<String, Vec<usize>>,
+    exit_points: Vec<usize>,
+    return_points: Vec<usize>,
 }
 
 impl OpBuilder {
     pub fn new() -> Self {
         Self {
-            ops: "".to_owned(),
+            ops: " v   _$ >:#^_$".to_owned(),
             branch_labels: HashMap::new(),
             branch_points: HashMap::new(),
+            exit_points: Vec::new(),
+            return_points: Vec::new(),
         }
     }
 
@@ -33,14 +37,24 @@ impl OpBuilder {
         self.append_str("00p")
     }
 
-    /// Puts return value on bstack
-    pub fn load_return_val(&mut self) {
+    /// Puts stack ptr on bstack
+    fn load_call_stack_ptr(&mut self) {
         self.append_str("10g");
     }
 
-    /// Set return value to top of bstack
-    pub fn set_return_val(&mut self) {
+    /// Set stack ptr to top of bstack
+    fn set_call_stack_ptr(&mut self) {
         self.append_str("10p")
+    }
+
+    /// Puts return value on bstack
+    pub fn load_return_val(&mut self) {
+        self.append_str("20g");
+    }
+
+    /// Set return value to top of bstack
+    fn set_return_val(&mut self) {
+        self.append_str("20p")
     }
 
     /// Puts num on bstack
@@ -58,7 +72,7 @@ impl OpBuilder {
     fn index_register(&mut self, id: usize) {
         let id = id + 2;
         if id > 99 {
-            panic!("attempt to index register > 96")
+            panic!("attempt to index register > 99")
         }
         self.append_str(&format!("{}{}", id % 10, id / 10))
     }
@@ -111,11 +125,110 @@ impl OpBuilder {
         self.not_zero_branch(label);
     }
 
-    pub fn call(&mut self) {}
+    //// Function Calls
+
+    pub fn increment_stack_ptr(&mut self, amount: usize) {
+        self.load_stack_ptr();
+        self.load_number(amount);
+        self.append_char('+');
+        self.set_stack_ptr();
+    }
+
+    pub fn decrement_stack_ptr(&mut self, amount: usize) {
+        self.load_stack_ptr();
+        self.load_number(amount);
+        self.append_char('-');
+        self.set_stack_ptr();
+    }
+
+    fn exit(&mut self) {
+        self.append_char('^');
+        self.exit_points.push(self.ops.len() - 1);
+    }
+
+    pub fn return_(&mut self, stack_frame_size: usize) {
+        self.set_return_val();
+        self.decrement_stack_ptr(stack_frame_size);
+
+        self.load_call_stack_ptr();
+        self.append_str(r#"1-:2g\1-:2g\"#);
+        self.set_call_stack_ptr();
+
+        self.exit();
+    }
+
+    fn call_exit(&mut self) {
+        self.append_str("^>");
+        self.exit_points.push(self.ops.len() - 2);
+        self.return_points.push(self.ops.len() - 1);
+    }
+
+    pub fn call(&mut self) {
+        // TODO: optimize with swap op
+        self.load_call_stack_ptr();
+        self.append_str("2p");
+
+        self.load_number(self.return_points.len() + 1);
+        self.load_call_stack_ptr();
+        self.append_str("1+2p");
+
+        self.load_call_stack_ptr();
+        self.append_str("2+");
+        self.set_call_stack_ptr();
+
+        self.call_exit();
+    }
+
+    //// Finalize
 
     pub fn finalize_function(self) -> Vec<String> {
         let row_length = self.ops.len();
-        let mut rows = vec![self.ops];
+        let mut rows: Vec<Vec<char>> = vec![];
+
+        let mut entry_row = vec![' ', '>', '1', '-', ':', 'v'];
+        entry_row.append(&mut vec![' '; row_length]);
+        rows.push(entry_row);
+
+        // Add return points
+        for (i, pos) in self.return_points.iter().enumerate() {
+            if i < self.return_points.len() {
+                let mut resposition_row = vec![' '; row_length];
+                resposition_row[8] = '^';
+                resposition_row[9] = '-';
+                resposition_row[10] = '1';
+                resposition_row[11] = '<';
+                rows.push(resposition_row);
+            }
+            let mut entry_row = vec![' '; row_length];
+            entry_row[8] = '>';
+            entry_row[9] = ':';
+            entry_row[10] = '#';
+            entry_row[11] = '^';
+            entry_row[12] = '_';
+            entry_row[13] = '$';
+
+            entry_row[*pos] = 'v';
+            rows.push(entry_row);
+        }
+
+        // Add function exit points
+        let mut exit_row = vec![' '; row_length];
+        exit_row[0] = '^';
+        for pos in self.exit_points {
+            exit_row[pos] = '<';
+        }
+
+        rows.push(exit_row);
+
+        if self.return_points.len() > 0 {
+            let mut row = vec![' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', '^', '-', '1', '<'];
+            row.append(&mut vec![' '; row_length]);
+            rows.push(row);
+        }
+
+        rows.push(self.ops.chars().collect());
+
+        // Add branches
         for (label, label_pos) in self.branch_labels {
             let mut row = vec![' '; row_length];
             row[label_pos] = '^';
@@ -126,8 +239,10 @@ impl OpBuilder {
                     row[*branch_pos] = '>';
                 }
             }
-            rows.push(row.iter().collect::<String>());
+            rows.push(row);
         }
-        rows
+        rows.iter()
+            .map(|row| row.iter().collect::<String>())
+            .collect()
     }
 }
