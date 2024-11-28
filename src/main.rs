@@ -1,14 +1,32 @@
-use std::{collections::HashMap, mem};
+use std::{collections::HashMap, mem, process::exit};
 
 use builder::OpBuilder;
+use c::parse_c;
 
 mod builder;
+
+static PRELUDE: &str = r##"v!R#######
+v#########                       ###################
+v#########                       ###################
+v#########
+v#########
+v#########
+v#########
+v#########
+v#########
+v#########
+>"!"00p 010g2-2pv
+>v  10          <
+ >:#v_@
+ v  <
+"##;
 
 #[derive(Debug)]
 enum IRValue {
     Stack(usize),
     Immediate(usize),
     Register(usize), // limited to only like 70ish tho
+    Psuedo(String),
 }
 
 #[derive(Debug)]
@@ -129,6 +147,9 @@ impl CodeGen {
             IRValue::Stack(offset) => self.builder.load_stack_val(*offset),
             IRValue::Register(id) => self.builder.load_register_val(*id),
             IRValue::Immediate(value) => self.builder.load_number(*value),
+            IRValue::Psuedo(_) => {
+                panic!("Psuedo registers should be removed by befunge generation time")
+            }
         }
     }
 
@@ -137,119 +158,140 @@ impl CodeGen {
             IRValue::Stack(offset) => self.builder.set_stack_val(*offset),
             IRValue::Register(id) => self.builder.set_register_val(*id),
             IRValue::Immediate(_) => panic!("Immediate value as output location"),
+            IRValue::Psuedo(_) => {
+                panic!("Psuedo registers should be removed by befunge generation time")
+            }
         }
     }
 }
 
 /// TODO:
-fn parse(str: String) -> Vec<IROperation> {
+fn parse_ir(str: String) -> Vec<IROperation> {
     let mut out = vec![];
     for line in str.lines() {}
     out
 }
 
+mod c {
+
+    use std::path::Path;
+
+    use lang_c::{
+        ast::{
+            BlockItem, Constant, Declaration, Declarator, DeclaratorKind, Expression,
+            ExternalDeclaration, FunctionDefinition, IntegerBase, Statement,
+        },
+        driver::{parse, Config},
+        span::Node,
+    };
+
+    use crate::{IRFunction, IROperation, IRValue};
+
+    pub fn parse_c<P: AsRef<Path>>(file: P) -> Result<Vec<IRFunction>, lang_c::driver::Error> {
+        let config = Config::default();
+        let parsed = parse(&config, file)?;
+        let out = parsed
+            .unit
+            .0
+            .iter()
+            .map(|obj| match &obj.node {
+                ExternalDeclaration::Declaration(_) => todo!("add declarations"),
+                ExternalDeclaration::StaticAssert(_) => todo!("add static asserts"),
+                ExternalDeclaration::FunctionDefinition(obj) => parse_function(&obj.node),
+            })
+            .collect::<Vec<_>>();
+        Ok(out)
+    }
+
+    fn parse_function(func: &FunctionDefinition) -> IRFunction {
+        // TODO: deal with specifiers
+        // TODO: deal with K&R declarations, although i only really care about c99
+        let name = parse_declarator(&func.declarator.node);
+        let vec = parse_statement(&func.statement.node);
+
+        // TODO: do pseudo -> stack pass
+
+        IRFunction {
+            name,
+            ops: vec,
+            stack_frame_size: 5, // FIXME: :3
+        }
+    }
+
+    fn parse_declarator(decl: &Declarator) -> String {
+        match &decl.kind.node {
+            DeclaratorKind::Identifier(node) => node.node.name.clone(),
+            _ => todo!("add non identifier functions"),
+        }
+    }
+
+    fn parse_statement(stmt: &Statement) -> Vec<IROperation> {
+        match stmt {
+            Statement::Return(maybe_expr) => {
+                if let Some(expr) = maybe_expr {
+                    vec![IROperation::Return(parse_expression(&expr.node))]
+                } else {
+                    vec![IROperation::Return(IRValue::Immediate(0))]
+                }
+            }
+            Statement::Compound(blocks) => {
+                let mut ops = vec![];
+                for block in blocks {
+                    ops.extend(parse_block(&block.node));
+                }
+                ops
+            }
+            _ => todo!("STATEMENT:, {:?}", stmt),
+        }
+    }
+
+    fn parse_block(block: &BlockItem) -> Vec<IROperation> {
+        match block {
+            BlockItem::Statement(stmt) => parse_statement(&stmt.node),
+            _ => todo!("BLOCK: {:?}", block),
+        }
+    }
+
+    fn parse_expression(expr: &Expression) -> IRValue {
+        match expr {
+            Expression::Constant(constant) => parse_constant(&constant.node),
+            _ => todo!("EXPRESSION: {:?}", expr),
+        }
+    }
+
+    fn parse_constant(val: &Constant) -> IRValue {
+        match val {
+            Constant::Integer(int) => {
+                let x: usize = match int.base {
+                    IntegerBase::Decimal => usize::from_str_radix(&int.number, 10).unwrap(),
+                    _ => todo!("INT: {:?}", int),
+                };
+                IRValue::Immediate(x)
+            }
+            _ => todo!("CONSTANT: {:?}", val),
+        }
+    }
+}
+
 fn main() {
-    /*
-        let x = r#"FUNC phonk
-    ADD s1, i5, r2
-    LABEL point
-    MULT i100, r2, s1
-    BRZ point, s5
-    RET s1"#;
-        println!("{x}");
-        let x = IRFunction {
-            name: "phonk".to_string(),
-            stack_frame_size: 1,
-            ops: vec![
-                IROperation::FunctionLabel("phonk".to_string()),
-                IROperation::Two(
-                    BinOp::Add,
-                    IRValue::Stack(1),
-                    IRValue::Immediate(5),
-                    IRValue::Register(2),
-                ),
-                IROperation::Label("point".to_string()),
-                IROperation::Two(
-                    BinOp::Mult,
-                    IRValue::Immediate(100),
-                    IRValue::Register(2),
-                    IRValue::Stack(1),
-                ),
-                IROperation::Branch(BranchType::Zero, "point".to_string(), IRValue::Stack(5)),
-                IROperation::Return(IRValue::Stack(1)),
-            ],
-        };
-        */
+    let program = parse_c("examples/listing1-1.c").unwrap();
 
-    let x = r#"
-    FUNC main
-    LABEL labl
-    ADD i50 i4 s1
-    BRZ labl r1
-    CALL phonk s1
-    ADD r0 i1 r4
-    RET r4
-
-    FUNC phonk
-    ADD s1 i2 r5
-    RET r5
-    "#;
-    println!("{x}");
-    let main = IRFunction {
-        name: "main".to_string(),
-        stack_frame_size: 2,
-        ops: vec![
-            IROperation::FunctionLabel("main".to_string()),
-            IROperation::Label("labl".to_owned()),
-            IROperation::Two(
-                BinOp::Add,
-                IRValue::Immediate(50),
-                IRValue::Immediate(4),
-                IRValue::Stack(1),
-            ),
-            IROperation::Branch(BranchType::Zero, "labl".to_owned(), IRValue::Stack(1)),
-            IROperation::Call("phonk".to_owned(), vec![IRValue::Stack(1)]),
-            IROperation::Two(
-                BinOp::Add,
-                IRValue::Register(0),
-                IRValue::Immediate(1),
-                IRValue::Register(4),
-            ),
-            IROperation::Return(IRValue::Register(4)),
-        ],
-    };
-
-    let phonk = IRFunction {
-        name: "phonk".to_string(),
-        stack_frame_size: 2,
-        ops: vec![
-            IROperation::FunctionLabel("phonk".to_string()),
-            IROperation::Two(
-                BinOp::Add,
-                IRValue::Stack(1),
-                IRValue::Immediate(2),
-                IRValue::Register(5),
-            ),
-            IROperation::Return(IRValue::Register(5)),
-        ],
-    };
+    // TODO: make proper function map pass
     let mut function_map = HashMap::new();
     function_map.insert("main".to_owned(), 1);
     function_map.insert("phonk".to_owned(), 2);
+
     println!("");
-    for line in &main.ops {
+    for line in &program {
         println!("{line:?}");
     }
-    println!("");
-    for line in &phonk.ops {
-        println!("{line:?}");
-    }
-    println!("");
+    println!("-- befunge begin");
     let mut cg = CodeGen {
         builder: OpBuilder::new(),
         function_map,
     };
-    cg.compile_function(main);
-    println!("");
-    cg.compile_function(phonk);
+    println!("{}", PRELUDE);
+    for func in program {
+        cg.compile_function(func);
+    }
 }
