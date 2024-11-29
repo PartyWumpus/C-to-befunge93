@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 pub struct OpBuilder {
-    ops: String,
+    ops: Vec<char>,
     branch_labels: HashMap<String, usize>,
     branch_points: HashMap<String, Vec<usize>>,
     exit_points: Vec<usize>,
@@ -11,7 +11,7 @@ pub struct OpBuilder {
 impl OpBuilder {
     pub fn new() -> Self {
         Self {
-            ops: " v   _$ >:#^_$".to_owned(),
+            ops: " v   _$ >:#^_$".chars().collect::<Vec<_>>(),
             branch_labels: HashMap::new(),
             branch_points: HashMap::new(),
             exit_points: Vec::new(),
@@ -19,93 +19,92 @@ impl OpBuilder {
         }
     }
 
-    pub fn append_str(&mut self, str: &str) {
-        self.ops += str
+    pub fn str(&mut self, str: &str) {
+        self.ops.extend(str.chars());
     }
 
-    pub fn append_char(&mut self, char: char) {
-        self.ops.push(char.into());
+    pub fn char(&mut self, char: char) {
+        self.ops.push(char);
     }
 
     /// Puts stack ptr on bstack
     fn load_stack_ptr(&mut self) {
-        self.append_str("00g");
+        self.str("00g");
     }
 
     /// Set stack ptr to top of bstack
     fn set_stack_ptr(&mut self) {
-        self.append_str("00p")
+        self.str("00p");
     }
 
     /// Puts stack ptr on bstack
     fn load_call_stack_ptr(&mut self) {
-        self.append_str("10g");
+        self.str("10g");
     }
 
     /// Set stack ptr to top of bstack
     fn set_call_stack_ptr(&mut self) {
-        self.append_str("10p")
+        self.str("10p");
     }
 
     /// Puts return value on bstack
     pub fn load_return_val(&mut self) {
-        self.append_str("20g");
+        self.str("20g");
     }
 
     /// Set return value to top of bstack
     fn set_return_val(&mut self) {
-        self.append_str("20p")
+        self.str("20p");
     }
 
     /// Puts num on bstack
     pub fn load_number(&mut self, num: usize) {
         let x = match num {
-            0..9 => num.to_string(),
+            0..10 => num.to_string(),
+            10..19 => (num - 9).to_string() + "9+",
             x => format!(
                 r#""{}""#,
                 char::from_u32(x as u32).expect("failed to convert number to befunge string")
             ),
         };
-        self.append_str(&x);
+        self.str(&x);
     }
 
     fn index_register(&mut self, id: usize) {
         let id = id + 2;
-        if id > 99 {
-            panic!("attempt to index register > 99")
-        }
-        self.append_str(&format!("{}{}", id % 10, id / 10))
+        assert!(id < 99, "attempt to index register > 99");
+        self.str(&format!("{}{}", id % 10, id / 10));
     }
 
     pub fn load_register_val(&mut self, id: usize) {
         self.index_register(id);
-        self.append_char('g');
+        self.char('g');
     }
 
     pub fn set_register_val(&mut self, id: usize) {
         self.index_register(id);
-        self.append_char('p');
+        self.char('p');
     }
 
     pub fn load_stack_val(&mut self, offset: usize) {
         self.load_stack_ptr();
         self.load_number(offset);
-        self.append_str("+1g");
+        self.str("+1g");
     }
 
     pub fn set_stack_val(&mut self, offset: usize) {
         self.load_stack_ptr();
         self.load_number(offset);
-        self.append_str("+1p");
+        self.str("+1p");
     }
 
     pub fn label(&mut self, label: String) {
-        self.append_char('>');
+        self.char('>');
         self.branch_labels.insert(label, self.ops.len() - 1);
     }
 
     pub fn unconditional_branch(&mut self, label: String) {
-        self.append_char('v');
+        self.char('v');
         self.branch_points
             .entry(label)
             .or_default()
@@ -113,7 +112,7 @@ impl OpBuilder {
     }
 
     pub fn not_zero_branch(&mut self, label: String) {
-        self.append_str("#v_");
+        self.str("#v_");
         self.branch_points
             .entry(label)
             .or_default()
@@ -121,7 +120,7 @@ impl OpBuilder {
     }
 
     pub fn zero_branch(&mut self, label: String) {
-        self.append_char('!');
+        self.char('!');
         self.not_zero_branch(label);
     }
 
@@ -130,19 +129,19 @@ impl OpBuilder {
     pub fn increment_stack_ptr(&mut self, amount: usize) {
         self.load_stack_ptr();
         self.load_number(amount);
-        self.append_char('+');
+        self.char('+');
         self.set_stack_ptr();
     }
 
     pub fn decrement_stack_ptr(&mut self, amount: usize) {
         self.load_stack_ptr();
         self.load_number(amount);
-        self.append_char('-');
+        self.char('-');
         self.set_stack_ptr();
     }
 
     fn exit(&mut self) {
-        self.append_char('^');
+        self.char('^');
         self.exit_points.push(self.ops.len() - 1);
     }
 
@@ -151,14 +150,14 @@ impl OpBuilder {
         self.decrement_stack_ptr(stack_frame_size);
 
         self.load_call_stack_ptr();
-        self.append_str(r#"1-:2g\1-:2g\"#);
+        self.str(r"1-:2g\1-:2g\");
         self.set_call_stack_ptr();
 
         self.exit();
     }
 
     fn call_exit(&mut self) {
-        self.append_str("^>");
+        self.str("^>");
         self.exit_points.push(self.ops.len() - 2);
         self.return_points.push(self.ops.len() - 1);
     }
@@ -166,14 +165,14 @@ impl OpBuilder {
     pub fn call(&mut self) {
         // TODO: optimize with swap op
         self.load_call_stack_ptr();
-        self.append_str("2p");
+        self.str("2p");
 
         self.load_number(self.return_points.len() + 1);
         self.load_call_stack_ptr();
-        self.append_str("1+2p");
+        self.str("1+2p");
 
         self.load_call_stack_ptr();
-        self.append_str("2+");
+        self.str("2+");
         self.set_call_stack_ptr();
 
         self.call_exit();
@@ -190,7 +189,7 @@ impl OpBuilder {
         rows.push(entry_row);
 
         // Add return points
-        for (i, pos) in self.return_points.iter().enumerate() {
+        for (i, pos) in self.return_points.iter().rev().enumerate() {
             if i < self.return_points.len() {
                 let mut resposition_row = vec![' '; row_length];
                 resposition_row[8] = '^';
@@ -220,13 +219,13 @@ impl OpBuilder {
 
         rows.push(exit_row);
 
-        if self.return_points.len() > 0 {
+        if !self.return_points.is_empty() {
             let mut row = vec![' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', '^', '-', '1', '<'];
             row.append(&mut vec![' '; row_length]);
             rows.push(row);
         }
 
-        rows.push(self.ops.chars().collect());
+        rows.push(self.ops);
 
         // Add branches
         for (label, label_pos) in self.branch_labels {
