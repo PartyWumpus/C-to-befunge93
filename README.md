@@ -32,8 +32,8 @@ While I haven't actually implemented it for the C -> IR phase, the IR would full
 - Inline jumps and loops
 
 ### Current Limitations
+None of these are full architectural failures (aside from perhaps linking) so should be resolvable.
 - Only supports ints as types
-- Scoping of variables is broken (i am lazy)
 - Doesn't support C loops (note the IR is perfectly capable of loops, I just haven't got the C parsing bit done)
 - Doesn't do a register allocation pass, which would probably make it a decent bit faster
 - No linking of any sort, all has to be in one file
@@ -43,7 +43,9 @@ While I haven't actually implemented it for the C -> IR phase, the IR would full
 - Missing some random operators because I haven't bothered to implement them
 - TODO: figure out how the hell automated tests are going to work
 
-None of these are full architectural failures though (aside from perhaps linking) so should be resolvable.
+### Intentional Limitations
+Many invalid C programs will be accepted and will have undefined behaviour. It's easier to program this way, just make sure to check your C code is actually sanely compilable with gcc or something.
+
 
 ## Examples
 

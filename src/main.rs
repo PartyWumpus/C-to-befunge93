@@ -8,7 +8,7 @@ mod builder;
 static PRELUDE: &str = r#"v!R#######
 v#########            STACK -> xx###################
 v#########       CALL STACK -> xx###################
-v#########
+v#########           MEMORY -> xx###################
 v#########
 v#########
 v#########
@@ -73,6 +73,7 @@ enum BinOp {
 struct IRFunction {
     name: String,
     stack_frame_size: usize,
+    parameters: usize,
     ops: Vec<IROp>,
 }
 
@@ -186,14 +187,14 @@ impl CodeGen {
 
 mod c {
 
-    use std::{collections::HashMap, path::Path};
+    use std::{collections::HashMap, path::Path, process::exit};
 
     use lang_c::{
         ast::{
             BinaryOperator, BinaryOperatorExpression, BlockItem, CallExpression, Constant,
-            Declaration, Declarator, DeclaratorKind, Expression, ExternalDeclaration,
-            FunctionDefinition, IfStatement, Initializer, IntegerBase, Statement, UnaryOperator,
-            UnaryOperatorExpression,
+            Declaration, Declarator, DeclaratorKind, DerivedDeclarator, Expression,
+            ExternalDeclaration, FunctionDefinition, IfStatement, Initializer, IntegerBase,
+            Statement, UnaryOperator, UnaryOperatorExpression,
         },
         driver::{parse, Config},
     };
@@ -203,6 +204,12 @@ mod c {
     struct CFunctionThingy {
         count: usize,
         ops: Vec<IROp>,
+        scope: ScopeInfo,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    struct ScopeInfo {
+        variable_map: HashMap<String, IRValue>,
     }
 
     pub fn parse_c<P: AsRef<Path>>(file: P) -> Result<Vec<IRFunction>, lang_c::driver::Error> {
@@ -229,7 +236,7 @@ mod c {
     fn pseudo_removal(func: &mut IRFunction) {
         let mut map = PsuedoMap {
             map: HashMap::new(),
-            count: 0,
+            count: func.parameters,
         };
         for i in 0..func.ops.len() {
             func.ops[i] = match &func.ops[i] {
@@ -325,32 +332,50 @@ mod c {
         let mut function_state = CFunctionThingy {
             ops: vec![],
             count: 0,
+            scope: ScopeInfo::default(),
         };
         // TODO: deal with specifiers
         // TODO: deal with K&R declarations, although i only really care about c99
-        let name = function_state.parse_func_declarator(&func.declarator.node);
+        let name = function_state.parse_declarator(&func.declarator.node);
+        let param_count = function_state.parse_func_declarator(&func.declarator.node);
         function_state.parse_statement(&func.statement.node);
 
         IRFunction {
             name,
             ops: function_state.ops,
+            parameters: param_count,
             stack_frame_size: function_state.count, // NOTE: this is a 'worst case' value,
                                                     // and should be recalculated in a later pass
         }
     }
 
     impl CFunctionThingy {
-        fn parse_func_declarator(&self, decl: &Declarator) -> String {
+        fn parse_func_declarator(&mut self, decl: &Declarator) -> usize {
+            let mut count = 0;
+            for node in decl.derived.iter() {
+                match &node.node {
+                    DerivedDeclarator::Function(func_decl) => {
+                        // we don't care about func_decl.node.ellipsis
+                        for param in func_decl.node.parameters.iter() {
+                            // TODO: deal with types in decls
+                            if let Some(decl) = param.node.declarator.clone() {
+                                let name = self.parse_declarator(&decl.node);
+                                let loc = IRValue::Stack(count);
+                                count += 1;
+                                self.scope.variable_map.insert(name, loc.clone());
+                            }
+                        }
+                    }
+                    _ => panic!(),
+                }
+            }
+            count
+        }
+
+        fn parse_declarator(&self, decl: &Declarator) -> String {
             match &decl.kind.node {
                 DeclaratorKind::Identifier(node) => node.node.name.clone(),
                 _ => todo!("add non identifier functions"),
-            }
-        }
-
-        fn parse_declarator(&self, decl: &Declarator) -> IRValue {
-            match &decl.kind.node {
-                DeclaratorKind::Identifier(node) => IRValue::Psuedo(node.node.name.clone()),
-                _ => todo!("add non trivial identifier declarations"),
             }
         }
 
@@ -370,9 +395,11 @@ mod c {
                     IRValue::Immediate(0)
                 }
                 Statement::Compound(blocks) => {
-                    for block in blocks {
-                        self.parse_block(&block.node);
+                    let old_scope = self.scope.clone();
+                    for block_item in blocks {
+                        self.parse_block_item(&block_item.node);
                     }
+                    self.scope = old_scope;
                     IRValue::Immediate(0)
                 }
                 Statement::Expression(Some(expr)) => self.parse_expression(&expr.node),
@@ -401,7 +428,7 @@ mod c {
             }
         }
 
-        fn parse_block(&mut self, block: &BlockItem) {
+        fn parse_block_item(&mut self, block: &BlockItem) {
             match block {
                 BlockItem::Statement(stmt) => {
                     self.parse_statement(&stmt.node);
@@ -413,10 +440,12 @@ mod c {
 
         fn parse_declarations(&mut self, decls: &Declaration) {
             // TODO: deal with specifiers
-            // FIXME: CLONE :(
             for decl in decls.declarators.clone() {
+                let name = self.parse_declarator(&decl.node.declarator.node);
+                let loc = self.generate_named_pseudo(name.clone());
+                self.scope.variable_map.insert(name, loc.clone());
+
                 if let Some(init) = decl.node.initializer {
-                    let loc = self.parse_declarator(&decl.node.declarator.node);
                     let init = self.parse_initializer(&init.node);
                     self.push(IROp::One(UnaryOp::Copy, init, loc));
                 }
@@ -439,7 +468,12 @@ mod c {
                 Expression::BinaryOperator(binary_expr) => {
                     self.parse_binary_expression(&binary_expr.node)
                 }
-                Expression::Identifier(ident) => IRValue::Psuedo(ident.node.name.clone()),
+                Expression::Identifier(ident) => {
+                    match self.scope.variable_map.get(&ident.node.name) {
+                        None => panic!("ident {ident:?} should exist. scope: {:?}", self.scope),
+                        Some(val) => val.clone(),
+                    }
+                }
                 Expression::Call(call_expr) => self.parse_call(&call_expr.node),
                 _ => todo!("EXPRESSION: {:?}", expr),
             }
@@ -600,6 +634,11 @@ mod c {
             IRValue::Psuedo("tmp.".to_owned() + &self.count.to_string())
         }
 
+        fn generate_named_pseudo(&mut self, name: String) -> IRValue {
+            self.count += 1;
+            IRValue::Psuedo(name + "." + &self.count.to_string())
+        }
+
         fn generate_label(&mut self, str: &str) -> (String, IROp) {
             self.count += 1;
             let str = str.to_owned() + "." + &self.count.to_string();
@@ -668,6 +707,5 @@ fn write_each(
     file.sync_all()
 }
 
-// FIXME: SCOPE VARIABLE NAMES PROPERLY! CURRENTLY SCOPING IS JUST WRONG!!! WHOOPSIE!!!!
-// FIXME: SIMILARLY, LOOP 'LABELING' IS GOINT TO BE WEIRD. OH NO
+// FIXME: LOOP 'LABELING' IS GOINT TO BE WEIRD. OH NO
 // FIXME: might have to replace lang_c...

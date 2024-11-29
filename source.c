@@ -1,13 +1,14 @@
 int main(void) {
- int b = 10;
- return fib(b);
+  int x = 5;
+  x = a();
+  if (x > 1) {
+    int x = 12;
+    x = x + 1;
+  }
+  x = x + 1;
+  return x;
 }
 
-
-int fib(int i) {
-  if (i == 0 || i == 1) {
-    return 1;
-  } else {
-    return fib(i - 1) + fib(i - 2);
-  }
+int a(void) {
+  return 5;
 }
