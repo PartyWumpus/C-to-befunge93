@@ -1,14 +1,7 @@
 int main(void) {
-  int x = 5;
-  x = a();
-  if (x > 1) {
-    int x = 12;
-    x = x + 1;
+  int b = 1;
+  for (int i = 0; 10 > i; i = i + 1) {
+    b = b*2;
   }
-  x = x + 1;
-  return x;
-}
-
-int a(void) {
-  return 5;
+  return b;
 }

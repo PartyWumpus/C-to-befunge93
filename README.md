@@ -22,8 +22,6 @@ Calling convention: Return values just go in `20` in the zero-page, and function
 
 For ease of C compilation we just always move the value from the return register onto some stack value but that would theoretically be optimizable away in a register allocation pass, so I think it's the best choice.
 
-While I haven't actually implemented it for the C -> IR phase, the IR would fully support inline loops, gotos, etc.
-
 ### TLDR: Stuff it supports
 - Stack frames for each function
 - Call stack for returning
@@ -34,7 +32,8 @@ While I haven't actually implemented it for the C -> IR phase, the IR would full
 ### Current Limitations
 None of these are full architectural failures (aside from perhaps linking) so should be resolvable.
 - Only supports ints as types
-- Doesn't support C loops (note the IR is perfectly capable of loops, I just haven't got the C parsing bit done)
+- Doesn't support goto
+- Doesn't support switch
 - Doesn't do a register allocation pass, which would probably make it a decent bit faster
 - No linking of any sort, all has to be in one file
 - No stdlib or anything from libc at all (might fudge some stdio in just for convinience before doing it properly)

@@ -192,9 +192,10 @@ mod c {
     use lang_c::{
         ast::{
             BinaryOperator, BinaryOperatorExpression, BlockItem, CallExpression, Constant,
-            Declaration, Declarator, DeclaratorKind, DerivedDeclarator, Expression,
-            ExternalDeclaration, FunctionDefinition, IfStatement, Initializer, IntegerBase,
-            Statement, UnaryOperator, UnaryOperatorExpression,
+            Declaration, Declarator, DeclaratorKind, DerivedDeclarator, DoWhileStatement,
+            Expression, ExternalDeclaration, ForInitializer, ForStatement, FunctionDefinition,
+            IfStatement, Initializer, IntegerBase, Statement, UnaryOperator,
+            UnaryOperatorExpression, WhileStatement,
         },
         driver::{parse, Config},
     };
@@ -205,6 +206,7 @@ mod c {
         count: usize,
         ops: Vec<IROp>,
         scope: ScopeInfo,
+        loop_id: usize,
     }
 
     #[derive(Debug, Clone, Default)]
@@ -333,6 +335,7 @@ mod c {
             ops: vec![],
             count: 0,
             scope: ScopeInfo::default(),
+            loop_id: 0,
         };
         // TODO: deal with specifiers
         // TODO: deal with K&R declarations, although i only really care about c99
@@ -383,7 +386,7 @@ mod c {
             self.ops.push(op);
         }
 
-        fn parse_statement(&mut self, stmt: &Statement) -> IRValue {
+        fn parse_statement(&mut self, stmt: &Statement) {
             match stmt {
                 Statement::Return(maybe_expr) => {
                     if let Some(expr) = maybe_expr {
@@ -392,7 +395,6 @@ mod c {
                     } else {
                         self.push(IROp::Return(IRValue::Immediate(0)));
                     };
-                    IRValue::Immediate(0)
                 }
                 Statement::Compound(blocks) => {
                     let old_scope = self.scope.clone();
@@ -400,15 +402,86 @@ mod c {
                         self.parse_block_item(&block_item.node);
                     }
                     self.scope = old_scope;
-                    IRValue::Immediate(0)
                 }
-                Statement::Expression(Some(expr)) => self.parse_expression(&expr.node),
-                Statement::Expression(None) => IRValue::Immediate(0),
-                Statement::If(stmt) => {
-                    self.parse_if(&stmt.node);
-                    IRValue::Immediate(0)
+                Statement::Expression(Some(expr)) => {
+                    self.parse_expression(&expr.node);
                 }
+                Statement::Expression(None) => (),
+                Statement::If(stmt) => self.parse_if(&stmt.node),
+                Statement::While(stmt) => self.parse_while_stmt(&stmt.node),
+                Statement::DoWhile(stmt) => self.parse_do_while_stmt(&stmt.node),
+                Statement::For(stmt) => self.parse_for_statement(&stmt.node),
+                Statement::Break => self.parse_break(),
+                Statement::Continue => self.parse_continue(),
                 _ => todo!("STATEMENT:, {:?}", stmt),
+            }
+        }
+
+        fn parse_break(&mut self) {
+            let (loop_end_lbl_str, _) = self.generate_loop_end_label();
+            self.push(IROp::AlwaysBranch(loop_end_lbl_str))
+        }
+
+        fn parse_continue(&mut self) {
+            let (loop_cont_lbl_str, _) = self.generate_loop_continue_label();
+            self.push(IROp::AlwaysBranch(loop_cont_lbl_str))
+        }
+
+        fn parse_while_stmt(&mut self, stmt: &WhileStatement) {
+            let prev_id = self.loop_id;
+            self.new_loop_id();
+            let (loop_lbl_str, loop_lbl) = self.generate_loop_label();
+            let (loop_end_lbl_str, loop_end_lbl) = self.generate_loop_end_label();
+
+            self.push(loop_lbl);
+            let cond = self.parse_expression(&stmt.expression.node);
+            self.push(IROp::CondBranch(BranchType::Zero, loop_end_lbl_str, cond));
+            self.parse_statement(&stmt.statement.node);
+            self.push(IROp::AlwaysBranch(loop_lbl_str));
+            self.push(loop_end_lbl);
+            self.loop_id = prev_id;
+        }
+
+        fn parse_do_while_stmt(&mut self, stmt: &DoWhileStatement) {
+            let prev_id = self.loop_id;
+            self.new_loop_id();
+            let (loop_lbl_str, loop_lbl) = self.generate_loop_label();
+
+            self.push(loop_lbl);
+            self.parse_statement(&stmt.statement.node);
+            let cond = self.parse_expression(&stmt.expression.node);
+            self.push(IROp::CondBranch(BranchType::NonZero, loop_lbl_str, cond));
+            self.loop_id = prev_id;
+        }
+
+        fn parse_for_statement(&mut self, stmt: &ForStatement) {
+            let (loop_lbl_str, loop_lbl) = self.generate_loop_label();
+            let (loop_end_lbl_str, loop_end_lbl) = self.generate_loop_end_label();
+            let (_, loop_cont_lbl) = self.generate_loop_continue_label();
+
+            self.parse_for_initializer(&stmt.initializer.node);
+            self.push(loop_lbl);
+            if let Some(cond) = &stmt.condition {
+                let cond = self.parse_expression(&cond.node);
+                self.push(IROp::CondBranch(BranchType::Zero, loop_end_lbl_str, cond));
+            }
+            self.parse_statement(&stmt.statement.node);
+            self.push(loop_cont_lbl);
+            if let Some(step) = &stmt.step {
+                self.parse_expression(&step.node);
+            }
+            self.push(IROp::AlwaysBranch(loop_lbl_str));
+            self.push(loop_end_lbl);
+        }
+
+        fn parse_for_initializer(&mut self, init: &ForInitializer) {
+            match init {
+                ForInitializer::Empty => (),
+                ForInitializer::Expression(expr) => {
+                    self.parse_expression(&expr.node);
+                }
+                ForInitializer::Declaration(decls) => self.parse_declarations(&decls.node),
+                ForInitializer::StaticAssert(_) => todo!("static assert in for init"),
             }
         }
 
@@ -644,6 +717,28 @@ mod c {
             let str = str.to_owned() + "." + &self.count.to_string();
             (str.clone(), IROp::Label(str))
         }
+
+        fn generate_loop_label(&mut self) -> (String, IROp) {
+            let str = "loop".to_owned() + &self.loop_id.to_string();
+            (str.clone(), IROp::Label(str))
+        }
+
+        fn generate_loop_end_label(&mut self) -> (String, IROp) {
+            let str = "loop_end".to_owned() + &self.loop_id.to_string();
+            (str.clone(), IROp::Label(str))
+        }
+
+        fn generate_loop_continue_label(&mut self) -> (String, IROp) {
+            let str = "loop_continue".to_owned() + &self.loop_id.to_string();
+            (str.clone(), IROp::Label(str))
+        }
+
+        fn new_loop_id(&mut self) -> usize {
+            let x = self.count;
+            self.loop_id = x;
+            self.count += 1;
+            x
+        }
     }
 }
 
@@ -707,5 +802,5 @@ fn write_each(
     file.sync_all()
 }
 
-// FIXME: LOOP 'LABELING' IS GOINT TO BE WEIRD. OH NO
-// FIXME: might have to replace lang_c...
+// TODO: for switch statements contine & break tracking must be done seperately (as switch can be breaked but not continued)
+// TODO: do goto
