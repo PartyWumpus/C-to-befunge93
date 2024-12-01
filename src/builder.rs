@@ -98,6 +98,18 @@ impl OpBuilder {
         self.str("+1p");
     }
 
+    /// Puts data value on bstack
+    pub fn load_data_val(&mut self, position: usize) {
+        self.load_number(position + 31); // + 31 to avoid the register space
+        self.str("3g");
+    }
+
+    /// Set data value to top of bstack
+    pub fn set_data_val(&mut self, position: usize) {
+        self.load_number(position + 31); // + 31 to avoid the register space
+        self.str("3p");
+    }
+
     pub fn label(&mut self, label: String) {
         self.char('>');
         self.branch_labels.insert(label, self.ops.len() - 1);

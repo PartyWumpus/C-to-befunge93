@@ -6,10 +6,10 @@ use c::{function_id_mapping_pass, parse_c, pseudo_removal_pass, stack_size_reduc
 mod builder;
 
 static PRELUDE: &str = r#"v!R#######
-v#########            STACK -> xx###################
-v#########       CALL STACK -> xx###################
-v#########           MEMORY -> xx###################
-v#########
+v#########            STACK -> ################################################...
+v#########       CALL STACK -> ################################################...
+v#########           MEMORY -> ################################################...
+v#########        // IN FUTURE, malloc() mem could be a 4th mem location here
 v#########
 v#########
 v#########
@@ -26,6 +26,7 @@ enum IRValue {
     Stack(usize),
     Immediate(usize),
     Register(usize), // limited to only like 70ish tho
+    Data(usize),
     Psuedo(String),
 }
 
@@ -161,6 +162,7 @@ impl CodeGen {
             IRValue::Stack(offset) => self.builder.load_stack_val(*offset),
             IRValue::Register(id) => self.builder.load_register_val(*id),
             IRValue::Immediate(value) => self.builder.load_number(*value),
+            IRValue::Data(position) => self.builder.load_data_val(*position),
             IRValue::Psuedo(_) => {
                 panic!("Psuedo registers should be removed by befunge generation time")
             }
@@ -172,6 +174,7 @@ impl CodeGen {
             IRValue::Stack(offset) => self.builder.set_stack_val(*offset),
             IRValue::Register(id) => self.builder.set_register_val(*id),
             IRValue::Immediate(_) => panic!("Immediate value as output location"),
+            IRValue::Data(position) => self.builder.set_data_val(*position),
             IRValue::Psuedo(_) => {
                 panic!("Psuedo registers should be removed by befunge generation time")
             }
@@ -196,7 +199,7 @@ mod c {
 
     use crate::{BinOp, BranchType, IRFunction, IROp, IRValue, UnaryOp};
 
-    struct CFunctionThingy {
+    struct FunctionBuilder {
         count: usize,
         ops: Vec<IROp>,
         scope: ScopeInfo,
@@ -205,7 +208,7 @@ mod c {
 
     #[derive(Debug, Clone, Default)]
     struct ScopeInfo {
-        variable_map: HashMap<String, IRValue>,
+        var_map: HashMap<String, IRValue>,
     }
 
     pub fn parse_c<P: AsRef<Path>>(file: P) -> Result<Vec<IRFunction>, lang_c::driver::Error> {
@@ -232,7 +235,7 @@ mod c {
     fn pseudo_removal(func: &mut IRFunction) {
         let mut map = PsuedoMap {
             map: HashMap::new(),
-            count: func.parameters,
+            count: func.parameters - 1,
         };
         for i in 0..func.ops.len() {
             func.ops[i] = match &func.ops[i] {
@@ -325,7 +328,7 @@ mod c {
     }
 
     fn parse_function(func: &FunctionDefinition) -> IRFunction {
-        let mut function_state = CFunctionThingy {
+        let mut function_state = FunctionBuilder {
             ops: vec![],
             count: 0,
             scope: ScopeInfo::default(),
@@ -346,9 +349,9 @@ mod c {
         }
     }
 
-    impl CFunctionThingy {
+    impl FunctionBuilder {
         fn parse_func_declarator(&mut self, decl: &Declarator) -> usize {
-            let mut count = 0;
+            let mut count = 1;
             for node in decl.derived.iter() {
                 match &node.node {
                     DerivedDeclarator::Function(func_decl) => {
@@ -359,7 +362,7 @@ mod c {
                                 let name = self.parse_declarator(&decl.node);
                                 let loc = IRValue::Stack(count);
                                 count += 1;
-                                self.scope.variable_map.insert(name, loc.clone());
+                                self.scope.var_map.insert(name, loc.clone());
                             }
                         }
                     }
@@ -510,7 +513,7 @@ mod c {
             for decl in decls.declarators.clone() {
                 let name = self.parse_declarator(&decl.node.declarator.node);
                 let loc = self.generate_named_pseudo(name.clone());
-                self.scope.variable_map.insert(name, loc.clone());
+                self.scope.var_map.insert(name, loc.clone());
 
                 if let Some(init) = decl.node.initializer {
                     let init = self.parse_initializer(&init.node);
@@ -535,12 +538,10 @@ mod c {
                 Expression::BinaryOperator(binary_expr) => {
                     self.parse_binary_expression(&binary_expr.node)
                 }
-                Expression::Identifier(ident) => {
-                    match self.scope.variable_map.get(&ident.node.name) {
-                        None => panic!("ident {ident:?} should exist. scope: {:?}", self.scope),
-                        Some(val) => val.clone(),
-                    }
-                }
+                Expression::Identifier(ident) => match self.scope.var_map.get(&ident.node.name) {
+                    None => panic!("ident {ident:?} should exist. scope: {:?}", self.scope),
+                    Some(val) => val.clone(),
+                },
                 Expression::Call(call_expr) => self.parse_call(&call_expr.node),
                 _ => todo!("EXPRESSION: {:?}", expr),
             }
@@ -786,6 +787,26 @@ fn main() {
             println!("{line:?}");
         }
     }
+
+    /*
+    let program = vec![IRFunction {
+        ops: vec![
+            IROp::One(UnaryOp::Copy, IRValue::Immediate(7), IRValue::Data(1)),
+            IROp::Two(
+                BinOp::Mult,
+                IRValue::Data(1),
+                IRValue::Immediate(2),
+                IRValue::Data(2),
+            ),
+            IROp::One(UnaryOp::Copy, IRValue::Data(2), IRValue::Data(1)),
+            IROp::Return(IRValue::Data(1)),
+        ],
+        name: "main".to_owned(),
+        parameters: 0,
+        stack_frame_size: 1,
+    }];
+    */
+
     println!("-- befunge begin");
     let mut cg = CodeGen {
         builder: OpBuilder::new(),
@@ -822,6 +843,7 @@ fn write_each(
     file.sync_all()
 }
 
+// TODO: handle top level values in C
 // TODO: bitwise ops (going to be strange, as befunge has no bit level operators)
 // TODO: increment and decrement
 // TODO: for switch statements contine & break tracking must be done seperately (as switch can be breaked but not continued)

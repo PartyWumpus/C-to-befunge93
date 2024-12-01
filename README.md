@@ -31,6 +31,7 @@ For ease of C compilation we just always move the value from the return register
 
 ### Current Limitations
 None of these are full architectural failures (aside from perhaps linking) so should be resolvable.
+- No top level variable declarations (the IR does support values that go in fixed positions in memory, this is just a C parsing issue)
 - Only supports ints as types
 - Doesn't support goto
 - Doesn't support bitwise operations (these will be simply be tedious to implement, will require a loop over each bit)
@@ -39,7 +40,7 @@ None of these are full architectural failures (aside from perhaps linking) so sh
 - Doesn't do a register allocation pass, which would probably make it a decent bit faster
 - No linking of any sort, all has to be in one file
 - No stdlib or anything from libc at all (might fudge some stdio in just for convinience before doing it properly)
-- No arbitrarily accessable memory (doable, just need a 3rd stack and some more IR)
+- No arbitrarily accessable memory for malloc (doable, just need a 4th stack and some more IR)
 - It's not particularly good
 - Missing some random operators because I haven't bothered to implement them
 - TODO: figure out how the hell automated tests are going to work
