@@ -33,6 +33,8 @@ For ease of C compilation we just always move the value from the return register
 None of these are full architectural failures (aside from perhaps linking) so should be resolvable.
 - Only supports ints as types
 - Doesn't support goto
+- Doesn't support bitwise operations (these will be simply be tedious to implement, will require a loop over each bit)
+- Doesn't support ++ or --
 - Doesn't support switch
 - Doesn't do a register allocation pass, which would probably make it a decent bit faster
 - No linking of any sort, all has to be in one file

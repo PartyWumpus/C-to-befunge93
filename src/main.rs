@@ -140,16 +140,10 @@ impl CodeGen {
                         BinOp::Mod => self.builder.char('%'),
                         BinOp::Equal => self.builder.str("-!"),
                         BinOp::NotEqual => self.builder.str("-!!"),
-                        BinOp::LessThan => {
-                            todo!("less than");
-                            self.builder.str("");
-                        }
+                        BinOp::LessThan => self.builder.str("\\`"),
                         BinOp::LessOrEqual => self.builder.str("`!"),
                         BinOp::GreaterThan => self.builder.char('`'),
-                        BinOp::GreaterOrEqual => {
-                            todo!("greater or equal");
-                            self.builder.str("");
-                        }
+                        BinOp::GreaterOrEqual => self.builder.str("\\`!"),
                     }
                     self.put_val(out);
                 }
@@ -338,7 +332,7 @@ mod c {
             loop_id: 0,
         };
         // TODO: deal with specifiers
-        // TODO: deal with K&R declarations, although i only really care about c99
+        // TODO: deal with K&R declarations
         let name = function_state.parse_declarator(&func.declarator.node);
         let param_count = function_state.parse_func_declarator(&func.declarator.node);
         function_state.parse_statement(&func.statement.node);
@@ -645,12 +639,23 @@ mod c {
             };
 
             let out = self.generate_pseudo();
+            let lhs2 = lhs.clone();
             self.push(match expr.operator.node {
-                BinaryOperator::Multiply => IROp::Two(BinOp::Mult, lhs, rhs, out.clone()),
-                BinaryOperator::Divide => IROp::Two(BinOp::Div, lhs, rhs, out.clone()),
-                BinaryOperator::Modulo => IROp::Two(BinOp::Mod, lhs, rhs, out.clone()),
-                BinaryOperator::Plus => IROp::Two(BinOp::Add, lhs, rhs, out.clone()),
-                BinaryOperator::Minus => IROp::Two(BinOp::Sub, lhs, rhs, out.clone()),
+                BinaryOperator::Plus | BinaryOperator::AssignPlus => {
+                    IROp::Two(BinOp::Add, lhs, rhs, out.clone())
+                }
+                BinaryOperator::Minus | BinaryOperator::AssignMinus => {
+                    IROp::Two(BinOp::Sub, lhs, rhs, out.clone())
+                }
+                BinaryOperator::Multiply | BinaryOperator::AssignMultiply => {
+                    IROp::Two(BinOp::Mult, lhs, rhs, out.clone())
+                }
+                BinaryOperator::Divide | BinaryOperator::AssignDivide => {
+                    IROp::Two(BinOp::Div, lhs, rhs, out.clone())
+                }
+                BinaryOperator::Modulo | BinaryOperator::AssignModulo => {
+                    IROp::Two(BinOp::Mod, lhs, rhs, out.clone())
+                }
 
                 BinaryOperator::Less => IROp::Two(BinOp::LessThan, lhs, rhs, out.clone()),
                 BinaryOperator::Greater => IROp::Two(BinOp::GreaterThan, lhs, rhs, out.clone()),
@@ -664,28 +669,43 @@ mod c {
                 BinaryOperator::Index => todo!("index"),
 
                 // bitwise ops
-                BinaryOperator::ShiftLeft => todo!("ShiftLeft"),
-                BinaryOperator::ShiftRight => todo!("ShiftRight"),
-                BinaryOperator::BitwiseAnd => todo!("BitwiseAnd"),
-                BinaryOperator::BitwiseXor => todo!("BitwiseXor"),
-                BinaryOperator::BitwiseOr => todo!("BitwiseOr"),
+                BinaryOperator::ShiftLeft | BinaryOperator::AssignShiftLeft => {
+                    todo!("ShiftLeft {lhs:?} {rhs:?}")
+                }
+                BinaryOperator::ShiftRight | BinaryOperator::AssignShiftRight => {
+                    todo!("ShiftRight {lhs:?} {rhs:?}")
+                }
+                BinaryOperator::BitwiseAnd | BinaryOperator::AssignBitwiseAnd => {
+                    todo!("BitwiseAnd {lhs:?} {rhs:?}")
+                }
+                BinaryOperator::BitwiseXor | BinaryOperator::AssignBitwiseXor => {
+                    todo!("BitwiseXor {lhs:?} {rhs:?}")
+                }
+                BinaryOperator::BitwiseOr | BinaryOperator::AssignBitwiseOr => {
+                    todo!("BitwiseOr {lhs:?} {rhs:?}")
+                }
 
-                // assign
                 BinaryOperator::Assign => IROp::One(UnaryOp::Copy, rhs, lhs),
-                BinaryOperator::AssignMultiply => todo!("AssignMultiply"),
-                BinaryOperator::AssignDivide => todo!("AssignDivide"),
-                BinaryOperator::AssignModulo => todo!("AssignModulo"),
-                BinaryOperator::AssignPlus => todo!("AssignPlus"),
-                BinaryOperator::AssignMinus => todo!("AssignMinus"),
-                BinaryOperator::AssignShiftLeft => todo!("AssignShiftLeft"),
-                BinaryOperator::AssignShiftRight => todo!("AssignShiftRight"),
-                BinaryOperator::AssignBitwiseAnd => todo!("AssignBitwiseAnd"),
-                BinaryOperator::AssignBitwiseXor => todo!("AssignBitwiseXor"),
-                BinaryOperator::AssignBitwiseOr => todo!("AssignBitwiseOr"),
 
                 // FREAKY SHORT CIRCUITING OPS!
                 BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr => unreachable!(),
             });
+
+            if matches!(
+                expr.operator.node,
+                BinaryOperator::AssignPlus
+                    | BinaryOperator::AssignMinus
+                    | BinaryOperator::AssignMultiply
+                    | BinaryOperator::AssignDivide
+                    | BinaryOperator::AssignModulo
+                    | BinaryOperator::AssignShiftLeft
+                    | BinaryOperator::AssignShiftRight
+                    | BinaryOperator::AssignBitwiseAnd
+                    | BinaryOperator::AssignBitwiseXor
+                    | BinaryOperator::AssignBitwiseOr
+            ) {
+                self.push(IROp::One(UnaryOp::Copy, out.clone(), lhs2));
+            };
             out
         }
 
@@ -802,5 +822,7 @@ fn write_each(
     file.sync_all()
 }
 
+// TODO: bitwise ops (going to be strange, as befunge has no bit level operators)
+// TODO: increment and decrement
 // TODO: for switch statements contine & break tracking must be done seperately (as switch can be breaked but not continued)
-// TODO: do goto
+// TODO: goto
