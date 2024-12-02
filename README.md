@@ -54,13 +54,87 @@ None of these are full architectural failures (aside from perhaps linking) so sh
 - No arbitrarily accessable memory for malloc (doable, just need a 4th stack and some more IR)
 - No K&R function support because it seems annoying to implement, and it's irrelevant anyways
 - It's not particularly good
+- Most qualifiers like volatile, inline etc are silently ignored for now
 - TODO: figure out how the hell automated tests are going to work
 
 ### Intentional Limitations
 Many invalid C programs will be accepted and will instead just have undefined behaviour. It's easier to develop this way, if a little silly, just make sure to check your C code is actually sanely compilable with gcc or something.
 
+### ASM support
+This compiler allows for use of the GNU ASM extensions for inline befunge. (either for extra optimized code or for using special operators like `,`, `.` for output and `&`, `~` for input).
 
-## Examples
+There are two important assumptions to keep in mind when writing inline befunge:
+- The entry point is always the the top left heading right, and the exit point **must** be the top right heading right. All branches and similar will be moved downwards below your inline befunge, feel free to make it as long and as tall as you want.
+- The bstack should be left *empty* on end, as optimizations may (although it does not yet) assume the bstack is empty.
+
+#### Basic asm support
+[Basic GNU asm](https://gcc.gnu.org/onlinedocs/gcc/Basic-Asm.html) can be used to insert inline befunge, although I don't see it being particularly useful without being able to access C values.
+##### Example
+```c
+int main(void) {
+ int a = 10;
+ __asm__(
+  "v INLINE BEFUNGE :3 >"
+  ">    76*::::....    ^"
+ );
+ return;
+}
+```
+->
+```
+19+00g1-1p v INLINE BEFUNGE :3 > 020p00g1-00p10g1-:2g\1-:2g\10p^ 
+           >    76*::::....    ^
+```
+
+And just for clarity, here's the same example without inline befunge
+```c
+int main(void) {
+ int a = 10;
+ return;
+}
+```
+-> 
+```b93
+19+00g1-1p 020p00g1-00p10g1-:2g\1-:2g\10p^ 
+```
+
+#### Advanced asm support
+[Advanced GNU ASM](https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html) is more useful, as it allows you to tell the compiler which C values you want to use.
+
+The normal way the ASM extension works is by templating your string using the inputs/outputs you've defined, but templating befunge is kinda difficult, so instead your inputs are loaded to your given registers before the asm runs and your outputs are loaded from the registers to the c values.
+
+The empty `""` is for 'constraints' which I have not yet properly implemented.
+
+The exact format for how I'm going to pick register locations, what a register ID actually means etc is subject to change, but currently `r2` is `40g`, `r3` is `50g`, etc.
+
+```c
+int main(void) {
+ int a = 10;
+ __asm__(
+  // read value from register 2, add 5, and write back to register 2
+  "40g 5+ 40p"
+  "befunge93!"
+  : [r2] "" (a) // (outputs) copy register 2 into a
+  : [r2] "" (a) // (inputs) copy a into register 2
+ );
+ return a; // Returns 15
+}
+```
+->
+```
+19+00g1-1p 00g1-1g40p 40g 5+ 40p 40g00g1-1p 00g1-1g20p00g1-00p10g1-:2g\1-:2g\10p^ 
+                      befunge93!
+```
+Just to make it super clear exactly what is going on, here's the generated IR, with a copy to r2 before, and a copy from r2 after.
+```
+One(Copy, Immediate(10), Psuedo("a.1"))
+One(Copy, Psuedo("a.1"), Register(2))
+InlineBefunge(["40g 5+ 40p", "befunge93!"])
+One(Copy, Register(2), Psuedo("a.1"))
+Return(Psuedo("a.1"))
+```
+
+## Generic Examples
 
 ### One function
 This C
