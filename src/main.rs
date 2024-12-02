@@ -6,9 +6,9 @@ use c::{function_id_mapping_pass, pseudo_removal_pass, stack_size_reducer_pass, 
 mod builder;
 
 static PRELUDE: &str = r#"v!R#######
-v#########            STACK -> ################################################...
-v#########       CALL STACK -> ################################################...
-v#########    STATIC MEMORY -> ################################################...
+v#########         STACK -> qwertyuiopasdfghjklzxcvbnm...
+v#########    CALL STACK -> qwertyuiopasdfghjklzxcvbnm...
+v######### STATIC MEMORY -> qwertyuiopasdfghjklzxcvbnm...
 v#########        // IN FUTURE, malloc() mem could be a 4th mem location here
 v#########
 v#########
@@ -40,6 +40,7 @@ pub enum IROp {
     Return(IRValue),
     Call(String, Vec<IRValue>),
     Label(String),
+    InlineBefunge(Vec<String>),
     AlwaysBranch(String),
     CondBranch(BranchType, String, IRValue),
     One(UnaryOp, IRValue, IRValue),
@@ -86,7 +87,13 @@ struct IRTopLevel {
 
 struct CodeGen {
     builder: OpBuilder,
-    function_map: HashMap<String, usize>,
+    function_map: HashMap<String, FuncInfo>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FuncInfo {
+    stack_frame_size: usize,
+    id: usize,
 }
 
 impl CodeGen {
@@ -95,20 +102,29 @@ impl CodeGen {
         for op in func.ops {
             match &op {
                 IROp::FunctionLabel(_) => (),
-                IROp::Call(call_func_name, vals) => {
+                IROp::Call(called_func_name, vals) => {
                     if func.is_initializer {
                         panic!("Non static call in static context")
                     };
-                    for (i, val) in vals.iter().enumerate() {
+                    // TODO: improve error on unknown func call
+                    let called_func = self.function_map[called_func_name];
+
+                    // this 'leaks' a bunch of values on the stack between operations, which i have
+                    // generally been trying to avoid.
+                    for val in vals.iter() {
                         self.get_val(val);
-                        self.put_val(&IRValue::Stack(func.stack_frame_size + i + 1));
+                    }
+                    self.builder
+                        .increment_stack_ptr(called_func.stack_frame_size);
+                    for i in (0..vals.len()).rev() {
+                        self.put_val(&IRValue::Stack(i + 1));
                     }
 
                     self.builder.load_number(0);
-                    self.builder.load_number(self.function_map[call_func_name]);
+                    self.builder.load_number(called_func.id);
 
-                    self.builder.increment_stack_ptr(func.stack_frame_size);
-                    self.builder.load_number(self.function_map[&func.name]);
+                    self.builder.char(' ');
+                    self.builder.load_number(self.function_map[&func.name].id);
                     self.builder.call();
                 }
                 IROp::Return(val) => {
@@ -116,6 +132,7 @@ impl CodeGen {
                     self.builder.return_(func.stack_frame_size);
                 }
                 IROp::Label(label) => self.builder.label(label.to_owned()),
+                IROp::InlineBefunge(lines) => self.builder.insert_inline_befunge(lines),
                 IROp::CondBranch(flavour, label, val) => {
                     self.get_val(val);
                     match flavour {
@@ -200,16 +217,16 @@ mod c {
 
     use lang_c::{
         ast::{
-            BinaryOperator, BinaryOperatorExpression, BlockItem, CallExpression, Constant,
-            Declaration, Declarator, DeclaratorKind, DerivedDeclarator, DoWhileStatement,
+            AsmStatement, BinaryOperator, BinaryOperatorExpression, BlockItem, CallExpression,
+            Constant, Declaration, Declarator, DeclaratorKind, DerivedDeclarator, DoWhileStatement,
             Expression, ExternalDeclaration, ForInitializer, ForStatement, FunctionDefinition,
-            IfStatement, Initializer, IntegerBase, Statement, UnaryOperator,
+            GnuAsmOperand, IfStatement, Initializer, IntegerBase, Statement, UnaryOperator,
             UnaryOperatorExpression, WhileStatement,
         },
         driver::{parse, Config},
     };
 
-    use crate::{BinOp, BranchType, IROp, IRTopLevel, IRValue, UnaryOp};
+    use crate::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRValue, UnaryOp};
 
     struct TopLevelBuilder {
         count: usize,
@@ -313,7 +330,7 @@ mod c {
     fn pseudo_removal(func: &mut IRTopLevel) {
         let mut map = PsuedoMap {
             map: HashMap::new(),
-            count: func.parameters - 1,
+            count: func.parameters,
         };
         for i in 0..func.ops.len() {
             func.ops[i] = match &func.ops[i] {
@@ -382,7 +399,7 @@ mod c {
                 _ => (),
             };
         }
-        counter
+        std::cmp::max(counter, func.parameters)
     }
 
     pub fn stack_size_reducer_pass(funcs: &mut Vec<IRTopLevel>) {
@@ -391,15 +408,27 @@ mod c {
         }
     }
 
-    pub fn function_id_mapping_pass(funcs: &Vec<IRTopLevel>) -> HashMap<String, usize> {
+    pub fn function_id_mapping_pass(funcs: &Vec<IRTopLevel>) -> HashMap<String, FuncInfo> {
         let mut map = HashMap::new();
         let mut i = 2;
         for func in funcs {
             if !func.is_initializer {
                 if func.name == "main" {
-                    map.insert(func.name.clone(), 1);
+                    map.insert(
+                        func.name.clone(),
+                        FuncInfo {
+                            id: 1,
+                            stack_frame_size: func.stack_frame_size,
+                        },
+                    );
                 } else {
-                    map.insert(func.name.clone(), i);
+                    map.insert(
+                        func.name.clone(),
+                        FuncInfo {
+                            id: i,
+                            stack_frame_size: func.stack_frame_size,
+                        },
+                    );
                     i += 1;
                 }
             }
@@ -428,7 +457,7 @@ mod c {
                     _ => panic!("non func declarator in the func declarator parser??"),
                 }
             }
-            count
+            count - 1
         }
 
         fn parse_declarator(&self, decl: &Declarator) -> String {
@@ -471,9 +500,55 @@ mod c {
                 Statement::Continue => self.parse_continue(),
                 Statement::Labeled(_) | Statement::Goto(_) => todo!("goto"),
                 Statement::Switch(_) => todo!("switch statements"),
-                // If feeling freaky with it, asm statements could allow arbitrary befunge...
-                // Probably just not gonna implement it tho lol
-                Statement::Asm(_) => todo!("asm statements"),
+                Statement::Asm(asm) => self.parse_asm(&asm.node),
+            }
+        }
+
+        fn parse_asm(&mut self, asm: &AsmStatement) {
+            // TODO: ban newline char? it won't really work right
+            match asm {
+                AsmStatement::GnuBasic(asm) => {
+                    let lines = cleanup_parsed_asm(&asm.node);
+                    self.push(IROp::InlineBefunge(lines));
+                }
+                AsmStatement::GnuExtended(asm) => {
+                    for input in &asm.inputs {
+                        self.parse_asm_operand(&input.node, true)
+                    }
+                    // note it's supposed to be a "template", but it is
+                    // difficult to do sensible befunge templating that still supports
+                    // multiple lines, so we won't, instead the inputs/outputs
+                    // will define what values are loaded where
+                    let lines = cleanup_parsed_asm(&asm.template.node);
+                    self.push(IROp::InlineBefunge(lines));
+                    for output in &asm.outputs {
+                        self.parse_asm_operand(&output.node, false)
+                    }
+
+                    for clobbers in &asm.clobbers {
+                        println!("WARNING: asm clobbers are ignored {clobbers:?}")
+                    }
+                }
+            }
+        }
+
+        fn parse_asm_operand(&mut self, op: &GnuAsmOperand, input: bool) {
+            if let Some(output_name) = &op.symbolic_name {
+                let c_value = self.parse_expression(&op.variable_name.node);
+                let asm_value = Self::parse_asm_symbolic(&output_name.node.name);
+                if input {
+                    self.push(IROp::One(UnaryOp::Copy, c_value, asm_value))
+                } else {
+                    self.push(IROp::One(UnaryOp::Copy, asm_value, c_value))
+                }
+            }
+        }
+
+        fn parse_asm_symbolic(str: &str) -> IRValue {
+            if str.starts_with("r") {
+                IRValue::Register(str[1..].parse().unwrap())
+            } else {
+                panic!("invalid symbolic name for asm, try r02 :)")
             }
         }
 
@@ -682,8 +757,8 @@ mod c {
         }
 
         fn parse_binary_expression(&mut self, expr: &BinaryOperatorExpression) -> IRValue {
-            let (skip_label_str, skip_label) = self.generate_label("skip");
-            let (end_label_str, end_label) = self.generate_label("end");
+            let (skip_label_str, skip_label) = self.generate_label("logical_skip");
+            let (end_label_str, end_label) = self.generate_label("logical_end");
 
             let lhs = self.parse_expression(&expr.lhs.node);
 
@@ -869,6 +944,13 @@ mod c {
             x
         }
     }
+
+    fn cleanup_parsed_asm(lines: &[String]) -> Vec<String> {
+        lines
+            .into_iter()
+            .map(|line| line.trim_matches(|x| x == '"').to_owned())
+            .collect()
+    }
 }
 
 fn print_ir(ir: &Vec<IRTopLevel>) {
@@ -878,6 +960,7 @@ fn print_ir(ir: &Vec<IRTopLevel>) {
         } else {
             println! {"\nINIT REGION"};
         }
+        println!("frame_size: {}", func.stack_frame_size);
         for line in &func.ops {
             println!("{line:?}");
         }
@@ -945,6 +1028,8 @@ fn write_each(
     file.sync_all()
 }
 
+// TODO: Fix first function having a stack size greater than x. Just increment by stack_frame_size
+// at start :)
 // TODO: use seperate global counter for global values
 // TODO: bitwise ops (going to be strange, as befunge has no bit level operators)
 // TODO: increment and decrement

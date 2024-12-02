@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 pub struct OpBuilder {
     ops: Vec<char>,
+    // Extra lines that go below the ops, and above any branches
+    extra_ops: Vec<Vec<char>>,
     is_function: bool,
     branch_labels: HashMap<String, usize>,
     branch_points: HashMap<String, Vec<usize>>,
@@ -18,6 +20,7 @@ impl OpBuilder {
         Self {
             ops: start,
             is_function,
+            extra_ops: vec![],
             branch_labels: HashMap::new(),
             branch_points: HashMap::new(),
             exit_points: Vec::new(),
@@ -100,13 +103,13 @@ impl OpBuilder {
     pub fn load_stack_val(&mut self, offset: usize) {
         self.load_stack_ptr();
         self.load_number(offset);
-        self.str("+1g");
+        self.str("-1g");
     }
 
     pub fn set_stack_val(&mut self, offset: usize) {
         self.load_stack_ptr();
         self.load_number(offset);
-        self.str("+1p");
+        self.str("-1p");
     }
 
     /// Puts data value on bstack
@@ -201,6 +204,20 @@ impl OpBuilder {
         self.call_exit();
     }
 
+    pub fn insert_inline_befunge(&mut self, lines: &[String]) {
+        let initial_length = self.ops.len();
+        if let Some(first_line) = lines.get(0) {
+            self.str(first_line)
+        }
+        for (i, line) in lines[1..].iter().enumerate() {
+            if self.extra_ops.len() == i {
+                self.extra_ops.push(vec![' '; initial_length])
+            }
+
+            self.extra_ops[i].extend(line.chars());
+        }
+    }
+
     //// Finalize
 
     pub fn finalize_function(&self) -> Vec<String> {
@@ -254,6 +271,7 @@ impl OpBuilder {
             ops.push('v');
         }
         rows.push(ops);
+        rows.extend(self.extra_ops.clone());
 
         if !self.is_function {
             let mut row = vec![' '; row_length];
