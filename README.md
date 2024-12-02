@@ -17,17 +17,19 @@ I've been testing this with [BefunExec](https://github.com/Mikescher/BefunExec) 
 
 The top left 10x10 corner is a sort of zero page as it can be indexed with only 3 characters (ie 05g for getting the value at 0, 5), and is used as the registers (more specifically, `00` is the stack pointer, `10` is the call stack pointer, `20` is the return value, and the rest are general purpose, so register ID 1 is `30`, register 8 is `01`)
 
-There is a custom stack, which is where *all state* is stored. The actual befunge stack is only used to perform individual operations, with data going right back onto the cstack. Indexing of this stack is stack frame relative only, which makes it nice and easy to work with.
-
-As zero is always on the stack (if empty), I could theoretically make calls to functions just be the ID, as the initial entry position is 0, and that'd be included for free. This would cause mayhem if any value ever leaked onto the bstack though, so idk.
+There is a custom stack (cstack), which is where most state is stored. The actual befunge stack (bstack) is only used to perform individual operations, with data going right back onto the cstack. Indexing of this stack is stack frame relative only, which makes it nice and easy to work with.
 
 There is also a call stack which keeps track of previously called functions, and where you exited from them.
 
 Function calls/returns use *two* indexes, one for the function ID (where 1 is main, and everything else is arbitrary), and the return location in the function (where 0 is the start) because after a call you need to return back to the position in the function where you were.
 
+Note: As zero is always on the bstack (if empty), I could theoretically make calls to functions just be the ID, as the initial entry position is 0, and that'd be included for free. This would cause mayhem if any value ever leaked onto the bstack though, so idk.
+
 Calling convention: Return values just go in `20` in the zero-page, and function parameters go onto the start of the function's stack, so if a function takes args, stack(0) will be the value of the first one. This allows an arbitrarily large number of args, if needed.
 
 For ease of C compilation we just always move the value from the return register onto some stack value but that would theoretically be optimizable away in a register allocation pass, so I think it's the best choice.
+
+There's also a static memory space used for globals.
 
 ### TLDR: Stuff it supports
 - Stack frames for each function
@@ -35,6 +37,7 @@ For ease of C compilation we just always move the value from the return register
 - Function calling with an arbitrary number of args
 - Returning can go to specific parts of a function
 - Inline jumps and loops
+- Global variables
 
 ### Current Limitations
 None of these are full architectural failures (aside from perhaps linking) so should be resolvable.
@@ -43,17 +46,18 @@ None of these are full architectural failures (aside from perhaps linking) so sh
 - Doesn't support goto
 - Doesn't support bitwise operations (these will be simply be tedious to implement, will require a loop over each bit)
 - Doesn't support ++ or --
+- Doesn't support bitshifts (these will require exponentiation, so more difficult than the other bitwise ops)
 - Doesn't support switch
 - Doesn't do a register allocation pass, which would probably make it a decent bit faster
 - No linking of any sort, all has to be in one file
 - No stdlib or anything from libc at all (might fudge some stdio in just for convinience before doing it properly)
 - No arbitrarily accessable memory for malloc (doable, just need a 4th stack and some more IR)
+- No K&R function support because it seems annoying to implement, and it's irrelevant anyways
 - It's not particularly good
-- Missing some random operators because I haven't bothered to implement them
 - TODO: figure out how the hell automated tests are going to work
 
 ### Intentional Limitations
-Many invalid C programs will be accepted and will have undefined behaviour. It's easier to program this way, just make sure to check your C code is actually sanely compilable with gcc or something.
+Many invalid C programs will be accepted and will instead just have undefined behaviour. It's easier to develop this way, if a little silly, just make sure to check your C code is actually sanely compilable with gcc or something.
 
 
 ## Examples

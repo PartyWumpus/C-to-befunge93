@@ -8,7 +8,7 @@ mod builder;
 static PRELUDE: &str = r#"v!R#######
 v#########            STACK -> ################################################...
 v#########       CALL STACK -> ################################################...
-v#########           MEMORY -> ################################################...
+v#########    STATIC MEMORY -> ################################################...
 v#########        // IN FUTURE, malloc() mem could be a 4th mem location here
 v#########
 v#########
@@ -57,6 +57,7 @@ pub enum UnaryOp {
     Minus,
     Complement,
     Copy,
+    BooleanNegate,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -135,6 +136,10 @@ impl CodeGen {
                             self.builder.char('1');
                             self.get_val(a);
                             self.builder.char('-');
+                        }
+                        UnaryOp::BooleanNegate => {
+                            self.get_val(a);
+                            self.builder.char('!');
                         }
                     }
                     self.put_val(out);
@@ -419,7 +424,8 @@ mod c {
                             }
                         }
                     }
-                    _ => panic!(),
+                    DerivedDeclarator::KRFunction(_) => todo!("KR functions"),
+                    _ => panic!("non func declarator in the func declarator parser??"),
                 }
             }
             count
@@ -428,7 +434,7 @@ mod c {
         fn parse_declarator(&self, decl: &Declarator) -> String {
             match &decl.kind.node {
                 DeclaratorKind::Identifier(node) => node.node.name.clone(),
-                _ => todo!("add non identifier functions"),
+                _ => todo!("non trivial identifier functions"),
             }
         }
 
@@ -463,7 +469,11 @@ mod c {
                 Statement::For(stmt) => self.parse_for_statement(&stmt.node),
                 Statement::Break => self.parse_break(),
                 Statement::Continue => self.parse_continue(),
-                _ => todo!("STATEMENT:, {:?}", stmt),
+                Statement::Labeled(_) | Statement::Goto(_) => todo!("goto"),
+                Statement::Switch(_) => todo!("switch statements"),
+                // If feeling freaky with it, asm statements could allow arbitrary befunge...
+                // Probably just not gonna implement it tho lol
+                Statement::Asm(_) => todo!("asm statements"),
             }
         }
 
@@ -606,7 +616,27 @@ mod c {
                     Some(val) => val.clone(),
                 },
                 Expression::Call(call_expr) => self.parse_call(&call_expr.node),
-                _ => todo!("EXPRESSION: {:?}", expr),
+
+                // Type stuff
+                Expression::SizeOfTy(_) => todo!("SizeOfTy {expr:?}"),
+                Expression::SizeOfVal(_) => todo!("SizeOfVal {expr:?}"),
+                Expression::AlignOf(_) => todo!("AlignOf {expr:?}"),
+                Expression::Cast(_) => todo!("Cast {expr:?}"),
+
+                // Struct stuff
+                Expression::Member(_) => todo!("Member {expr:?}"),
+                Expression::OffsetOf(_) => todo!("OffsetOf {expr:?}"),
+
+                // Other stuff
+                Expression::StringLiteral(_) => todo!("StringLiteral {expr:?}"),
+                Expression::GenericSelection(_) => todo!("GenericSelection {expr:?}"),
+                Expression::CompoundLiteral(_) => todo!("CompoundLiteral {expr:?}"),
+                Expression::Conditional(_) => todo!("Conditional {expr:?}"),
+                Expression::Comma(_) => todo!("Comma {expr:?}"),
+                Expression::VaArg(_) => todo!("VaArg {expr:?}"),
+
+                // Extension
+                Expression::Statement(_) => todo!("Statement {expr:?}"),
             }
         }
 
@@ -620,7 +650,7 @@ mod c {
                 Expression::Identifier(ident) => {
                     self.push(IROp::Call(ident.node.name.clone(), args));
                 }
-                _ => todo!("non ident calls"),
+                _ => todo!("non trival ident calls"),
             };
             let out = self.generate_pseudo();
             self.push(IROp::One(UnaryOp::Copy, IRValue::Register(0), out.clone()));
@@ -633,7 +663,20 @@ mod c {
             self.push(match expr.operator.node {
                 UnaryOperator::Complement => IROp::One(UnaryOp::Complement, val, out.clone()),
                 UnaryOperator::Minus => IROp::One(UnaryOp::Minus, val, out.clone()),
-                _ => todo!("UNARY OP: {:?}", expr),
+                UnaryOperator::Negate => IROp::One(UnaryOp::BooleanNegate, val, out.clone()),
+                UnaryOperator::Plus => IROp::One(UnaryOp::Copy, val, out.clone()), // silly
+
+                // x++
+                UnaryOperator::PostIncrement => todo!("PostIncrement {expr:?}"),
+                UnaryOperator::PostDecrement => todo!("PostDecrement {expr:?}"),
+
+                // ++x
+                UnaryOperator::PreIncrement => todo!("PreIncrement {expr:?}"),
+                UnaryOperator::PreDecrement => todo!("PreDecrement {expr:?}"),
+
+                // Memory stuff
+                UnaryOperator::Address => todo!("Address {expr:?}"),
+                UnaryOperator::Indirection => todo!("Indirection {expr:?}"),
             });
             out
         }
@@ -778,11 +821,13 @@ mod c {
                 Constant::Integer(int) => {
                     let x: usize = match int.base {
                         IntegerBase::Decimal => usize::from_str_radix(&int.number, 10).unwrap(),
-                        _ => todo!("INT: {:?}", int),
+                        IntegerBase::Octal => usize::from_str_radix(&int.number, 8).unwrap(),
+                        IntegerBase::Hexadecimal => usize::from_str_radix(&int.number, 16).unwrap(),
+                        IntegerBase::Binary => usize::from_str_radix(&int.number, 2).unwrap(),
                     };
                     IRValue::Immediate(x)
                 }
-                _ => todo!("CONSTANT: {:?}", val),
+                _ => todo!("Non integer constants {:?}", val),
             }
         }
 

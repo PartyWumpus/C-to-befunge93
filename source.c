@@ -1,4 +1,4 @@
-int j = 5;
+int j = 0xFF;
 int x = 25;
 
 int main(void) {
