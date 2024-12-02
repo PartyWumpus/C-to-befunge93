@@ -1,7 +1,8 @@
 use std::{collections::HashMap, mem};
 
 use builder::OpBuilder;
-use c::{function_id_mapping_pass, parse_c, pseudo_removal_pass, stack_size_reducer_pass};
+use c::{function_id_mapping_pass, pseudo_removal_pass, stack_size_reducer_pass, FileBuilder};
+use lang_c::ast::Initializer;
 
 mod builder;
 
@@ -16,10 +17,14 @@ v#########
 v#########
 v#########
 >"!"00p 010g2-2pv
->v  10          <
- >:#v_  $$ 20g . @
- v  <
+v               <
 "#;
+
+pub static PRELUDE2: &str = "0
+1
+>v
+ >:#v_  $$ 20g . @
+ v  <";
 
 #[derive(Debug, Clone)]
 enum IRValue {
@@ -71,11 +76,12 @@ enum BinOp {
 }
 
 #[derive(Debug)]
-struct IRFunction {
+struct IRTopLevel {
     name: String,
     stack_frame_size: usize,
     parameters: usize,
     ops: Vec<IROp>,
+    is_initializer: bool,
 }
 
 struct CodeGen {
@@ -84,11 +90,15 @@ struct CodeGen {
 }
 
 impl CodeGen {
-    fn compile_function(&mut self, func: IRFunction) -> Vec<String> {
+    fn compile_top_level(&mut self, func: IRTopLevel) -> Vec<String> {
+        self.builder = OpBuilder::new(!func.is_initializer);
         for op in func.ops {
             match &op {
                 IROp::FunctionLabel(_) => (),
                 IROp::Call(call_func_name, vals) => {
+                    if func.is_initializer {
+                        panic!("Non static call in static context")
+                    };
                     for (i, val) in vals.iter().enumerate() {
                         self.get_val(val);
                         self.put_val(&IRValue::Stack(func.stack_frame_size + i + 1));
@@ -152,9 +162,7 @@ impl CodeGen {
             self.builder.char(' ');
         }
 
-        let mut builder = OpBuilder::new();
-        mem::swap(&mut builder, &mut self.builder);
-        builder.finalize_function()
+        self.builder.finalize_function()
     }
 
     fn get_val(&mut self, val: &IRValue) {
@@ -197,34 +205,100 @@ mod c {
         driver::{parse, Config},
     };
 
-    use crate::{BinOp, BranchType, IRFunction, IROp, IRValue, UnaryOp};
+    use crate::{BinOp, BranchType, IROp, IRTopLevel, IRValue, UnaryOp};
 
-    struct FunctionBuilder {
+    struct TopLevelBuilder {
         count: usize,
         ops: Vec<IROp>,
         scope: ScopeInfo,
         loop_id: usize,
+        /// If const, use Data instead of Stack
+        is_const: bool,
     }
 
+    pub struct FileBuilder {
+        count: usize,
+        scope: ScopeInfo,
+    }
+
+    // TODO: scope system will need a bit of a refactor to make unshadowing of globals possible
     #[derive(Debug, Clone, Default)]
     struct ScopeInfo {
         var_map: HashMap<String, IRValue>,
     }
 
-    pub fn parse_c<P: AsRef<Path>>(file: P) -> Result<Vec<IRFunction>, lang_c::driver::Error> {
-        let config = Config::default();
-        let parsed = parse(&config, file)?;
-        let out = parsed
-            .unit
-            .0
-            .iter()
-            .map(|obj| match &obj.node {
-                ExternalDeclaration::Declaration(_) => todo!("add declarations"),
-                ExternalDeclaration::StaticAssert(_) => todo!("add static asserts"),
-                ExternalDeclaration::FunctionDefinition(obj) => parse_function(&obj.node),
-            })
-            .collect::<Vec<_>>();
-        Ok(out)
+    impl FileBuilder {
+        pub fn parse_c<P: AsRef<Path>>(file: P) -> Result<Vec<IRTopLevel>, lang_c::driver::Error> {
+            let mut builder = FileBuilder {
+                count: 0,
+                scope: ScopeInfo::default(),
+            };
+            let config = Config::default();
+            let parsed = parse(&config, file)?;
+            let mut out = vec![];
+            for obj in parsed.unit.0.iter() {
+                match &obj.node {
+                    ExternalDeclaration::Declaration(decl) => {
+                        out.push(builder.parse_top_level_declaration(&decl.node))
+                    }
+                    ExternalDeclaration::StaticAssert(_) => todo!("add static asserts"),
+                    ExternalDeclaration::FunctionDefinition(func) => {
+                        out.push(builder.parse_function(&func.node))
+                    }
+                }
+            }
+            Ok(out)
+        }
+
+        fn parse_function(&mut self, func: &FunctionDefinition) -> IRTopLevel {
+            let mut builder = TopLevelBuilder {
+                ops: vec![],
+                count: self.count,
+                scope: self.scope.clone(),
+                loop_id: 0,
+                is_const: false,
+            };
+            // TODO: deal with specifiers
+            // TODO: deal with K&R declarations
+            let name = builder.parse_declarator(&func.declarator.node);
+            let param_count = builder.parse_func_declarator(&func.declarator.node);
+            builder.parse_statement(&func.statement.node);
+
+            // FIXME: bad bad bad, just have a seperate global counter
+            self.count = builder.count;
+            IRTopLevel {
+                name,
+                ops: builder.ops,
+                parameters: param_count,
+                is_initializer: false,
+                stack_frame_size: builder.count, // NOTE: this is a 'worst case' value,
+                                                 // and should be recalculated in a later pass
+            }
+        }
+
+        fn parse_top_level_declaration(&mut self, decl: &Declaration) -> IRTopLevel {
+            let mut builder = TopLevelBuilder {
+                ops: vec![],
+                count: self.count,
+                scope: self.scope.clone(),
+                loop_id: 0,
+                is_const: true,
+            };
+
+            builder.parse_declarations(&decl);
+            self.scope.var_map.extend(builder.scope.var_map);
+
+            // FIXME: bad bad bad, just have a seperate global counter
+            self.count = builder.count;
+            IRTopLevel {
+                name: "top level declarator dont need no name".to_owned(),
+                ops: builder.ops,
+                parameters: 0,
+                is_initializer: true,
+                stack_frame_size: builder.count, // NOTE: this is a 'worst case' value,
+                                                 // and should be recalculated in a later pass
+            }
+        }
     }
 
     struct PsuedoMap {
@@ -232,7 +306,7 @@ mod c {
         count: usize,
     }
 
-    fn pseudo_removal(func: &mut IRFunction) {
+    fn pseudo_removal(func: &mut IRTopLevel) {
         let mut map = PsuedoMap {
             map: HashMap::new(),
             count: func.parameters - 1,
@@ -271,13 +345,13 @@ mod c {
         }
     }
 
-    pub fn pseudo_removal_pass(funcs: &mut Vec<IRFunction>) {
+    pub fn pseudo_removal_pass(funcs: &mut Vec<IRTopLevel>) {
         for func in funcs {
             pseudo_removal(func);
         }
     }
 
-    fn stack_size_recalculator(func: &IRFunction) -> usize {
+    fn stack_size_recalculator(func: &IRTopLevel) -> usize {
         // find biggest Stack value
         let mut counter = 0;
         let mut check = |val: &IRValue| {
@@ -307,49 +381,29 @@ mod c {
         counter
     }
 
-    pub fn stack_size_reducer_pass(funcs: &mut Vec<IRFunction>) {
+    pub fn stack_size_reducer_pass(funcs: &mut Vec<IRTopLevel>) {
         for func in funcs {
             func.stack_frame_size = stack_size_recalculator(func);
         }
     }
 
-    pub fn function_id_mapping_pass(funcs: &Vec<IRFunction>) -> HashMap<String, usize> {
+    pub fn function_id_mapping_pass(funcs: &Vec<IRTopLevel>) -> HashMap<String, usize> {
         let mut map = HashMap::new();
         let mut i = 2;
         for func in funcs {
-            if func.name == "main" {
-                map.insert(func.name.clone(), 1);
-            } else {
-                map.insert(func.name.clone(), i);
-                i += 1;
+            if !func.is_initializer {
+                if func.name == "main" {
+                    map.insert(func.name.clone(), 1);
+                } else {
+                    map.insert(func.name.clone(), i);
+                    i += 1;
+                }
             }
         }
         map
     }
 
-    fn parse_function(func: &FunctionDefinition) -> IRFunction {
-        let mut function_state = FunctionBuilder {
-            ops: vec![],
-            count: 0,
-            scope: ScopeInfo::default(),
-            loop_id: 0,
-        };
-        // TODO: deal with specifiers
-        // TODO: deal with K&R declarations
-        let name = function_state.parse_declarator(&func.declarator.node);
-        let param_count = function_state.parse_func_declarator(&func.declarator.node);
-        function_state.parse_statement(&func.statement.node);
-
-        IRFunction {
-            name,
-            ops: function_state.ops,
-            parameters: param_count,
-            stack_frame_size: function_state.count, // NOTE: this is a 'worst case' value,
-                                                    // and should be recalculated in a later pass
-        }
-    }
-
-    impl FunctionBuilder {
+    impl TopLevelBuilder {
         fn parse_func_declarator(&mut self, decl: &Declarator) -> usize {
             let mut count = 1;
             for node in decl.derived.iter() {
@@ -512,7 +566,12 @@ mod c {
             // TODO: deal with specifiers
             for decl in decls.declarators.clone() {
                 let name = self.parse_declarator(&decl.node.declarator.node);
-                let loc = self.generate_named_pseudo(name.clone());
+                let loc = if self.is_const {
+                    self.count += 1;
+                    IRValue::Data(self.count)
+                } else {
+                    self.generate_named_pseudo(name.clone())
+                };
                 self.scope.var_map.insert(name, loc.clone());
 
                 if let Some(init) = decl.node.initializer {
@@ -763,17 +822,25 @@ mod c {
     }
 }
 
-fn main() {
-    let x = std::fs::read_to_string("source.c").expect("Unable to read file");
-    println!("{x}");
-    let mut program = parse_c("source.c").unwrap();
-    println!("-- IR, PRE PASSES");
-    for func in &program {
-        println!("\nFUNC {:?}", func.name);
+fn print_ir(ir: &Vec<IRTopLevel>) {
+    for func in ir {
+        if !func.is_initializer {
+            println!("\nFUNC {:?}", func.name);
+        } else {
+            println! {"\nINIT REGION"};
+        }
         for line in &func.ops {
             println!("{line:?}");
         }
     }
+}
+
+fn main() {
+    let x = std::fs::read_to_string("source.c").expect("Unable to read file");
+    println!("{x}");
+    let mut program = FileBuilder::parse_c("source.c").unwrap();
+    println!("-- IR, PRE PASSES");
+    print_ir(&program);
 
     pseudo_removal_pass(&mut program);
     stack_size_reducer_pass(&mut program);
@@ -781,44 +848,30 @@ fn main() {
     println!("{function_map:?}");
 
     println!("-- IR, POST PASSES");
-    for func in &program {
-        println!("FUNC {:?}", func.name);
-        for line in &func.ops {
-            println!("{line:?}");
-        }
-    }
-
-    /*
-    let program = vec![IRFunction {
-        ops: vec![
-            IROp::One(UnaryOp::Copy, IRValue::Immediate(7), IRValue::Data(1)),
-            IROp::Two(
-                BinOp::Mult,
-                IRValue::Data(1),
-                IRValue::Immediate(2),
-                IRValue::Data(2),
-            ),
-            IROp::One(UnaryOp::Copy, IRValue::Data(2), IRValue::Data(1)),
-            IROp::Return(IRValue::Data(1)),
-        ],
-        name: "main".to_owned(),
-        parameters: 0,
-        stack_frame_size: 1,
-    }];
-    */
+    print_ir(&program);
 
     println!("-- befunge begin");
     let mut cg = CodeGen {
-        builder: OpBuilder::new(),
+        builder: OpBuilder::new(false),
         function_map,
     };
 
     let mut out: Vec<String> = vec![];
-    out.extend(PRELUDE.lines().map(std::borrow::ToOwned::to_owned));
+    out.extend(PRELUDE.lines().map(ToOwned::to_owned));
+    let mut funcs: Vec<String> = vec![];
+    let mut inits: Vec<String> = vec![];
     for func in program {
-        let x = cg.compile_function(func);
-        out.extend(x);
+        let init = func.is_initializer;
+        let x = cg.compile_top_level(func);
+        if init {
+            inits.extend(x);
+        } else {
+            funcs.extend(x);
+        }
     }
+    out.extend(inits);
+    out.extend(PRELUDE2.lines().map(ToOwned::to_owned));
+    out.extend(funcs);
     for line in out.clone() {
         println!("{line}");
     }
@@ -843,7 +896,7 @@ fn write_each(
     file.sync_all()
 }
 
-// TODO: handle top level values in C
+// TODO: use seperate global counter for global values
 // TODO: bitwise ops (going to be strange, as befunge has no bit level operators)
 // TODO: increment and decrement
 // TODO: for switch statements contine & break tracking must be done seperately (as switch can be breaked but not continued)

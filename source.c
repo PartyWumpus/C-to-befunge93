@@ -1,12 +1,13 @@
+int j = 5;
+int x = 25;
+int wasd = 100;
+
 int main(void) {
-  int x = 7;
-  return fib(x);
+  func_a(12);
+  return wasd;
 }
 
-int fib(int a) {
-  if (a < 1) {
-    return 1;
-  } else {
-    return fib(a - 1) + fib(a - 2);
-  }
+int func_a(int a) {
+  wasd += a;
+  return j;
 }

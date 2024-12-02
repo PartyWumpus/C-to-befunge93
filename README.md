@@ -12,7 +12,7 @@ The top left 10x10 corner is a sort of zero page as it can be indexed with only 
 
 There is a custom stack, which is where *all state* is stored. The actual befunge stack is only used to perform individual operations, with data going right back onto the cstack. Indexing of this stack is stack frame relative only, which makes it nice and easy to work with.
 
-As zero is always on the stack (if empty), I could theoretically make getting the stack register just `g` instead of `00g`, but that's going to cause mayhem if the stack ever leaks even a single value. (similarly i could make `1g`, `2g` be the call stack & return value, but they're less relevant really)
+As zero is always on the stack (if empty), I could theoretically make calls to functions just be the ID, as the initial entry position is 0, and that'd be included for free. This would cause mayhem if any value ever leaked onto the bstack though, so idk.
 
 There is also a call stack which keeps track of previously called functions, and where you exited from them.
 
@@ -31,7 +31,6 @@ For ease of C compilation we just always move the value from the return register
 
 ### Current Limitations
 None of these are full architectural failures (aside from perhaps linking) so should be resolvable.
-- No top level variable declarations (the IR does support values that go in fixed positions in memory, this is just a C parsing issue)
 - Only supports ints as types
 - Doesn't support goto
 - Doesn't support bitwise operations (these will be simply be tedious to implement, will require a loop over each bit)

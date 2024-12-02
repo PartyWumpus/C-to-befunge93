@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 pub struct OpBuilder {
     ops: Vec<char>,
+    is_function: bool,
     branch_labels: HashMap<String, usize>,
     branch_points: HashMap<String, Vec<usize>>,
     exit_points: Vec<usize>,
@@ -9,9 +10,14 @@ pub struct OpBuilder {
 }
 
 impl OpBuilder {
-    pub fn new() -> Self {
+    pub fn new(is_function: bool) -> Self {
+        let start = if is_function { " v   _$ >:#^_$" } else { ">" }
+            .chars()
+            .collect::<Vec<_>>();
+
         Self {
-            ops: " v   _$ >:#^_$".chars().collect::<Vec<_>>(),
+            ops: start,
+            is_function,
             branch_labels: HashMap::new(),
             branch_points: HashMap::new(),
             exit_points: Vec::new(),
@@ -62,6 +68,11 @@ impl OpBuilder {
         let x = match num {
             0..10 => num.to_string(),
             10..19 => (num - 9).to_string() + "9+",
+            19 => "55*1-".to_owned(),
+            // This is the newline char
+            20 => "45*".to_owned(),
+            // This is the " char
+            34 => "98+2*".to_owned(),
             x => format!(
                 r#""{}""#,
                 char::from_u32(x as u32).expect("failed to convert number to befunge string")
@@ -192,55 +203,67 @@ impl OpBuilder {
 
     //// Finalize
 
-    pub fn finalize_function(self) -> Vec<String> {
+    pub fn finalize_function(&self) -> Vec<String> {
         let row_length = self.ops.len();
         let mut rows: Vec<Vec<char>> = vec![];
 
-        let mut entry_row = vec![' ', '>', '1', '-', ':', 'v'];
-        entry_row.append(&mut vec![' '; row_length]);
-        rows.push(entry_row);
-
-        // Add return points
-        for (i, pos) in self.return_points.iter().rev().enumerate() {
-            if i < self.return_points.len() {
-                let mut resposition_row = vec![' '; row_length];
-                resposition_row[8] = '^';
-                resposition_row[9] = '-';
-                resposition_row[10] = '1';
-                resposition_row[11] = '<';
-                rows.push(resposition_row);
-            }
-            let mut entry_row = vec![' '; row_length];
-            entry_row[8] = '>';
-            entry_row[9] = ':';
-            entry_row[10] = '#';
-            entry_row[11] = '^';
-            entry_row[12] = '_';
-            entry_row[13] = '$';
-
-            entry_row[*pos] = 'v';
+        if self.is_function {
+            let mut entry_row = vec![' ', '>', '1', '-', ':', 'v'];
+            entry_row.append(&mut vec![' '; row_length]);
             rows.push(entry_row);
+
+            // Add return points
+            for (i, pos) in self.return_points.iter().rev().enumerate() {
+                if i < self.return_points.len() {
+                    let mut resposition_row = vec![' '; row_length];
+                    resposition_row[8] = '^';
+                    resposition_row[9] = '-';
+                    resposition_row[10] = '1';
+                    resposition_row[11] = '<';
+                    rows.push(resposition_row);
+                }
+                let mut entry_row = vec![' '; row_length];
+                entry_row[8] = '>';
+                entry_row[9] = ':';
+                entry_row[10] = '#';
+                entry_row[11] = '^';
+                entry_row[12] = '_';
+                entry_row[13] = '$';
+
+                entry_row[*pos] = 'v';
+                rows.push(entry_row);
+            }
+
+            // Add function exit points
+            let mut exit_row = vec![' '; row_length];
+            exit_row[0] = '^';
+            for pos in self.exit_points.clone() {
+                exit_row[pos] = '<';
+            }
+            rows.push(exit_row);
+
+            if !self.return_points.is_empty() {
+                let mut row = vec![' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', '^', '-', '1', '<'];
+                row.append(&mut vec![' '; row_length]);
+                rows.push(row);
+            }
         }
 
-        // Add function exit points
-        let mut exit_row = vec![' '; row_length];
-        exit_row[0] = '^';
-        for pos in self.exit_points {
-            exit_row[pos] = '<';
+        let mut ops = self.ops.clone();
+        if !self.is_function {
+            ops.push('v');
         }
+        rows.push(ops);
 
-        rows.push(exit_row);
-
-        if !self.return_points.is_empty() {
-            let mut row = vec![' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', '^', '-', '1', '<'];
-            row.append(&mut vec![' '; row_length]);
+        if !self.is_function {
+            let mut row = vec![' '; row_length];
+            row[0] = 'v';
+            row.push('<');
             rows.push(row);
         }
 
-        rows.push(self.ops);
-
         // Add branches
-        for (label, label_pos) in self.branch_labels {
+        for (label, label_pos) in self.branch_labels.clone() {
             let mut row = vec![' '; row_length];
             row[label_pos] = '^';
             for branch_pos in self.branch_points.get(&label).unwrap_or(&Vec::new()) {
