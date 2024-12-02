@@ -103,17 +103,15 @@ v#########
 This C
 ```c
 int main(void) {
- int b = 10;
- return fib(b);
+  int x = 0xA;
+  return fib(x);
 }
 
-
-int fib(int i) {
-  if (i == 0 || i == 1) {
+int fib(int a) {
+  if (a == 0 || a == 1) {
     return 1;
-  } else {
-    return fib(i - 1) + fib(i - 2);
   }
+  return fib(a - 1) + fib(a - 2);
 }
 ```
 Becomes this IR
@@ -126,18 +124,17 @@ Return(Stack(2))
 
 FUNC "fib"
 Two(Equal, Stack(1), Immediate(0), Stack(2))
-CondBranch(NonZero, "skip.1", Stack(2))
+CondBranch(NonZero, "skip.3", Stack(2))
 Two(Equal, Stack(1), Immediate(1), Stack(3))
-CondBranch(NonZero, "skip.1", Stack(3))
+CondBranch(NonZero, "skip.3", Stack(3))
 One(Copy, Immediate(0), Stack(4))
-AlwaysBranch("end.2")
-Label("skip.1")
+AlwaysBranch("end.4")
+Label("skip.3")
 One(Copy, Immediate(1), Stack(4))
-Label("end.2")
-CondBranch(Zero, "else.10", Stack(4))
+Label("end.4")
+CondBranch(Zero, "else.12", Stack(4))
 Return(Immediate(1))
-AlwaysBranch("else.11")
-Label("else.10")
+Label("else.12")
 Two(Sub, Stack(1), Immediate(1), Stack(5))
 Call("fib", [Stack(5)])
 One(Copy, Register(0), Stack(6))
@@ -146,22 +143,24 @@ Call("fib", [Stack(7)])
 One(Copy, Register(0), Stack(8))
 Two(Add, Stack(6), Stack(8), Stack(9))
 Return(Stack(9))
-Label("else.11")
 ```
 Which then becomes this befunge
 ```b93
 v!R#######
-v#########            STACK -> xx###################
-v#########       CALL STACK -> xx###################
-v#########
-v#########
+v#########            STACK -> ################################################...
+v#########       CALL STACK -> ################################################...
+v#########    STATIC MEMORY -> ################################################...
+v#########        // IN FUTURE, malloc() mem could be a 4th mem location here
 v#########
 v#########
 v#########
 v#########
 v#########
 >"!"00p 010g2-2pv
->v  10          <
+v               <
+0
+1
+>v
  >:#v_  $$ 20g . @
  v  <
  >1-:v                                                                                                                           
@@ -170,18 +169,17 @@ v#########
 ^                                                                      <                                                 < 
         ^-1<                                                                                                                           
  v   _$ >:#^_$19+00g1+1p 00g1+1g00g3+1p0200g2+00p110g2p110g1+2p10g2+10p^> 20g00g2+1p 00g2+1g20p00g2-00p10g1-:2g\1-:2g\10p^ 
- >1-:v                                                                                                                                                                                                                                                                                                                                                                             
-        ^-1<                                                                                                                                                                                                                                                                                                                                                                 
-        >:#^_$                                                                                                                                                                                                                                                                                   v                                                                           
-        ^-1<                                                                                                                                                                                                                                                                                                                                                                 
-        >:#^_$                                                                                                                                                                                                    v                                                                                                                                                          
-^                                                                                                                                         <                                                                      <                                                                              <                                                                        <   
-        ^-1<                                                                                                                                                                                                                                                                                                                                                                             
- v   _$ >:#^_$00g1+1g0-!00g2+1p 00g2+1g#v_ 00g1+1g1-!00g3+1p 00g3+1g#v_ 000g4+1p v > 100g4+1p > 00g4+1g!#v_ 120p00g9-00p10g1-:2g\1-:2g\10p^ v > 00g1+1g1-00g5+1p 00g5+1g00g19++1p0200g9+00p210g2p110g1+2p10g2+10p^> 20g00g6+1p 00g1+1g2-00g7+1p 00g7+1g00g19++1p0200g9+00p210g2p210g1+2p10g2+10p^> 20g00g8+1p 00g6+1g00g8+1g+00g9+1p 00g9+1g20p00g9-00p10g1-:2g\1-:2g\10p^ > 
-                                                                                                                                            >                                                                                                                                                                                                                              ^ 
-                                        >                            >             ^                                                                                                                                                                                                                                                                                         
-                                                                                 >            ^                                                                                                                                                                                                                                                                              
-                                                                                                         >                                    ^                                                                                                                                                                                                                              
+ >1-:v                                                                                                                                                                                                                                                                                                                                                                         
+        ^-1<                                                                                                                                                                                                                                                                                                                                                             
+        >:#^_$                                                                                                                                                                                                                                                                                 v                                                                         
+        ^-1<                                                                                                                                                                                                                                                                                                                                                             
+        >:#^_$                                                                                                                                                                                                  v                                                                                                                                                        
+^                                                                                                                                         <                                                                    <                                                                              <                                                                        < 
+        ^-1<                                                                                                                                                                                                                                                                                                                                                                         
+ v   _$ >:#^_$00g1+1g0-!00g2+1p 00g2+1g#v_ 00g1+1g1-!00g3+1p 00g3+1g#v_ 000g4+1p v > 100g4+1p > 00g4+1g!#v_ 120p00g9-00p10g1-:2g\1-:2g\10p^ > 00g1+1g1-00g5+1p 00g5+1g00g19++1p0200g9+00p210g2p110g1+2p10g2+10p^> 20g00g6+1p 00g1+1g2-00g7+1p 00g7+1g00g19++1p0200g9+00p210g2p210g1+2p10g2+10p^> 20g00g8+1p 00g6+1g00g8+1g+00g9+1p 00g9+1g20p00g9-00p10g1-:2g\1-:2g\10p^ 
+                                                                                 >            ^                                                                                                                                                                                                                                                                          
+                                                                                                         >                                  ^                                                                                                                                                                                                                            
+                                        >                            >             ^                                                                                                                                                                                                                                                                                     
 ```
 
 ### A bunch o functions
