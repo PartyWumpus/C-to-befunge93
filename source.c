@@ -1,13 +1,17 @@
 int j = 5;
 int x = 25;
-int wasd = 100;
 
 int main(void) {
-  func_a(12);
-  return wasd;
+  int x = func_a(12);
+  return x;
 }
+
+int a, b;
+int wasd = 125;
 
 int func_a(int a) {
   wasd += a;
-  return j;
+  return wasd;
 }
+
+int c = 5, d;

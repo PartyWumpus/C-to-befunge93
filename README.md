@@ -7,7 +7,14 @@
 - Notes from [Jeffrey Lee's site](https://www.phlamethrower.co.uk/index.php) about their [prototype befunge -> C compiler](https://www.phlamethrower.co.uk/befunge/c2b.php) and their [general befunge insights](https://www.phlamethrower.co.uk/befunge/)
 - The [lang_c](https://docs.rs/lang-c/latest/lang_c/index.html) crate for doing the lexing and parsing of c for me (i love skipping 1/2 of the work)
 
+## Befunge interpreter assumptions
+I've been testing this with [BefunExec](https://github.com/Mikescher/BefunExec) (through wine because i cant be bothered to build it myself), I'd likely just use that.
+- Infinite (or at least a lot of) positive fungespace (right and downwards from 0,0), although negative space is not needed (left and up from 0,0)
+- 64 bit signed values on the stack
+- 64 bit values allowed in the funge space
+
 ## Notes about the implementation
+
 The top left 10x10 corner is a sort of zero page as it can be indexed with only 3 characters (ie 05g for getting the value at 0, 5), and is used as the registers (more specifically, `00` is the stack pointer, `10` is the call stack pointer, `20` is the return value, and the rest are general purpose, so register ID 1 is `30`, register 8 is `01`)
 
 There is a custom stack, which is where *all state* is stored. The actual befunge stack is only used to perform individual operations, with data going right back onto the cstack. Indexing of this stack is stack frame relative only, which makes it nice and easy to work with.
@@ -32,6 +39,7 @@ For ease of C compilation we just always move the value from the return register
 ### Current Limitations
 None of these are full architectural failures (aside from perhaps linking) so should be resolvable.
 - Only supports ints as types
+- Linkage is not properly implemented I think
 - Doesn't support goto
 - Doesn't support bitwise operations (these will be simply be tedious to implement, will require a loop over each bit)
 - Doesn't support ++ or --

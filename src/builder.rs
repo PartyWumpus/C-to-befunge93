@@ -111,13 +111,13 @@ impl OpBuilder {
 
     /// Puts data value on bstack
     pub fn load_data_val(&mut self, position: usize) {
-        self.load_number(position + 31); // + 31 to avoid the register space
+        self.load_number(position + 30); // + 30 to avoid the register space
         self.str("3g");
     }
 
     /// Set data value to top of bstack
     pub fn set_data_val(&mut self, position: usize) {
-        self.load_number(position + 31); // + 31 to avoid the register space
+        self.load_number(position + 30); // + 30 to avoid the register space
         self.str("3p");
     }
 

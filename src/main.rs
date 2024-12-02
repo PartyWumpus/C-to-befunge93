@@ -2,7 +2,6 @@ use std::{collections::HashMap, mem};
 
 use builder::OpBuilder;
 use c::{function_id_mapping_pass, pseudo_removal_pass, stack_size_reducer_pass, FileBuilder};
-use lang_c::ast::Initializer;
 
 mod builder;
 
@@ -577,6 +576,11 @@ mod c {
                 if let Some(init) = decl.node.initializer {
                     let init = self.parse_initializer(&init.node);
                     self.push(IROp::One(UnaryOp::Copy, init, loc));
+                } else if self.is_const {
+                    // If we are in a declarator we must init un-inited values to zero.
+                    // This impl may be overzealous, but as using the value of an
+                    // un-inited value is UB, this is okay
+                    self.push(IROp::One(UnaryOp::Copy, IRValue::Immediate(0), loc));
                 }
             }
         }
@@ -901,3 +905,8 @@ fn write_each(
 // TODO: increment and decrement
 // TODO: for switch statements contine & break tracking must be done seperately (as switch can be breaked but not continued)
 // TODO: goto
+//
+//
+// NOTE: Some custom printing thing is going to be needed for every value that isn't signed int(/long?)
+// NOTE: When implementing unsigned ints, gonna need to have custom impls for some things
+//        likely mult, divide and modulo (as befunge ops are signed).
