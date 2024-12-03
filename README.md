@@ -107,6 +107,9 @@ The empty `""` is for 'constraints' which I have not yet properly implemented.
 
 The exact format for how I'm going to pick register locations, what a register ID actually means etc is subject to change, but currently `r2` is `40g`, `r3` is `50g`, etc.
 
+As well as registers with `[r1]` to `[r97]`, you can use `[bstack]`, which will leave the value on the top of the bstack or read it from the top of the bstack. Again important to note that you should not leak any more values onto the bstack at the end beyond the number of `bstack` values in the listed outputs of the asm.
+
+##### Register example
 ```c
 int main(void) {
  int a = 10;
@@ -133,6 +136,26 @@ InlineBefunge(["40g 5+ 40p", "befunge93!"])
 One(Copy, Register(2), Psuedo("a.1"))
 Return(Psuedo("a.1"))
 ```
+
+##### `bstack` example
+This does the same as the example above, but writes and reads from the bstack instead of using a register.
+```c
+int main(void) {
+ int a = 10;
+ __asm__("5+": [bstack] "" (a): [bstack] "" (a));
+ return a;
+}
+```
+-> `19+00g1-1p 00g1-1g 5+ 00g1-1p 00g1-1g20p00g1-00p10g1-:2g\1-:2g\10p^`
+
+##### Printing
+```c
+int print_int(int a, int b) {
+  __asm__("." : : [bstack] "" (a));
+  return 0;
+}
+```
+-> `00g1-1g . 020p00g1-00p10g1-:2g\1-:2g\10p`
 
 ## Generic Examples
 
@@ -356,4 +379,17 @@ v#########
 ^                                                                            <                                                 < 
         ^-1<                                                                                                                                 
  v   _$ >:#^_$00g1+1g1+00g2+1p 00g2+1g00g4+1p0400g3+00p510g2p110g1+2p10g2+10p^> 20g00g3+1p 00g3+1g20p00g3-00p10g1-:2g\1-:2g\10p^ 
+```
+
+### Printing
+```c
+void print_int(int a) {
+  __asm__("." : : [bstack] "" (a));
+  return;
+}
+
+void print_char(int a) {
+  __asm__("," : : [bstack] "" (a));
+  return;
+}
 ```

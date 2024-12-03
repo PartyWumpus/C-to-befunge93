@@ -32,6 +32,8 @@ enum IRValue {
     Register(usize), // limited to only like 70ish tho
     Data(usize),
     Psuedo(String),
+    // Must be careful when using
+    BefungeStack,
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +194,7 @@ impl CodeGen {
             IRValue::Register(id) => self.builder.load_register_val(*id),
             IRValue::Immediate(value) => self.builder.load_number(*value),
             IRValue::Data(position) => self.builder.load_data_val(*position),
+            IRValue::BefungeStack => (), // DANGER: assume it is already there
             IRValue::Psuedo(_) => {
                 panic!("Psuedo registers should be removed by befunge generation time")
             }
@@ -204,6 +207,7 @@ impl CodeGen {
             IRValue::Register(id) => self.builder.set_register_val(*id),
             IRValue::Immediate(_) => panic!("Immediate value as output location"),
             IRValue::Data(position) => self.builder.set_data_val(*position),
+            IRValue::BefungeStack => (), // DANGER: leak the value onto the stack
             IRValue::Psuedo(_) => {
                 panic!("Psuedo registers should be removed by befunge generation time")
             }
@@ -547,8 +551,10 @@ mod c {
         fn parse_asm_symbolic(str: &str) -> IRValue {
             if str.starts_with("r") {
                 IRValue::Register(str[1..].parse().unwrap())
+            } else if str == "bstack" {
+                IRValue::BefungeStack
             } else {
-                panic!("invalid symbolic name for asm, try r02 :)")
+                panic!("Invalid symbolic value");
             }
         }
 
@@ -735,24 +741,62 @@ mod c {
         fn parse_unary_expression(&mut self, expr: &UnaryOperatorExpression) -> IRValue {
             let val = self.parse_expression(&expr.operand.node);
             let out = self.generate_pseudo();
-            self.push(match expr.operator.node {
-                UnaryOperator::Complement => IROp::One(UnaryOp::Complement, val, out.clone()),
-                UnaryOperator::Minus => IROp::One(UnaryOp::Minus, val, out.clone()),
-                UnaryOperator::Negate => IROp::One(UnaryOp::BooleanNegate, val, out.clone()),
-                UnaryOperator::Plus => IROp::One(UnaryOp::Copy, val, out.clone()), // silly
+            match expr.operator.node {
+                UnaryOperator::Complement => {
+                    self.push(IROp::One(UnaryOp::Complement, val, out.clone()))
+                }
+                UnaryOperator::Minus => self.push(IROp::One(UnaryOp::Minus, val, out.clone())),
+                UnaryOperator::Negate => {
+                    self.push(IROp::One(UnaryOp::BooleanNegate, val, out.clone()))
+                }
+                UnaryOperator::Plus => self.push(IROp::One(UnaryOp::Copy, val, out.clone())), // silly
 
-                // x++
-                UnaryOperator::PostIncrement => todo!("PostIncrement {expr:?}"),
-                UnaryOperator::PostDecrement => todo!("PostDecrement {expr:?}"),
+                // ++x, increment and evaluate to x+1
+                UnaryOperator::PreIncrement => {
+                    self.push(IROp::Two(
+                        BinOp::Add,
+                        val.clone(),
+                        IRValue::Immediate(1),
+                        val.clone(),
+                    ));
+                    return val;
+                }
+                // --x, decrement and evaluate to x-1
+                UnaryOperator::PreDecrement => {
+                    self.push(IROp::Two(
+                        BinOp::Sub,
+                        val.clone(),
+                        IRValue::Immediate(1),
+                        val.clone(),
+                    ));
+                    return val;
+                }
 
-                // ++x
-                UnaryOperator::PreIncrement => todo!("PreIncrement {expr:?}"),
-                UnaryOperator::PreDecrement => todo!("PreDecrement {expr:?}"),
+                // x++, increment and evaluate to x
+                UnaryOperator::PostIncrement => {
+                    self.push(IROp::One(UnaryOp::Copy, val.clone(), out.clone()));
+                    self.push(IROp::Two(
+                        BinOp::Add,
+                        val.clone(),
+                        IRValue::Immediate(1),
+                        val.clone(),
+                    ));
+                }
+                // x--
+                UnaryOperator::PostDecrement => {
+                    self.push(IROp::One(UnaryOp::Copy, val.clone(), out.clone()));
+                    self.push(IROp::Two(
+                        BinOp::Sub,
+                        val.clone(),
+                        IRValue::Immediate(1),
+                        val.clone(),
+                    ));
+                }
 
                 // Memory stuff
                 UnaryOperator::Address => todo!("Address {expr:?}"),
                 UnaryOperator::Indirection => todo!("Indirection {expr:?}"),
-            });
+            };
             out
         }
 
@@ -1028,11 +1072,11 @@ fn write_each(
     file.sync_all()
 }
 
-// TODO: Fix first function having a stack size greater than x. Just increment by stack_frame_size
+// FIXME: Fix first function having a stack size greater than x. Just increment by stack_frame_size
 // at start :)
+// FIXME: reorganise __asm__ so all [bstack]'s are loaded first
 // TODO: use seperate global counter for global values
 // TODO: bitwise ops (going to be strange, as befunge has no bit level operators)
-// TODO: increment and decrement
 // TODO: for switch statements contine & break tracking must be done seperately (as switch can be breaked but not continued)
 // TODO: goto
 //

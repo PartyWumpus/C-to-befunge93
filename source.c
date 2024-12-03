@@ -1,27 +1,16 @@
 int main(void) {
-  int i = 0;
-  while (i < 10) {
-    i += 1;
-    print_int(fib(i));
-  }
-  return 200;
+ int a = 10;
+ print_int(a, 2);
+ return a;
+}
+
+int w(void) {
+ int a = 10;
+ __asm__("5+": [bstack] "" (a): [bstack] "" (a));
+ return a;
 }
 
 int print_int(int a) {
-  __asm__(
-      "v>"
-      "3."
-      "0g"
-      ">^"
-      : 
-      : [r1] "+" (a)
-      );
+  __asm__("." : : [bstack] "" (a));
   return;
-}
-
-int fib(int a) {
-  if (a == 0 || a == 1) {
-    return 1;
-  } 
-  return fib(a-1) + fib(a-2);
 }
