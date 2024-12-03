@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+#[derive(Debug)]
 pub struct OpBuilder {
     ops: Vec<char>,
     // Extra lines that go below the ops, and above any branches

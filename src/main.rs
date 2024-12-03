@@ -25,6 +25,27 @@ pub static PRELUDE2: &str = "0
  >:#v_  $$ 20g . @
  v  <";
 
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(about="RBeJ is an LLVM-based befunge JIT compiler", long_about = None)]
+struct Args {
+    /// File to compile
+    filename: String,
+
+    /// Print extra info about compilation
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Don't print the output befunge
+    #[arg(short, long)]
+    silent: bool,
+
+    /// File to output to
+    #[arg(short, long)]
+    outfile: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 enum IRValue {
     Stack(usize),
@@ -152,8 +173,11 @@ impl CodeGen {
                             self.builder.char('-');
                         }
                         UnaryOp::Complement => {
-                            self.builder.char('1');
+                            // TODO: improve. x -> -1 - x
+                            self.builder.char('0');
                             self.get_val(a);
+                            self.builder.char('-');
+                            self.builder.char('1');
                             self.builder.char('-');
                         }
                         UnaryOp::BooleanNegate => {
@@ -222,10 +246,10 @@ mod c {
     use lang_c::{
         ast::{
             AsmStatement, BinaryOperator, BinaryOperatorExpression, BlockItem, CallExpression,
-            Constant, Declaration, Declarator, DeclaratorKind, DerivedDeclarator, DoWhileStatement,
-            Expression, ExternalDeclaration, ForInitializer, ForStatement, FunctionDefinition,
-            GnuAsmOperand, IfStatement, Initializer, IntegerBase, Statement, UnaryOperator,
-            UnaryOperatorExpression, WhileStatement,
+            ConditionalExpression, Constant, Declaration, Declarator, DeclaratorKind,
+            DerivedDeclarator, DoWhileStatement, Expression, ExternalDeclaration, ForInitializer,
+            ForStatement, FunctionDefinition, GnuAsmOperand, IfStatement, Initializer, IntegerBase,
+            Statement, UnaryOperator, UnaryOperatorExpression, WhileStatement,
         },
         driver::{parse, Config},
     };
@@ -288,6 +312,7 @@ mod c {
             let name = builder.parse_declarator(&func.declarator.node);
             let param_count = builder.parse_func_declarator(&func.declarator.node);
             builder.parse_statement(&func.statement.node);
+            builder.push(IROp::Return(IRValue::Immediate(0)));
 
             // FIXME: bad bad bad, just have a seperate global counter
             self.count = builder.count;
@@ -571,7 +596,7 @@ mod c {
         fn parse_while_stmt(&mut self, stmt: &WhileStatement) {
             let prev_id = self.loop_id;
             self.new_loop_id();
-            let (loop_lbl_str, loop_lbl) = self.generate_loop_label();
+            let (loop_lbl_str, loop_lbl) = self.generate_loop_continue_label();
             let (loop_end_lbl_str, loop_end_lbl) = self.generate_loop_end_label();
 
             self.push(loop_lbl);
@@ -586,7 +611,7 @@ mod c {
         fn parse_do_while_stmt(&mut self, stmt: &DoWhileStatement) {
             let prev_id = self.loop_id;
             self.new_loop_id();
-            let (loop_lbl_str, loop_lbl) = self.generate_loop_label();
+            let (loop_lbl_str, loop_lbl) = self.generate_loop_continue_label();
 
             self.push(loop_lbl);
             self.parse_statement(&stmt.statement.node);
@@ -712,13 +737,30 @@ mod c {
                 Expression::StringLiteral(_) => todo!("StringLiteral {expr:?}"),
                 Expression::GenericSelection(_) => todo!("GenericSelection {expr:?}"),
                 Expression::CompoundLiteral(_) => todo!("CompoundLiteral {expr:?}"),
-                Expression::Conditional(_) => todo!("Conditional {expr:?}"),
+                Expression::Conditional(cond) => self.parse_ternary(&cond.node),
                 Expression::Comma(_) => todo!("Comma {expr:?}"),
                 Expression::VaArg(_) => todo!("VaArg {expr:?}"),
 
                 // Extension
                 Expression::Statement(_) => todo!("Statement {expr:?}"),
             }
+        }
+
+        fn parse_ternary(&mut self, node: &ConditionalExpression) -> IRValue {
+            let out = self.generate_pseudo();
+            let (else_str, else_lbl) = self.generate_label("else");
+            let (end_str, end_lbl) = self.generate_label("end");
+
+            let cond = self.parse_expression(&node.condition.node);
+            self.push(IROp::CondBranch(BranchType::Zero, else_str, cond));
+            let temp = self.parse_expression(&node.then_expression.node);
+            self.push(IROp::One(UnaryOp::Copy, temp, out.clone()));
+            self.push(IROp::AlwaysBranch(end_str));
+            self.push(else_lbl);
+            let temp = self.parse_expression(&node.else_expression.node);
+            self.push(IROp::One(UnaryOp::Copy, temp, out.clone()));
+            self.push(end_lbl);
+            out
         }
 
         fn parse_call(&mut self, expr: &CallExpression) -> IRValue {
@@ -1012,21 +1054,34 @@ fn print_ir(ir: &Vec<IRTopLevel>) {
 }
 
 fn main() {
-    let x = std::fs::read_to_string("source.c").expect("Unable to read file");
-    println!("{x}");
-    let mut program = FileBuilder::parse_c("source.c").unwrap();
-    println!("-- IR, PRE PASSES");
-    print_ir(&program);
+    let args = Args::parse();
+    let c_source = std::fs::read_to_string(&args.filename).expect("Unable to read input file");
+    if args.verbose {
+        println!("-- C SOURCE");
+        println!("{c_source}\n");
+    }
+    let mut program = match FileBuilder::parse_c(&args.filename) {
+        Err(_) => panic!("input file {} not found", &args.filename),
+        Ok(x) => x,
+    };
+    if args.verbose {
+        println!("\n-- IR, PRE PASSES");
+        print_ir(&program);
+    }
 
+    // Mandatory passes
     pseudo_removal_pass(&mut program);
     stack_size_reducer_pass(&mut program);
     let function_map = function_id_mapping_pass(&program);
-    println!("{function_map:?}");
 
-    println!("-- IR, POST PASSES");
-    print_ir(&program);
+    if args.verbose {
+        println!("\n-- IR, POST PASSES");
+        print_ir(&program);
+    }
 
-    println!("-- befunge begin");
+    if args.verbose {
+        println!("\n-- befunge begin");
+    }
     let mut cg = CodeGen {
         builder: OpBuilder::new(false),
         function_map,
@@ -1048,10 +1103,19 @@ fn main() {
     out.extend(inits);
     out.extend(PRELUDE2.lines().map(ToOwned::to_owned));
     out.extend(funcs);
-    for line in out.clone() {
-        println!("{line}");
+
+    // Sneaky stick filename at top
+    out[0] += &(" file: ".to_owned() + &args.filename);
+
+    if !args.silent {
+        for line in out.clone() {
+            println!("{line}");
+        }
     }
-    write_each("out.b93", out).unwrap();
+
+    if let Some(filename) = args.outfile {
+        write_each(filename, out).unwrap();
+    }
 }
 
 use std::fs::File;
