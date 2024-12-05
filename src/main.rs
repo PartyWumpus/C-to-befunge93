@@ -1,7 +1,10 @@
 use std::{collections::HashMap, mem};
 
 use builder::OpBuilder;
-use c::{function_id_mapping_pass, pseudo_removal_pass, stack_size_reducer_pass, FileBuilder};
+use c::{
+    function_id_mapping_pass, pseudo_removal_pass, sort_functions_pass, stack_size_reducer_pass,
+    FileBuilder,
+};
 
 mod builder;
 
@@ -241,17 +244,25 @@ impl CodeGen {
 
 mod c {
 
-    use std::{collections::HashMap, path::Path, process::exit};
+    use std::{
+        collections::HashMap,
+        mem,
+        path::Path,
+        process::{exit, id},
+    };
 
     use lang_c::{
         ast::{
             AsmStatement, BinaryOperator, BinaryOperatorExpression, BlockItem, CallExpression,
-            ConditionalExpression, Constant, Declaration, Declarator, DeclaratorKind,
-            DerivedDeclarator, DoWhileStatement, Expression, ExternalDeclaration, ForInitializer,
-            ForStatement, FunctionDefinition, GnuAsmOperand, IfStatement, Initializer, IntegerBase,
-            Statement, UnaryOperator, UnaryOperatorExpression, WhileStatement,
+            ConditionalExpression, Constant, Declaration, DeclarationSpecifier, Declarator,
+            DeclaratorKind, DerivedDeclarator, DoWhileStatement, Expression, ExternalDeclaration,
+            ForInitializer, ForStatement, FunctionDefinition, GnuAsmOperand, Identifier,
+            IfStatement, Initializer, IntegerBase, Label, LabeledStatement, Statement,
+            StorageClassSpecifier, TypeSpecifier, UnaryOperator, UnaryOperatorExpression,
+            WhileStatement,
         },
         driver::{parse, Config},
+        span::Node,
     };
 
     use crate::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRValue, UnaryOp};
@@ -310,6 +321,7 @@ mod c {
             // TODO: deal with specifiers
             // TODO: deal with K&R declarations
             let name = builder.parse_declarator(&func.declarator.node);
+
             let param_count = builder.parse_func_declarator(&func.declarator.node);
             builder.parse_statement(&func.statement.node);
             builder.push(IROp::Return(IRValue::Immediate(0)));
@@ -437,32 +449,104 @@ mod c {
         }
     }
 
-    pub fn function_id_mapping_pass(funcs: &Vec<IRTopLevel>) -> HashMap<String, FuncInfo> {
+    pub fn function_id_mapping_pass(funcs: &[IRTopLevel]) -> HashMap<String, FuncInfo> {
         let mut map = HashMap::new();
-        let mut i = 2;
+        let mut i = 1;
         for func in funcs {
             if !func.is_initializer {
-                if func.name == "main" {
-                    map.insert(
-                        func.name.clone(),
-                        FuncInfo {
-                            id: 1,
-                            stack_frame_size: func.stack_frame_size,
-                        },
-                    );
-                } else {
-                    map.insert(
-                        func.name.clone(),
-                        FuncInfo {
-                            id: i,
-                            stack_frame_size: func.stack_frame_size,
-                        },
-                    );
-                    i += 1;
-                }
+                map.insert(
+                    func.name.clone(),
+                    FuncInfo {
+                        id: i,
+                        stack_frame_size: func.stack_frame_size,
+                    },
+                );
+                i += 1;
             }
         }
         map
+    }
+
+    pub fn sort_functions_pass(funcs: Vec<IRTopLevel>) -> Vec<IRTopLevel> {
+        let mut out = vec![None];
+        for func in funcs {
+            if func.name == "main" {
+                assert!(out[0].is_none(), "Only one main function exists");
+                out[0] = Some(func);
+            } else {
+                out.push(Some(func));
+            }
+        }
+        out.into_iter()
+            .map(|x| x.expect("At least one main function should exist"))
+            .collect()
+    }
+
+    #[derive(Debug)]
+    enum CType {
+        UnsignedInt,
+    }
+
+    impl CType {
+        fn new(types: &[&Node<TypeSpecifier>]) -> Self {
+            let types = types.iter().map(|x| x.node.clone()).collect::<Vec<_>>();
+            match types[..] {
+                [] => panic!("No type specifiers?"),
+                [TypeSpecifier::Int]
+                | [TypeSpecifier::Signed]
+                | [TypeSpecifier::Signed, TypeSpecifier::Int] => CType::UnsignedInt,
+                _ => panic!("Unknown type: {types:?}"),
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    struct DeclarationInfo {
+        c_type: CType,
+        is_extern: bool,
+        is_static: bool,
+    }
+
+    impl DeclarationInfo {
+        fn new(specifiers: &[Node<DeclarationSpecifier>]) -> Self {
+            let mut c_types = vec![];
+            let mut is_extern = false;
+            let mut is_static = false;
+            // this allows for loads of invalid code, like
+            // `signed extern int x = 5;` because we don't validate that all types appear
+            // sequentially without breaks
+            for specifier in specifiers {
+                match &specifier.node {
+                    DeclarationSpecifier::StorageClass(spec) => match spec.node {
+                        StorageClassSpecifier::Extern => is_extern = true,
+                        StorageClassSpecifier::Static => is_static = true,
+                        _ => println!(
+                            "WARNING: Some storage class specifiers are ignored {specifier:?}"
+                        ),
+                    },
+                    DeclarationSpecifier::TypeSpecifier(spec) => c_types.push(spec),
+                    // Consider implementing just volatile
+                    DeclarationSpecifier::TypeQualifier(_) => {
+                        println!("WARNING: All type qualifiers are ignored {specifier:?}")
+                    }
+                    DeclarationSpecifier::Function(_) => {
+                        panic!("function specifier on variable declaration")
+                    }
+                    DeclarationSpecifier::Alignment(_) => println!(
+                        "WARNING: All declaration alignment specifiers are ignored {specifier:?}"
+                    ),
+                    DeclarationSpecifier::Extension(_) => println!(
+                        "WARNING: GNU declaration specifier extensions are ignored {specifier:?}"
+                    ),
+                };
+            }
+
+            return Self {
+                is_extern,
+                is_static,
+                c_type: CType::new(&c_types),
+            };
+        }
     }
 
     impl TopLevelBuilder {
@@ -527,10 +611,24 @@ mod c {
                 Statement::For(stmt) => self.parse_for_statement(&stmt.node),
                 Statement::Break => self.parse_break(),
                 Statement::Continue => self.parse_continue(),
-                Statement::Labeled(_) | Statement::Goto(_) => todo!("goto"),
+                Statement::Labeled(label) => self.parse_label_stmt(&label.node),
+                Statement::Goto(stmt) => self.parse_goto_stmt(&stmt.node),
                 Statement::Switch(_) => todo!("switch statements"),
                 Statement::Asm(asm) => self.parse_asm(&asm.node),
             }
+        }
+
+        fn parse_goto_stmt(&mut self, ident: &Identifier) {
+            self.push(IROp::AlwaysBranch(ident.name.clone() + ".goto"))
+        }
+
+        fn parse_label_stmt(&mut self, stmt: &LabeledStatement) {
+            if let Label::Identifier(lbl) = &stmt.label.node {
+                self.push(IROp::Label(lbl.node.name.clone() + ".goto"));
+            } else {
+                panic!("non goto labels not yet supported")
+            }
+            self.parse_statement(&stmt.statement.node);
         }
 
         fn parse_asm(&mut self, asm: &AsmStatement) {
@@ -584,7 +682,7 @@ mod c {
         }
 
         fn parse_break(&mut self) {
-            let (loop_end_lbl_str, _) = self.generate_loop_end_label();
+            let (loop_end_lbl_str, _) = self.generate_loop_break_label();
             self.push(IROp::AlwaysBranch(loop_end_lbl_str))
         }
 
@@ -594,10 +692,11 @@ mod c {
         }
 
         fn parse_while_stmt(&mut self, stmt: &WhileStatement) {
+            let prev_scope = self.scope.clone();
             let prev_id = self.loop_id;
             self.new_loop_id();
             let (loop_lbl_str, loop_lbl) = self.generate_loop_continue_label();
-            let (loop_end_lbl_str, loop_end_lbl) = self.generate_loop_end_label();
+            let (loop_end_lbl_str, loop_end_lbl) = self.generate_loop_break_label();
 
             self.push(loop_lbl);
             let cond = self.parse_expression(&stmt.expression.node);
@@ -606,38 +705,48 @@ mod c {
             self.push(IROp::AlwaysBranch(loop_lbl_str));
             self.push(loop_end_lbl);
             self.loop_id = prev_id;
+            self.scope = prev_scope;
         }
 
         fn parse_do_while_stmt(&mut self, stmt: &DoWhileStatement) {
+            let prev_scope = self.scope.clone();
             let prev_id = self.loop_id;
             self.new_loop_id();
             let (loop_lbl_str, loop_lbl) = self.generate_loop_continue_label();
+            let (_, loop_end_lbl) = self.generate_loop_break_label();
 
             self.push(loop_lbl);
             self.parse_statement(&stmt.statement.node);
             let cond = self.parse_expression(&stmt.expression.node);
             self.push(IROp::CondBranch(BranchType::NonZero, loop_lbl_str, cond));
+            self.push(loop_end_lbl);
             self.loop_id = prev_id;
+            self.scope = prev_scope;
         }
 
         fn parse_for_statement(&mut self, stmt: &ForStatement) {
-            let (loop_lbl_str, loop_lbl) = self.generate_loop_label();
-            let (loop_end_lbl_str, loop_end_lbl) = self.generate_loop_end_label();
-            let (_, loop_cont_lbl) = self.generate_loop_continue_label();
+            let old_scope = self.scope.clone();
+            let prev_id = self.loop_id;
+            self.new_loop_id();
+            let (start_lbl_str, start_lbl) = self.generate_loop_label();
+            let (break_lbl_str, break_lbl) = self.generate_loop_break_label();
+            let (_, cont_lbl) = self.generate_loop_continue_label();
 
             self.parse_for_initializer(&stmt.initializer.node);
-            self.push(loop_lbl);
+            self.push(start_lbl);
             if let Some(cond) = &stmt.condition {
                 let cond = self.parse_expression(&cond.node);
-                self.push(IROp::CondBranch(BranchType::Zero, loop_end_lbl_str, cond));
+                self.push(IROp::CondBranch(BranchType::Zero, break_lbl_str, cond));
             }
             self.parse_statement(&stmt.statement.node);
-            self.push(loop_cont_lbl);
+            self.push(cont_lbl);
             if let Some(step) = &stmt.step {
                 self.parse_expression(&step.node);
             }
-            self.push(IROp::AlwaysBranch(loop_lbl_str));
-            self.push(loop_end_lbl);
+            self.push(IROp::AlwaysBranch(start_lbl_str));
+            self.push(break_lbl);
+            self.loop_id = prev_id;
+            self.scope = old_scope;
         }
 
         fn parse_for_initializer(&mut self, init: &ForInitializer) {
@@ -678,7 +787,14 @@ mod c {
         }
 
         fn parse_declarations(&mut self, decls: &Declaration) {
-            // TODO: deal with specifiers
+            let info = DeclarationInfo::new(&decls.specifiers);
+            if info.is_extern {
+                panic!("Extern not yet impled")
+            }
+            if info.is_static {
+                panic!("Static not yet impled")
+            }
+            // TODO: use type info
             for decl in decls.declarators.clone() {
                 let name = self.parse_declarator(&decl.node.declarator.node);
                 let loc = if self.is_const {
@@ -953,7 +1069,10 @@ mod c {
                     todo!("BitwiseOr {lhs:?} {rhs:?}")
                 }
 
-                BinaryOperator::Assign => IROp::One(UnaryOp::Copy, rhs, lhs),
+                BinaryOperator::Assign => {
+                    self.push(IROp::One(UnaryOp::Copy, rhs.clone(), lhs));
+                    return rhs;
+                }
 
                 // FREAKY SHORT CIRCUITING OPS!
                 BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr => unreachable!(),
@@ -1013,8 +1132,8 @@ mod c {
             (str.clone(), IROp::Label(str))
         }
 
-        fn generate_loop_end_label(&mut self) -> (String, IROp) {
-            let str = "loop_end".to_owned() + &self.loop_id.to_string();
+        fn generate_loop_break_label(&mut self) -> (String, IROp) {
+            let str = "loop_break".to_owned() + &self.loop_id.to_string();
             (str.clone(), IROp::Label(str))
         }
 
@@ -1070,13 +1189,15 @@ fn main() {
     }
 
     // Mandatory passes
+    program = sort_functions_pass(program); // put main function at the top
     pseudo_removal_pass(&mut program);
     stack_size_reducer_pass(&mut program);
-    let function_map = function_id_mapping_pass(&program);
+    let function_map = function_id_mapping_pass(&mut program);
 
     if args.verbose {
         println!("\n-- IR, POST PASSES");
         print_ir(&program);
+        println!("function mappings: {:?}", function_map.clone());
     }
 
     if args.verbose {

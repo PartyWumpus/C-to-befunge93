@@ -8,7 +8,7 @@
 - The [lang_c](https://docs.rs/lang-c/latest/lang_c/index.html) crate for doing the lexing and parsing of c for me (i love skipping 1/2 of the work)
 
 ## Befunge interpreter assumptions
-I've been testing this with [BefunExec](https://github.com/Mikescher/BefunExec) (through wine because i cant be bothered to build it myself), I'd likely just use that.
+I've been testing this with [BefunExec](https://github.com/Mikescher/BefunExec) and [RBeJ](https://github.com/PartyWumpus/RBeJ), so I'd recommend either of those.
 - Infinite (or at least a lot of) positive fungespace (right and downwards from 0,0), although negative space is not needed (left and up from 0,0)
 - 64 bit signed values on the stack
 - 64 bit values allowed in the funge space
@@ -43,9 +43,7 @@ There's also a static memory space used for globals.
 None of these are full architectural failures (aside from perhaps linking) so should be resolvable.
 - Only supports ints as types
 - Linkage is not properly implemented I think
-- Doesn't support goto
 - Doesn't support bitwise operations (these will be simply be tedious to implement, will require a loop over each bit)
-- Doesn't support ++ or --
 - Doesn't support bitshifts (these will require exponentiation, so more difficult than the other bitwise ops)
 - Doesn't support switch
 - Doesn't do a register allocation pass, which would probably make it a decent bit faster
@@ -55,7 +53,6 @@ None of these are full architectural failures (aside from perhaps linking) so sh
 - No K&R function support because it seems annoying to implement, and it's irrelevant anyways
 - It's not particularly good
 - Most qualifiers like volatile, inline etc are silently ignored for now
-- TODO: figure out how the hell automated tests are going to work
 
 ### Intentional Limitations
 Many invalid C programs will be accepted and will instead just have undefined behaviour. It's easier to develop this way, if a little silly, just make sure to check your C code is actually sanely compilable with gcc or something.

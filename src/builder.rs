@@ -77,10 +77,7 @@ impl OpBuilder {
             20 => "45*".to_owned(),
             // This is the " char
             34 => "98+2*".to_owned(),
-            x => format!(
-                r#""{}""#,
-                char::from_u32(x as u32).expect("failed to convert number to befunge string")
-            ),
+            x => number_to_bf_string(x),
         };
         self.str(&x);
     }
@@ -298,4 +295,75 @@ impl OpBuilder {
             .map(|row| row.iter().collect::<String>())
             .collect()
     }
+}
+
+// NOTE: to reader, this is able to be much simpler than Mikescher's BefunRep
+// as I am allowed to use any valid character up to 65_535, where as they
+// only use ascii, which is likely compatible with more interpreters
+
+// This is not optimal, but it should do a reasonably good job at finding
+// a reasonably short expression (max about 10 chars)
+fn number_to_bf_string(num: usize) -> String {
+    let mut options = vec![];
+    if let Some(res) = num_to_bf_chars(num) {
+        let mult = str::repeat("*", res.chars().count() - 1);
+        options.push("\"".to_owned() + &res + "\"" + &mult);
+    }
+
+    // make n + i, and then take away i
+    for i in 0..10 {
+        if let Some(res) = num_to_bf_chars(num + i) {
+            let mult = str::repeat("*", res.chars().count() - 1);
+            options.push("\"".to_owned() + &res + "\"" + &mult + &i.to_string() + "-");
+        }
+    }
+
+    // make n - i, and then add i
+    for i in 0..10 {
+        if let Some(res) = num_to_bf_chars(num - i) {
+            let mult = str::repeat("*", res.chars().count() - 1);
+            options.push("\"".to_owned() + &res + "\"" + &mult + &i.to_string() + "+");
+        }
+    }
+
+    // find shortest by char length (not .len())
+    let mut options = options.iter();
+    let mut shortest = match options.next() {
+        None => panic!("Failed to represent {num} in befunge. This is unlikely, if not impossible. (Checked the first 20,000,000 values with zero failures)"),
+        Some(x) => x,
+    };
+    let mut shortest_length = shortest.chars().count();
+
+    for option in options {
+        let length = option.chars().count();
+        if length < shortest_length {
+            shortest_length = length;
+            shortest = option;
+        }
+    }
+    return shortest.to_string();
+}
+
+fn num_to_bf_chars(num: usize) -> Option<String> {
+    // 2^16 - 1
+    if num < 65_535 {
+        if let Some(char) = char::from_u32(num as u32) {
+            return Some(char.to_string());
+        }
+    }
+    let (a, b) = get_highest_divisors(num);
+    // If prime or newline or carrage return or speech mark, it's an invalid repr
+    if a == 1 || a == 10 || a == 13 || a == 34 || b == 1 || b == 10 || b == 13 || b == 34 {
+        None
+    } else {
+        Some(num_to_bf_chars(a)? + &num_to_bf_chars(b)?)
+    }
+}
+
+fn get_highest_divisors(n: usize) -> (usize, usize) {
+    let mut a = (n as f64).sqrt() as usize;
+    while n % a > 0 {
+        a -= 1;
+    }
+    (a, n / a)
 }
