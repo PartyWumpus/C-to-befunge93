@@ -1,5 +1,10 @@
-use std::fmt::format;
-use std::{collections::HashMap, mem};
+#![allow(
+    clippy::needless_pass_by_ref_mut,
+    clippy::needless_raw_string_hashes,
+    clippy::needless_raw_strings
+)]
+
+use std::collections::HashMap;
 
 use builder::OpBuilder;
 use c::{
@@ -49,7 +54,7 @@ struct Args {
     #[arg(short, long)]
     outfile: Option<String>,
 
-    /// Add preprocessor info to the bottom for BefunExec
+    /// Add preprocessor info to the bottom for `BefunExec`
     #[arg(short, long)]
     preprocessor_info: bool,
 }
@@ -137,15 +142,13 @@ impl CodeGen {
             match &op {
                 IROp::FunctionLabel(_) => (),
                 IROp::Call(called_func_name, vals) => {
-                    if func.is_initializer {
-                        panic!("Non static call in static context")
-                    };
+                    assert!(!func.is_initializer, "Non static call in static context");
                     // TODO: improve error on unknown func call
                     let called_func = self.function_map[called_func_name];
 
                     // this 'leaks' a bunch of values on the stack between operations, which i have
                     // generally been trying to avoid.
-                    for val in vals.iter() {
+                    for val in vals {
                         self.get_val(val);
                     }
                     self.builder
@@ -255,12 +258,7 @@ impl CodeGen {
 
 mod c {
 
-    use std::{
-        collections::HashMap,
-        mem,
-        path::Path,
-        process::{exit, id},
-    };
+    use std::{collections::HashMap, path::Path};
 
     use lang_c::{
         ast::{
@@ -300,21 +298,21 @@ mod c {
 
     impl FileBuilder {
         pub fn parse_c<P: AsRef<Path>>(file: P) -> Result<Vec<IRTopLevel>, lang_c::driver::Error> {
-            let mut builder = FileBuilder {
+            let mut builder = Self {
                 count: 0,
                 scope: ScopeInfo::default(),
             };
             let config = Config::default();
             let parsed = parse(&config, file)?;
             let mut out = vec![];
-            for obj in parsed.unit.0.iter() {
+            for obj in &parsed.unit.0 {
                 match &obj.node {
                     ExternalDeclaration::Declaration(decl) => {
-                        out.push(builder.parse_top_level_declaration(&decl.node))
+                        out.push(builder.parse_top_level_declaration(&decl.node));
                     }
                     ExternalDeclaration::StaticAssert(_) => todo!("add static asserts"),
                     ExternalDeclaration::FunctionDefinition(func) => {
-                        out.push(builder.parse_function(&func.node))
+                        out.push(builder.parse_function(&func.node));
                     }
                 }
             }
@@ -358,7 +356,7 @@ mod c {
                 is_const: true,
             };
 
-            builder.parse_declarations(&decl);
+            builder.parse_declarations(decl);
             self.scope.var_map.extend(builder.scope.var_map);
 
             // FIXME: bad bad bad, just have a seperate global counter
@@ -503,9 +501,8 @@ mod c {
             let types = types.iter().map(|x| x.node.clone()).collect::<Vec<_>>();
             match types[..] {
                 [] => panic!("No type specifiers?"),
-                [TypeSpecifier::Int]
-                | [TypeSpecifier::Signed]
-                | [TypeSpecifier::Signed, TypeSpecifier::Int] => CType::UnsignedInt,
+                [TypeSpecifier::Int | TypeSpecifier::Signed]
+                | [TypeSpecifier::Signed, TypeSpecifier::Int] => Self::UnsignedInt,
                 _ => panic!("Unknown type: {types:?}"),
             }
         }
@@ -538,7 +535,7 @@ mod c {
                     DeclarationSpecifier::TypeSpecifier(spec) => c_types.push(spec),
                     // Consider implementing just volatile
                     DeclarationSpecifier::TypeQualifier(_) => {
-                        println!("WARNING: All type qualifiers are ignored {specifier:?}")
+                        println!("WARNING: All type qualifiers are ignored {specifier:?}");
                     }
                     DeclarationSpecifier::Function(_) => {
                         panic!("function specifier on variable declaration")
@@ -552,22 +549,22 @@ mod c {
                 };
             }
 
-            return Self {
+            Self {
                 is_extern,
                 is_static,
                 c_type: CType::new(&c_types),
-            };
+            }
         }
     }
 
     impl TopLevelBuilder {
         fn parse_func_declarator(&mut self, decl: &Declarator) -> usize {
             let mut count = 1;
-            for node in decl.derived.iter() {
+            for node in &decl.derived {
                 match &node.node {
                     DerivedDeclarator::Function(func_decl) => {
                         // we don't care about func_decl.node.ellipsis
-                        for param in func_decl.node.parameters.iter() {
+                        for param in &func_decl.node.parameters {
                             // TODO: deal with types in decls
                             if let Some(decl) = param.node.declarator.clone() {
                                 let name = self.parse_declarator(&decl.node);
@@ -630,7 +627,7 @@ mod c {
         }
 
         fn parse_goto_stmt(&mut self, ident: &Identifier) {
-            self.push(IROp::AlwaysBranch(ident.name.clone() + ".goto"))
+            self.push(IROp::AlwaysBranch(ident.name.clone() + ".goto"));
         }
 
         fn parse_label_stmt(&mut self, stmt: &LabeledStatement) {
@@ -651,7 +648,7 @@ mod c {
                 }
                 AsmStatement::GnuExtended(asm) => {
                     for input in &asm.inputs {
-                        self.parse_asm_operand(&input.node, true)
+                        self.parse_asm_operand(&input.node, true);
                     }
                     // note it's supposed to be a "template", but it is
                     // difficult to do sensible befunge templating that still supports
@@ -660,11 +657,11 @@ mod c {
                     let lines = cleanup_parsed_asm(&asm.template.node);
                     self.push(IROp::InlineBefunge(lines));
                     for output in &asm.outputs {
-                        self.parse_asm_operand(&output.node, false)
+                        self.parse_asm_operand(&output.node, false);
                     }
 
                     for clobbers in &asm.clobbers {
-                        println!("WARNING: asm clobbers are ignored {clobbers:?}")
+                        println!("WARNING: asm clobbers are ignored {clobbers:?}");
                     }
                 }
             }
@@ -675,16 +672,16 @@ mod c {
                 let c_value = self.parse_expression(&op.variable_name.node);
                 let asm_value = Self::parse_asm_symbolic(&output_name.node.name);
                 if input {
-                    self.push(IROp::One(UnaryOp::Copy, c_value, asm_value))
+                    self.push(IROp::One(UnaryOp::Copy, c_value, asm_value));
                 } else {
-                    self.push(IROp::One(UnaryOp::Copy, asm_value, c_value))
+                    self.push(IROp::One(UnaryOp::Copy, asm_value, c_value));
                 }
             }
         }
 
         fn parse_asm_symbolic(str: &str) -> IRValue {
-            if str.starts_with("r") {
-                IRValue::Register(str[1..].parse().unwrap())
+            if let Some(rest) = str.strip_prefix('r') {
+                IRValue::Register(rest.parse().unwrap())
             } else if str == "bstack" {
                 IRValue::BefungeStack
             } else {
@@ -694,12 +691,12 @@ mod c {
 
         fn parse_break(&mut self) {
             let (loop_end_lbl_str, _) = self.generate_loop_break_label();
-            self.push(IROp::AlwaysBranch(loop_end_lbl_str))
+            self.push(IROp::AlwaysBranch(loop_end_lbl_str));
         }
 
         fn parse_continue(&mut self) {
             let (loop_cont_lbl_str, _) = self.generate_loop_continue_label();
-            self.push(IROp::AlwaysBranch(loop_cont_lbl_str))
+            self.push(IROp::AlwaysBranch(loop_cont_lbl_str));
         }
 
         fn parse_while_stmt(&mut self, stmt: &WhileStatement) {
@@ -799,12 +796,8 @@ mod c {
 
         fn parse_declarations(&mut self, decls: &Declaration) {
             let info = DeclarationInfo::new(&decls.specifiers);
-            if info.is_extern {
-                panic!("Extern not yet impled")
-            }
-            if info.is_static {
-                panic!("Static not yet impled")
-            }
+            assert!(!info.is_extern, "Extern not yet impled");
+            assert!(!info.is_static, "Static not yet impled");
             // TODO: use type info
             for decl in decls.declarators.clone() {
                 let name = self.parse_declarator(&decl.node.declarator.node);
@@ -912,11 +905,11 @@ mod c {
             let out = self.generate_pseudo();
             match expr.operator.node {
                 UnaryOperator::Complement => {
-                    self.push(IROp::One(UnaryOp::Complement, val, out.clone()))
+                    self.push(IROp::One(UnaryOp::Complement, val, out.clone()));
                 }
                 UnaryOperator::Minus => self.push(IROp::One(UnaryOp::Minus, val, out.clone())),
                 UnaryOperator::Negate => {
-                    self.push(IROp::One(UnaryOp::BooleanNegate, val, out.clone()))
+                    self.push(IROp::One(UnaryOp::BooleanNegate, val, out.clone()));
                 }
                 UnaryOperator::Plus => self.push(IROp::One(UnaryOp::Copy, val, out.clone())), // silly
 
@@ -948,7 +941,7 @@ mod c {
                         BinOp::Add,
                         val.clone(),
                         IRValue::Immediate(1),
-                        val.clone(),
+                        val,
                     ));
                 }
                 // x--
@@ -958,7 +951,7 @@ mod c {
                         BinOp::Sub,
                         val.clone(),
                         IRValue::Immediate(1),
-                        val.clone(),
+                        val,
                     ));
                 }
 
@@ -1107,6 +1100,7 @@ mod c {
             out
         }
 
+        #[allow(clippy::from_str_radix_10)]
         fn parse_constant(&self, val: &Constant) -> IRValue {
             match val {
                 Constant::Integer(int) => {
@@ -1163,7 +1157,7 @@ mod c {
 
     fn cleanup_parsed_asm(lines: &[String]) -> Vec<String> {
         lines
-            .into_iter()
+            .iter()
             .map(|line| line.trim_matches(|x| x == '"').to_owned())
             .collect()
     }
@@ -1171,10 +1165,10 @@ mod c {
 
 fn print_ir(ir: &Vec<IRTopLevel>) {
     for func in ir {
-        if !func.is_initializer {
-            println!("\nFUNC {:?}", func.name);
+        if func.is_initializer {
+            println!("\nINIT REGION");
         } else {
-            println! {"\nINIT REGION"};
+            println!("\nFUNC {:?}", func.name);
         }
         println!("frame_size: {}", func.stack_frame_size);
         for line in &func.ops {
@@ -1191,7 +1185,7 @@ fn main() {
         println!("{c_source}\n");
     }
     let mut program = match FileBuilder::parse_c(&args.filename) {
-        Err(err) => panic!("{:?}", err),
+        Err(err) => panic!("Error occurred during parsing: {err:?}"),
         Ok(x) => x,
     };
     if args.verbose {
@@ -1203,12 +1197,12 @@ fn main() {
     program = sort_functions_pass(program); // put main function at the top
     pseudo_removal_pass(&mut program);
     stack_size_reducer_pass(&mut program);
-    let function_map = function_id_mapping_pass(&mut program);
+    let function_map = function_id_mapping_pass(&program);
 
     if args.verbose {
         println!("\n-- IR, POST PASSES");
         print_ir(&program);
-        println!("function mappings: {:?}", function_map.clone());
+        println!("function mappings: {function_map:?}");
     }
 
     if args.verbose {

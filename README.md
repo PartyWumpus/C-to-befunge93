@@ -41,18 +41,15 @@ There's also a static memory space used for globals.
 
 ### Current Limitations
 None of these are full architectural failures (aside from perhaps linking) so should be resolvable.
-- Only supports ints as types
-- Linkage is not properly implemented I think
-- Doesn't support bitwise operations (these will be simply be tedious to implement, will require a loop over each bit)
-- Doesn't support bitshifts (these will require exponentiation, so more difficult than the other bitwise ops)
+- **Only supports ints as types**
+- Doesn't support bitshifts 
 - Doesn't support switch
-- Doesn't do a register allocation pass, which would probably make it a decent bit faster
 - No linking of any sort, all has to be in one file
 - No stdlib or anything from libc at all (might fudge some stdio in just for convinience before doing it properly)
 - No arbitrarily accessable memory for malloc (doable, just need a 4th stack and some more IR)
 - No K&R function support because it seems annoying to implement, and it's irrelevant anyways
 - It's not particularly good
-- Most qualifiers like volatile, inline etc are silently ignored for now
+- Doesn't do a register allocation pass or any other optimizations, which would probably make it a decent bit faster
 
 ### Intentional Limitations
 Many invalid C programs will be accepted and will instead just have undefined behaviour. It's easier to develop this way, if a little silly, just make sure to check your C code is actually sanely compilable with gcc or something.
@@ -61,8 +58,8 @@ Many invalid C programs will be accepted and will instead just have undefined be
 This compiler allows for use of the GNU ASM extensions for inline befunge. (either for extra optimized code or for using special operators like `,`, `.` for output and `&`, `~` for input).
 
 There are two important assumptions to keep in mind when writing inline befunge:
-- The entry point is always the the top left heading right, and the exit point **must** be the top right heading right. All branches and similar will be moved downwards below your inline befunge, feel free to make it as long and as tall as you want.
-- The bstack should be left *empty* on end, as optimizations may (although it does not yet) assume the bstack is empty.
+- The entry point is always the the top left heading right, and the exit point **must** be the top right heading right. All compiler produced branches from the rest of your function and similar will be moved downwards below your inline befunge, feel free to make it as long and as tall as you want.
+- The bstack should be left *empty* on end, as optimizations may (although do not yet) assume the bstack is empty.
 
 #### Basic asm support
 [Basic GNU asm](https://gcc.gnu.org/onlinedocs/gcc/Basic-Asm.html) can be used to insert inline befunge, although I don't see it being particularly useful without being able to access C values.

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::needless_pass_by_ref_mut,
+    clippy::needless_raw_string_hashes,
+    clippy::needless_raw_strings
+)]
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -209,13 +214,13 @@ impl OpBuilder {
                 r#":98p"!"\>2%88p1+:88g\9p98gv>"#.to_owned(),
                 r#"        ^p89:\_v#-"a":\/2 < "#.to_owned(),
                 r#"               > $$        ^"#.to_owned(),
-            ])
+            ]);
         } else {
             self.insert_inline_befunge(&[
                 r#":98p"!"\>2%88p1+:88g\8p98gv>"#.to_owned(),
                 r#"        ^p89:\_v#-"a":\/2 < "#.to_owned(),
                 r#"               > $$        ^"#.to_owned(),
-            ])
+            ]);
         }
     }
 
@@ -228,7 +233,7 @@ impl OpBuilder {
             r#"098p"a">::9g\8g*98g2* v>"#.to_owned(),
             r#"       ^_v#-"!":-1p89+< "#.to_owned(),
             r#"         >   $  98g    ^"#.to_owned(),
-        ])
+        ]);
     }
 
     // Assumes two values on stack
@@ -240,7 +245,7 @@ impl OpBuilder {
             r#"098p"a">::9g\8g+2%98g2*v>"#.to_owned(),
             r#"       ^_v#-"!":-1p89+ < "#.to_owned(),
             r#"         >   $  98g     ^"#.to_owned(),
-        ])
+        ]);
     }
 
     // Assumes two values on stack
@@ -251,19 +256,19 @@ impl OpBuilder {
         self.insert_inline_befunge(&[
             r#"098p"a">::9g\8g+1\`!98g2v>"#.to_owned(),
             r#"       ^_v#-"!":-1p89+* < "#.to_owned(),
-            r#"         >   $  98g      ^"#.to_owned(),
-        ])
+            r"         >   $  98g      ^".to_owned(),
+        ]);
     }
 
     pub fn insert_inline_befunge(&mut self, lines: &[String]) {
         let initial_length = self.ops.len();
-        if let Some(first_line) = lines.get(0) {
-            self.str(first_line)
+        if let Some(first_line) = lines.first() {
+            self.str(first_line);
         }
         let mut longest_extra = 0;
         for (i, line) in lines[1..].iter().enumerate() {
             if self.extra_ops.len() == i {
-                self.extra_ops.push(vec![' '; initial_length])
+                self.extra_ops.push(vec![' '; initial_length]);
             }
 
             if self.extra_ops[i].len() < initial_length {
@@ -277,7 +282,7 @@ impl OpBuilder {
             self.extra_ops[i].extend(line.chars());
             let len = self.extra_ops[i].len();
             if len > longest_extra {
-                longest_extra = len
+                longest_extra = len;
             }
         }
 
@@ -399,10 +404,7 @@ fn number_to_bf_string(num: usize) -> String {
 
     // find shortest by char length (not .len())
     let mut options = options.iter();
-    let mut shortest = match options.next() {
-        None => panic!("Failed to represent {num} in befunge. This is unlikely, if not impossible. (Checked the first 20,000,000 values with zero failures)"),
-        Some(x) => x,
-    };
+    let mut shortest = options.next().map_or_else(|| panic!("Failed to represent {num} in befunge. This is unlikely, if not impossible. (Checked the first 20,000,000 values with zero failures)"), |x| x);
     let mut shortest_length = shortest.chars().count();
 
     for option in options {
@@ -412,7 +414,7 @@ fn number_to_bf_string(num: usize) -> String {
             shortest = option;
         }
     }
-    return shortest.to_string();
+    shortest.to_string()
 }
 
 fn num_to_bf_chars(num: usize) -> Option<String> {
