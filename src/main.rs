@@ -1,3 +1,4 @@
+use std::fmt::format;
 use std::{collections::HashMap, mem};
 
 use builder::OpBuilder;
@@ -31,7 +32,7 @@ pub static PRELUDE2: &str = "0
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(about="RBeJ is an LLVM-based befunge JIT compiler", long_about = None)]
+#[command(about="A C compiler that outputs befunge93 instead of assembly.", long_about = None)]
 struct Args {
     /// File to compile
     filename: String,
@@ -40,13 +41,17 @@ struct Args {
     #[arg(short, long)]
     verbose: bool,
 
-    /// Don't print the output befunge
+    /// Don't print the output program
     #[arg(short, long)]
     silent: bool,
 
-    /// File to output to
+    /// File to write program to
     #[arg(short, long)]
     outfile: Option<String>,
+
+    /// Add preprocessor info to the bottom for BefunExec
+    #[arg(short, long)]
+    preprocessor_info: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +105,9 @@ enum BinOp {
     LessOrEqual,
     GreaterThan,
     GreaterOrEqual,
+    BitwiseAnd,
+    BitwiseOr,
+    BitwiseXor,
 }
 
 #[derive(Debug)]
@@ -205,6 +213,9 @@ impl CodeGen {
                         BinOp::LessOrEqual => self.builder.str("`!"),
                         BinOp::GreaterThan => self.builder.char('`'),
                         BinOp::GreaterOrEqual => self.builder.str("\\`!"),
+                        BinOp::BitwiseAnd => self.builder.bit_and(),
+                        BinOp::BitwiseOr => self.builder.bit_or(),
+                        BinOp::BitwiseXor => self.builder.bit_xor(),
                     }
                     self.put_val(out);
                 }
@@ -1060,13 +1071,13 @@ mod c {
                     todo!("ShiftRight {lhs:?} {rhs:?}")
                 }
                 BinaryOperator::BitwiseAnd | BinaryOperator::AssignBitwiseAnd => {
-                    todo!("BitwiseAnd {lhs:?} {rhs:?}")
+                    IROp::Two(BinOp::BitwiseAnd, lhs, rhs, out.clone())
                 }
                 BinaryOperator::BitwiseXor | BinaryOperator::AssignBitwiseXor => {
-                    todo!("BitwiseXor {lhs:?} {rhs:?}")
+                    IROp::Two(BinOp::BitwiseXor, lhs, rhs, out.clone())
                 }
                 BinaryOperator::BitwiseOr | BinaryOperator::AssignBitwiseOr => {
-                    todo!("BitwiseOr {lhs:?} {rhs:?}")
+                    IROp::Two(BinOp::BitwiseOr, lhs, rhs, out.clone())
                 }
 
                 BinaryOperator::Assign => {
@@ -1180,7 +1191,7 @@ fn main() {
         println!("{c_source}\n");
     }
     let mut program = match FileBuilder::parse_c(&args.filename) {
-        Err(_) => panic!("input file {} not found", &args.filename),
+        Err(err) => panic!("{:?}", err),
         Ok(x) => x,
     };
     if args.verbose {
@@ -1223,10 +1234,21 @@ fn main() {
     }
     out.extend(inits);
     out.extend(PRELUDE2.lines().map(ToOwned::to_owned));
+    let func_finder_pos = (3, out.len() - 2);
     out.extend(funcs);
 
     // Sneaky stick filename at top
     out[0] += &(" file: ".to_owned() + &args.filename);
+
+    // Stick preproccesor info at the bottom
+    if args.preprocessor_info {
+        out.extend(vec![
+            "#$watch[0,0]:int = stack".to_owned(),
+            "#$watch[1,0]:int = call stack".to_owned(),
+            "#$watch[2,0]:int = return".to_owned(),
+            format!("#$break[{},{}]", func_finder_pos.0, func_finder_pos.1),
+        ]);
+    }
 
     if !args.silent {
         for line in out.clone() {

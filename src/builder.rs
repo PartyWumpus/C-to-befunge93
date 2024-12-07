@@ -202,17 +202,88 @@ impl OpBuilder {
         self.call_exit();
     }
 
+    fn load_bit_stack(&mut self, alt: bool) {
+        // TODO: clobbers 98p and 99p, as well as writing to the special bit stacks
+        if alt {
+            self.insert_inline_befunge(&[
+                r#":98p"!"\>2%88p1+:88g\9p98gv>"#.to_owned(),
+                r#"        ^p89:\_v#-"a":\/2 < "#.to_owned(),
+                r#"               > $$        ^"#.to_owned(),
+            ])
+        } else {
+            self.insert_inline_befunge(&[
+                r#":98p"!"\>2%88p1+:88g\8p98gv>"#.to_owned(),
+                r#"        ^p89:\_v#-"a":\/2 < "#.to_owned(),
+                r#"               > $$        ^"#.to_owned(),
+            ])
+        }
+    }
+
+    // Assumes two values on stack
+    pub fn bit_and(&mut self) {
+        self.load_bit_stack(false);
+        self.load_bit_stack(true);
+        // For each bit, do a * b
+        self.insert_inline_befunge(&[
+            r#"098p"a">::9g\8g*98g2* v>"#.to_owned(),
+            r#"       ^_v#-"!":-1p89+< "#.to_owned(),
+            r#"         >   $  98g    ^"#.to_owned(),
+        ])
+    }
+
+    // Assumes two values on stack
+    pub fn bit_xor(&mut self) {
+        self.load_bit_stack(false);
+        self.load_bit_stack(true);
+        // For each bit, do (a + b) mod 2
+        self.insert_inline_befunge(&[
+            r#"098p"a">::9g\8g+2%98g2*v>"#.to_owned(),
+            r#"       ^_v#-"!":-1p89+ < "#.to_owned(),
+            r#"         >   $  98g     ^"#.to_owned(),
+        ])
+    }
+
+    // Assumes two values on stack
+    pub fn bit_or(&mut self) {
+        self.load_bit_stack(false);
+        self.load_bit_stack(true);
+        // For each bit, do not( (a + b) > 1 )
+        self.insert_inline_befunge(&[
+            r#"098p"a">::9g\8g+1\`!98g2v>"#.to_owned(),
+            r#"       ^_v#-"!":-1p89+* < "#.to_owned(),
+            r#"         >   $  98g      ^"#.to_owned(),
+        ])
+    }
+
     pub fn insert_inline_befunge(&mut self, lines: &[String]) {
         let initial_length = self.ops.len();
         if let Some(first_line) = lines.get(0) {
             self.str(first_line)
         }
+        let mut longest_extra = 0;
         for (i, line) in lines[1..].iter().enumerate() {
             if self.extra_ops.len() == i {
                 self.extra_ops.push(vec![' '; initial_length])
             }
 
+            if self.extra_ops[i].len() < initial_length {
+                self.extra_ops[i].resize_with(initial_length, || ' ');
+            }
+            assert!(
+                self.extra_ops[i].len() == initial_length,
+                "extra ops row should be the same length (or shorter) than main ops row"
+            );
+
             self.extra_ops[i].extend(line.chars());
+            let len = self.extra_ops[i].len();
+            if len > longest_extra {
+                longest_extra = len
+            }
+        }
+
+        // Top row must extend to at least the length of all the extra rows
+        if self.ops.len() < longest_extra {
+            self.ops.resize_with(longest_extra, || ' ');
         }
     }
 
