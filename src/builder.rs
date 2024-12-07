@@ -207,18 +207,23 @@ impl OpBuilder {
         self.call_exit();
     }
 
+    // Bitwise info:
+    // there are free zeros to the left of the fungespace
+    // actual values from 0 (0) to 63 (?)
+    // then zeros from 64 (@) to 128
+
     fn load_bit_stack(&mut self, alt: bool) {
-        // TODO: clobbers 98p and 99p, as well as writing to the special bit stacks
+        // TODO: clobbers 97p and 87p, as well as writing to the special bit stacks
         if alt {
             self.insert_inline_befunge(&[
-                r#":98p"!"\>2%88p1+:88g\9p98gv>"#.to_owned(),
-                r#"        ^p89:\_v#-"a":\/2 < "#.to_owned(),
+                r#":97p01-\>2%87p1+:87g\9p97gv>"#.to_owned(),
+                r#"        ^p79:\_v#-"?":\/2 < "#.to_owned(),
                 r#"               > $$        ^"#.to_owned(),
             ]);
         } else {
             self.insert_inline_befunge(&[
-                r#":98p"!"\>2%88p1+:88g\8p98gv>"#.to_owned(),
-                r#"        ^p89:\_v#-"a":\/2 < "#.to_owned(),
+                r#":97p01-\>2%87p1+:87g\8p97gv>"#.to_owned(),
+                r#"        ^p79:\_v#-"?":\/2 < "#.to_owned(),
                 r#"               > $$        ^"#.to_owned(),
             ]);
         }
@@ -230,9 +235,9 @@ impl OpBuilder {
         self.load_bit_stack(true);
         // For each bit, do a * b
         self.insert_inline_befunge(&[
-            r#"098p"a">::9g\8g*98g2* v>"#.to_owned(),
-            r#"       ^_v#-"!":-1p89+< "#.to_owned(),
-            r#"         >   $  98g    ^"#.to_owned(),
+            r#"097p"?">::9g\8g*97g2v>"#.to_owned(),
+            r#"       ^-1_v#:p79+* < "#.to_owned(),
+            r#"           > $  97g  ^"#.to_owned(),
         ]);
     }
 
@@ -242,9 +247,9 @@ impl OpBuilder {
         self.load_bit_stack(true);
         // For each bit, do (a + b) mod 2
         self.insert_inline_befunge(&[
-            r#"098p"a">::9g\8g+2%98g2*v>"#.to_owned(),
-            r#"       ^_v#-"!":-1p89+ < "#.to_owned(),
-            r#"         >   $  98g     ^"#.to_owned(),
+            r#"097p"?">::9g\8g+2%97gv>"#.to_owned(),
+            r#"       ^-1_v#:p79+*2 < "#.to_owned(),
+            r#"           >   $  97g ^"#.to_owned(),
         ]);
     }
 
@@ -254,9 +259,29 @@ impl OpBuilder {
         self.load_bit_stack(true);
         // For each bit, do not( (a + b) > 1 )
         self.insert_inline_befunge(&[
-            r#"098p"a">::9g\8g+1\`!98g2v>"#.to_owned(),
-            r#"       ^_v#-"!":-1p89+* < "#.to_owned(),
-            r"         >   $  98g      ^".to_owned(),
+            r#"097p"?">::9g\8g+1\`!97v>"#.to_owned(),
+            r#"       ^-1_v#:p79+*2 g< "#.to_owned(),
+            r#"           >   $  97g  ^"#.to_owned(),
+        ]);
+    }
+
+    // Assumes two values on the stack, top is to be shifted, bottom is amount to shift by
+    pub fn bitshift_left(&mut self) {
+        self.load_bit_stack(true);
+        self.insert_inline_befunge(&[
+            r#"097p:87p"?"+>:9g97g2*+97pv>"#.to_owned(),
+            r#"            ^-1_v#+g78:  < "#.to_owned(),
+            r#"                >   $ 97g ^"#.to_owned(),
+        ]);
+    }
+
+    // Assumes two values on the stack, top is to be shifted, bottom is amount to shift by
+    pub fn bitshift_right(&mut self) {
+        self.load_bit_stack(true);
+        self.insert_inline_befunge(&[
+            r#"097p:87p"?"\->:9g97g2*+97pv>"#.to_owned(),
+            r#"             ^-1_v#-\g78: < "#.to_owned(),
+            r#"                 >   $ 97g ^"#.to_owned(),
         ]);
     }
 

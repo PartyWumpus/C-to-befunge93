@@ -14,21 +14,25 @@ use c::{
 
 mod builder;
 
-static PRELUDE: &str = r#"v!R#######
-v#########         STACK -> qwertyuiopasdfghjklzxcvbnm...
-v#########    CALL STACK -> qwertyuiopasdfghjklzxcvbnm...
-v######### STATIC MEMORY -> qwertyuiopasdfghjklzxcvbnm...
+static PRE_INIT_PRELUDE: &str = r##"v!R#######
+v#########    main stack ->      !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ...etc
+v#########    call stack ->      !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ...etc
+v######### static memory ->      !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ...etc
 v#########        // IN FUTURE, malloc() mem could be a 4th mem location here
 v#########
-v#########
-v#########
-v#########
-v#########
+v#########  below are the bit stacks, for bitshifts and bitwise operations
+v#########  the last 64 bits are just zeros for cheaper bitshifts
+v bit stack A
+v bit stack B
 >"!"00p 010g2-2pv
 v               <
-"#;
+>0>:0\9p:0\8p1+v
+  ^_v#-+"@A":  <
+v $ <
 
-pub static PRELUDE2: &str = "0
+"##;
+
+pub static POST_INIT_PRELUDE: &str = "0
 1
 >v
  >:#v_  $$ 20g . @
@@ -113,6 +117,8 @@ enum BinOp {
     BitwiseAnd,
     BitwiseOr,
     BitwiseXor,
+    ShiftLeft,
+    ShiftRight,
 }
 
 #[derive(Debug)]
@@ -219,6 +225,16 @@ impl CodeGen {
                         BinOp::BitwiseAnd => self.builder.bit_and(),
                         BinOp::BitwiseOr => self.builder.bit_or(),
                         BinOp::BitwiseXor => self.builder.bit_xor(),
+
+                        // TODO: just load the values the other way around instead of swapping
+                        BinOp::ShiftLeft => {
+                            self.builder.char('\\');
+                            self.builder.bitshift_left()
+                        }
+                        BinOp::ShiftRight => {
+                            self.builder.char('\\');
+                            self.builder.bitshift_right()
+                        }
                     }
                     self.put_val(out);
                 }
@@ -1058,10 +1074,10 @@ mod c {
 
                 // bitwise ops
                 BinaryOperator::ShiftLeft | BinaryOperator::AssignShiftLeft => {
-                    todo!("ShiftLeft {lhs:?} {rhs:?}")
+                    IROp::Two(BinOp::ShiftLeft, lhs, rhs, out.clone())
                 }
                 BinaryOperator::ShiftRight | BinaryOperator::AssignShiftRight => {
-                    todo!("ShiftRight {lhs:?} {rhs:?}")
+                    IROp::Two(BinOp::ShiftRight, lhs, rhs, out.clone())
                 }
                 BinaryOperator::BitwiseAnd | BinaryOperator::AssignBitwiseAnd => {
                     IROp::Two(BinOp::BitwiseAnd, lhs, rhs, out.clone())
@@ -1214,7 +1230,7 @@ fn main() {
     };
 
     let mut out: Vec<String> = vec![];
-    out.extend(PRELUDE.lines().map(ToOwned::to_owned));
+    out.extend(PRE_INIT_PRELUDE.lines().map(ToOwned::to_owned));
     let mut funcs: Vec<String> = vec![];
     let mut inits: Vec<String> = vec![];
     for func in program {
@@ -1227,7 +1243,7 @@ fn main() {
         }
     }
     out.extend(inits);
-    out.extend(PRELUDE2.lines().map(ToOwned::to_owned));
+    out.extend(POST_INIT_PRELUDE.lines().map(ToOwned::to_owned));
     let func_finder_pos = (3, out.len() - 2);
     out.extend(funcs);
 
@@ -1277,9 +1293,7 @@ fn write_each(
 // at start :)
 // FIXME: reorganise __asm__ so all [bstack]'s are loaded first
 // TODO: use seperate global counter for global values
-// TODO: bitwise ops (going to be strange, as befunge has no bit level operators)
 // TODO: for switch statements contine & break tracking must be done seperately (as switch can be breaked but not continued)
-// TODO: goto
 //
 //
 // NOTE: Some custom printing thing is going to be needed for every value that isn't signed int(/long?)
