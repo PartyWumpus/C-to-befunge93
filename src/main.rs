@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use builder::OpBuilder;
-use c::{
+use c_compiler::{
     function_id_mapping_pass, pseudo_removal_pass, sort_functions_pass, stack_size_reducer_pass,
     FileBuilder,
 };
@@ -69,7 +69,8 @@ enum IRValue {
     Immediate(usize),
     Register(usize), // limited to only like 70ish tho
     Data(usize),
-    Psuedo(String),
+    Psuedo { name: String },
+    StaticPsuedo { name: String },
     // Must be careful when using
     BefungeStack,
 }
@@ -252,7 +253,7 @@ impl CodeGen {
             IRValue::Immediate(value) => self.builder.load_number(*value),
             IRValue::Data(position) => self.builder.load_data_val(*position),
             IRValue::BefungeStack => (), // DANGER: assume it is already there
-            IRValue::Psuedo(_) => {
+            IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
                 panic!("Psuedo registers should be removed by befunge generation time")
             }
         }
@@ -265,14 +266,14 @@ impl CodeGen {
             IRValue::Immediate(_) => panic!("Immediate value as output location"),
             IRValue::Data(position) => self.builder.set_data_val(*position),
             IRValue::BefungeStack => (), // DANGER: leak the value onto the stack
-            IRValue::Psuedo(_) => {
+            IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
                 panic!("Psuedo registers should be removed by befunge generation time")
             }
         }
     }
 }
 
-mod c {
+mod c_compiler {
 
     use std::{collections::HashMap, path::Path};
 
@@ -292,18 +293,20 @@ mod c {
 
     use crate::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRValue, UnaryOp};
 
-    struct TopLevelBuilder {
+    struct TopLevelBuilder<'a> {
         count: usize,
         ops: Vec<IROp>,
         scope: ScopeInfo,
-        loop_id: usize,
-        /// If const, use Data instead of Stack
+        loop_id: Option<usize>,
+        /// If const (not inside a function), use Data instead of Stack
         is_const: bool,
+        file_builder: &'a mut FileBuilder,
     }
 
     pub struct FileBuilder {
         count: usize,
         scope: ScopeInfo,
+        funcs: Vec<IRTopLevel>,
     }
 
     // TODO: scope system will need a bit of a refactor to make unshadowing of globals possible
@@ -317,22 +320,24 @@ mod c {
             let mut builder = Self {
                 count: 0,
                 scope: ScopeInfo::default(),
+                funcs: vec![],
             };
             let config = Config::default();
             let parsed = parse(&config, file)?;
-            let mut out = vec![];
             for obj in &parsed.unit.0 {
                 match &obj.node {
                     ExternalDeclaration::Declaration(decl) => {
-                        out.push(builder.parse_top_level_declaration(&decl.node));
+                        let x = builder.parse_top_level_declaration(&decl.node);
+                        builder.funcs.push(x);
                     }
                     ExternalDeclaration::StaticAssert(_) => todo!("add static asserts"),
                     ExternalDeclaration::FunctionDefinition(func) => {
-                        out.push(builder.parse_function(&func.node));
+                        let x = builder.parse_function(&func.node);
+                        builder.funcs.push(x);
                     }
                 }
             }
-            Ok(out)
+            Ok(builder.funcs)
         }
 
         fn parse_function(&mut self, func: &FunctionDefinition) -> IRTopLevel {
@@ -340,8 +345,9 @@ mod c {
                 ops: vec![],
                 count: self.count,
                 scope: self.scope.clone(),
-                loop_id: 0,
+                loop_id: None,
                 is_const: false,
+                file_builder: self,
             };
             // TODO: deal with specifiers
             // TODO: deal with K&R declarations
@@ -352,7 +358,7 @@ mod c {
             builder.push(IROp::Return(IRValue::Immediate(0)));
 
             // FIXME: bad bad bad, just have a seperate global counter
-            self.count = builder.count;
+            builder.file_builder.count = builder.count;
             IRTopLevel {
                 name,
                 ops: builder.ops,
@@ -368,17 +374,22 @@ mod c {
                 ops: vec![],
                 count: self.count,
                 scope: self.scope.clone(),
-                loop_id: 0,
+                loop_id: None,
                 is_const: true,
+                file_builder: self,
             };
 
             builder.parse_declarations(decl);
-            self.scope.var_map.extend(builder.scope.var_map);
+            builder
+                .file_builder
+                .scope
+                .var_map
+                .extend(builder.scope.var_map);
 
             // FIXME: bad bad bad, just have a seperate global counter
-            self.count = builder.count;
+            builder.file_builder.count = builder.count;
             IRTopLevel {
-                name: "top level declarator dont need no name".to_owned(),
+                name: "".to_owned(),
                 ops: builder.ops,
                 parameters: 0,
                 is_initializer: true,
@@ -388,15 +399,23 @@ mod c {
         }
     }
 
-    struct PsuedoMap {
-        map: HashMap<String, usize>,
-        count: usize,
+    struct PsuedoMap<'a> {
+        stack_map: HashMap<String, usize>,
+        stack_count: usize,
+        data_count: &'a mut usize,
+        data_map: &'a mut HashMap<String, usize>,
     }
 
-    fn pseudo_removal(func: &mut IRTopLevel) {
+    fn pseudo_removal(
+        func: &mut IRTopLevel,
+        data_count: &mut usize,
+        data_map: &mut HashMap<String, usize>,
+    ) {
         let mut map = PsuedoMap {
-            map: HashMap::new(),
-            count: func.parameters,
+            stack_map: HashMap::new(),
+            stack_count: func.parameters,
+            data_count,
+            data_map,
         };
         for i in 0..func.ops.len() {
             func.ops[i] = match &func.ops[i] {
@@ -416,25 +435,35 @@ mod c {
         }
     }
 
-    impl PsuedoMap {
+    impl PsuedoMap<'_> {
         fn get(&mut self, val: &IRValue) -> IRValue {
-            if let IRValue::Psuedo(str) = val {
-                if let Some(id) = self.map.get(str) {
-                    IRValue::Stack(*id)
+            if let IRValue::Psuedo { name } = val {
+                if let Some(id) = self.stack_map.get(name) {
+                    return IRValue::Stack(*id);
                 } else {
-                    self.count += 1;
-                    self.map.insert(str.to_owned(), self.count);
-                    IRValue::Stack(self.count)
+                    self.stack_count += 1;
+                    self.stack_map.insert(name.to_owned(), self.stack_count);
+                    return IRValue::Stack(self.stack_count);
                 }
-            } else {
-                val.clone()
             }
+            if let IRValue::StaticPsuedo { name } = val {
+                if let Some(id) = self.data_map.get(name) {
+                    return IRValue::Data(*id);
+                } else {
+                    *self.data_count += 1;
+                    self.data_map.insert(name.to_owned(), *self.data_count);
+                    return IRValue::Data(*self.data_count);
+                }
+            }
+            return val.clone();
         }
     }
 
     pub fn pseudo_removal_pass(funcs: &mut Vec<IRTopLevel>) {
+        let mut data_count = 0;
+        let mut data_map = HashMap::new();
         for func in funcs {
-            pseudo_removal(func);
+            pseudo_removal(func, &mut data_count, &mut data_map);
         }
     }
 
@@ -513,7 +542,7 @@ mod c {
     }
 
     impl CType {
-        fn new(types: &[&Node<TypeSpecifier>]) -> Self {
+        fn from(types: &[&Node<TypeSpecifier>]) -> Self {
             let types = types.iter().map(|x| x.node.clone()).collect::<Vec<_>>();
             match types[..] {
                 [] => panic!("No type specifiers?"),
@@ -525,25 +554,31 @@ mod c {
     }
 
     #[derive(Debug)]
+    enum StorageDuration {
+        Default,
+        Extern,
+        Static,
+    }
+
+    #[derive(Debug)]
     struct DeclarationInfo {
         c_type: CType,
-        is_extern: bool,
-        is_static: bool,
+        duration: StorageDuration,
     }
 
     impl DeclarationInfo {
-        fn new(specifiers: &[Node<DeclarationSpecifier>]) -> Self {
+        fn from(specifiers: &[Node<DeclarationSpecifier>]) -> Self {
             let mut c_types = vec![];
-            let mut is_extern = false;
-            let mut is_static = false;
+            let mut duration: StorageDuration = StorageDuration::Default;
             // this allows for loads of invalid code, like
             // `signed extern int x = 5;` because we don't validate that all types appear
             // sequentially without breaks
+            // And extern static x will be accepted as static x
             for specifier in specifiers {
                 match &specifier.node {
                     DeclarationSpecifier::StorageClass(spec) => match spec.node {
-                        StorageClassSpecifier::Extern => is_extern = true,
-                        StorageClassSpecifier::Static => is_static = true,
+                        StorageClassSpecifier::Extern => duration = StorageDuration::Extern,
+                        StorageClassSpecifier::Static => duration = StorageDuration::Static,
                         _ => println!(
                             "WARNING: Some storage class specifiers are ignored {specifier:?}"
                         ),
@@ -566,14 +601,13 @@ mod c {
             }
 
             Self {
-                is_extern,
-                is_static,
-                c_type: CType::new(&c_types),
+                duration,
+                c_type: CType::from(&c_types),
             }
         }
     }
 
-    impl TopLevelBuilder {
+    impl TopLevelBuilder<'_> {
         fn parse_func_declarator(&mut self, decl: &Declarator) -> usize {
             let mut count = 1;
             for node in &decl.derived {
@@ -637,7 +671,10 @@ mod c {
                 Statement::Continue => self.parse_continue(),
                 Statement::Labeled(label) => self.parse_label_stmt(&label.node),
                 Statement::Goto(stmt) => self.parse_goto_stmt(&stmt.node),
-                Statement::Switch(_) => todo!("switch statements"),
+                Statement::Switch(switchy) => {
+                    println!("{switchy:?}");
+                    todo!("switch statements")
+                }
                 Statement::Asm(asm) => self.parse_asm(&asm.node),
             }
         }
@@ -811,28 +848,73 @@ mod c {
         }
 
         fn parse_declarations(&mut self, decls: &Declaration) {
-            let info = DeclarationInfo::new(&decls.specifiers);
-            assert!(!info.is_extern, "Extern not yet impled");
-            assert!(!info.is_static, "Static not yet impled");
+            let info = DeclarationInfo::from(&decls.specifiers);
+            // FIXME: this is horrific.
             // TODO: use type info
             for decl in decls.declarators.clone() {
                 let name = self.parse_declarator(&decl.node.declarator.node);
                 let loc = if self.is_const {
-                    self.count += 1;
-                    IRValue::Data(self.count)
+                    match info.duration {
+                        // Links with external file
+                        StorageDuration::Extern => panic!("Top level extern not yet added"),
+                        // No linkage from other files allowed
+                        StorageDuration::Static => {
+                            println!(
+                                "WARNING: Top level static is ignored, as linking is not yet supported"
+                            );
+                            self.generate_static_pseudo(name.clone())
+                        }
+                        StorageDuration::Default => self.generate_static_pseudo(name.clone()),
+                    }
                 } else {
-                    self.generate_named_pseudo(name.clone())
+                    match info.duration {
+                        // Grab from scope outside function (note init is not allowed here)
+                        StorageDuration::Extern => {
+                            self.file_builder.scope.var_map.get(&name).unwrap().clone()
+                        }
+                        // Initialize
+                        StorageDuration::Static => self.generate_static_pseudo(name.clone()),
+                        StorageDuration::Default => self.generate_named_pseudo(name.clone()),
+                    }
                 };
                 self.scope.var_map.insert(name, loc.clone());
 
-                if let Some(init) = decl.node.initializer {
-                    let init = self.parse_initializer(&init.node);
+                if !self.is_const && matches!(info.duration, StorageDuration::Static) {
+                    let mut builder = TopLevelBuilder {
+                        ops: vec![],
+                        count: self.count,
+                        scope: self.file_builder.scope.clone(),
+                        loop_id: None,
+                        is_const: true,
+                        file_builder: self.file_builder,
+                    };
+                    let init = if let Some(init) = decl.node.initializer {
+                        builder.parse_initializer(&init.node)
+                    } else {
+                        IRValue::Immediate(0)
+                    };
+
+                    builder.push(IROp::One(UnaryOp::Copy, init, loc));
+                    // FIXME: bad bad bad, just have a seperate global counter
+                    self.count = builder.count;
+                    let init = IRTopLevel {
+                        name: "".to_owned(),
+                        ops: builder.ops,
+                        parameters: 0,
+                        is_initializer: true,
+                        stack_frame_size: builder.count,
+                    };
+                    self.file_builder.funcs.push(init);
+                } else {
+                    let init = if let Some(init) = decl.node.initializer {
+                        self.parse_initializer(&init.node)
+                    } else if self.is_const {
+                        IRValue::Immediate(0)
+                    } else {
+                        return;
+                    };
+
                     self.push(IROp::One(UnaryOp::Copy, init, loc));
-                } else if self.is_const {
-                    // If we are in a declarator we must init un-inited values to zero.
-                    // This impl may be overzealous, but as using the value of an
-                    // un-inited value is UB, this is okay
-                    self.push(IROp::One(UnaryOp::Copy, IRValue::Immediate(0), loc));
                 }
             }
         }
@@ -1134,12 +1216,24 @@ mod c {
 
         fn generate_pseudo(&mut self) -> IRValue {
             self.count += 1;
-            IRValue::Psuedo("tmp.".to_owned() + &self.count.to_string())
+            IRValue::Psuedo {
+                name: "tmp.".to_owned() + &self.count.to_string(),
+            }
         }
 
         fn generate_named_pseudo(&mut self, name: String) -> IRValue {
             self.count += 1;
-            IRValue::Psuedo(name + "." + &self.count.to_string())
+            IRValue::Psuedo {
+                name: name + "." + &self.count.to_string(),
+            }
+        }
+
+        fn generate_static_pseudo(&mut self, name: String) -> IRValue {
+            // FIXME: use global counter
+            self.count += 1;
+            IRValue::StaticPsuedo {
+                name: name + "." + &self.count.to_string(),
+            }
         }
 
         fn generate_label(&mut self, str: &str) -> (String, IROp) {
@@ -1149,23 +1243,32 @@ mod c {
         }
 
         fn generate_loop_label(&mut self) -> (String, IROp) {
-            let str = "loop".to_owned() + &self.loop_id.to_string();
+            let loop_id = self
+                .loop_id
+                .expect("Loop labels should only occur inside a loop");
+            let str = "loop".to_owned() + &loop_id.to_string();
             (str.clone(), IROp::Label(str))
         }
 
         fn generate_loop_break_label(&mut self) -> (String, IROp) {
-            let str = "loop_break".to_owned() + &self.loop_id.to_string();
+            let loop_id = self
+                .loop_id
+                .expect("Break labels should only occur inside a loop");
+            let str = "loop_break".to_owned() + &loop_id.to_string();
             (str.clone(), IROp::Label(str))
         }
 
         fn generate_loop_continue_label(&mut self) -> (String, IROp) {
-            let str = "loop_continue".to_owned() + &self.loop_id.to_string();
+            let loop_id = self
+                .loop_id
+                .expect("Continue labels should only occur inside a loop");
+            let str = "loop_continue".to_owned() + &loop_id.to_string();
             (str.clone(), IROp::Label(str))
         }
 
         fn new_loop_id(&mut self) -> usize {
             let x = self.count;
-            self.loop_id = x;
+            self.loop_id = Some(x);
             self.count += 1;
             x
         }
