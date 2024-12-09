@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use builder::OpBuilder;
 use c_compiler::{
     function_id_mapping_pass, pseudo_removal_pass, sort_functions_pass, stack_size_reducer_pass,
-    FileBuilder,
+    the_linkening, FileBuilder,
 };
 
 mod builder;
@@ -495,6 +495,52 @@ mod c_compiler {
         let mut data_map = HashMap::new();
         for func in funcs {
             pseudo_removal(func, &mut data_count, &mut data_map);
+        }
+    }
+
+    pub fn the_linkening(files: Vec<Vec<IRTopLevel>>) -> Vec<IRTopLevel> {
+        let mut out = vec![];
+        for (i, file) in files.into_iter().enumerate() {
+            for mut func in file {
+                append_to_all_psuedos(&mut func, &(".".to_owned() + &i.to_string()));
+                out.push(func);
+            }
+        }
+        out
+    }
+
+    fn append_to_all_psuedos(func: &mut IRTopLevel, new_suffix: &str) {
+        for i in 0..func.ops.len() {
+            match &mut func.ops[i] {
+                IROp::Return(o) => append_to_ir_value(o, new_suffix),
+                IROp::Call(_, ops) => ops
+                    .into_iter()
+                    .for_each(|x| append_to_ir_value(x, new_suffix)),
+                IROp::CondBranch(_, _, a) => append_to_ir_value(a, new_suffix),
+                IROp::One(_, a, out) => {
+                    append_to_ir_value(a, new_suffix);
+                    append_to_ir_value(out, new_suffix);
+                }
+                IROp::Two(_, a, b, out) => {
+                    append_to_ir_value(a, new_suffix);
+                    append_to_ir_value(b, new_suffix);
+                    append_to_ir_value(out, new_suffix);
+                }
+                _ => (),
+            }
+        }
+    }
+
+    fn append_to_ir_value(value: &mut IRValue, new_suffix: &str) {
+        match value {
+            IRValue::StaticPsuedo {
+                name,
+                linkable: false,
+            }
+            | IRValue::Psuedo { name } => {
+                *name = name.clone() + new_suffix;
+            }
+            _ => (),
         }
     }
 
@@ -1458,10 +1504,33 @@ fn main() {
         println!("-- C SOURCE");
         println!("{c_source}\n");
     }
-    let mut program = match FileBuilder::parse_c(&args.filename) {
+    let program = match FileBuilder::parse_c(&args.filename) {
         Err(err) => panic!("Error occurred during parsing: {err:?}"),
         Ok(x) => x,
     };
+    if args.verbose {
+        println!("\n-- IR, PRE LINKING");
+        print_ir(&program);
+    }
+
+    let mut program = the_linkening(vec![
+        program,
+        /*vec![IRTopLevel {
+            ops: vec![IROp::One(
+                UnaryOp::Copy,
+                IRValue::Immediate(5),
+                IRValue::StaticPsuedo {
+                    name: "j".to_string(),
+                    linkable: true,
+                },
+            )],
+            name: "".to_string(),
+            stack_frame_size: 1,
+            is_initializer: true,
+            parameters: 0,
+        }],*/
+    ]);
+
     if args.verbose {
         println!("\n-- IR, PRE PASSES");
         print_ir(&program);
