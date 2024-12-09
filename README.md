@@ -43,7 +43,6 @@ There's also a static memory space used for globals.
 None of these are full architectural failures (aside from perhaps linking) so should be resolvable.
 - **Only supports ints as types**
 - Bitshifts and bitwise operations are wrong for negative values because I made a mistake
-- Doesn't support switch
 - No linking of any sort, all has to be in one file
 - No stdlib or anything from libc at all (might fudge some stdio in just for convinience before doing it properly)
 - No arbitrarily accessable memory for malloc (doable, just need a 4th stack and some more IR)

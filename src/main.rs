@@ -64,7 +64,7 @@ struct Args {
 }
 
 #[derive(Debug, Clone)]
-enum IRValue {
+pub enum IRValue {
     Stack(usize),
     Immediate(usize),
     Register(usize), // limited to only like 70ish tho
@@ -89,7 +89,7 @@ pub enum IROp {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum BranchType {
+pub enum BranchType {
     NonZero,
     Zero,
 }
@@ -103,7 +103,7 @@ pub enum UnaryOp {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum BinOp {
+pub enum BinOp {
     Add,
     Sub,
     Mult,
@@ -230,11 +230,11 @@ impl CodeGen {
                         // TODO: just load the values the other way around instead of swapping
                         BinOp::ShiftLeft => {
                             self.builder.char('\\');
-                            self.builder.bitshift_left()
+                            self.builder.bitshift_left();
                         }
                         BinOp::ShiftRight => {
                             self.builder.char('\\');
-                            self.builder.bitshift_right()
+                            self.builder.bitshift_right();
                         }
                     }
                     self.put_val(out);
@@ -275,7 +275,7 @@ impl CodeGen {
 
 mod c_compiler {
 
-    use std::{collections::HashMap, path::Path};
+    use std::{collections::HashMap, mem, path::Path};
 
     use lang_c::{
         ast::{
@@ -284,8 +284,8 @@ mod c_compiler {
             DeclaratorKind, DerivedDeclarator, DoWhileStatement, Expression, ExternalDeclaration,
             ForInitializer, ForStatement, FunctionDefinition, GnuAsmOperand, Identifier,
             IfStatement, Initializer, IntegerBase, Label, LabeledStatement, Statement,
-            StorageClassSpecifier, TypeSpecifier, UnaryOperator, UnaryOperatorExpression,
-            WhileStatement,
+            StorageClassSpecifier, SwitchStatement, TypeSpecifier, UnaryOperator,
+            UnaryOperatorExpression, WhileStatement,
         },
         driver::{parse, Config},
         span::Node,
@@ -297,10 +297,37 @@ mod c_compiler {
         count: usize,
         ops: Vec<IROp>,
         scope: ScopeInfo,
+        break_last_seen: BreakTypes,
         loop_id: Option<usize>,
+        switch_case_info: Option<SwitchCaseInfo>,
         /// If const (not inside a function), use Data instead of Stack
         is_const: bool,
         file_builder: &'a mut FileBuilder,
+    }
+
+    #[derive(Clone, Copy)]
+    enum BreakTypes {
+        SwitchCase,
+        Loop,
+        None,
+    }
+
+    #[derive(Clone)]
+    struct SwitchCaseInfo {
+        id: usize,
+        // FIXME: will also need to express ranges :)
+        cases: Vec<Box<Node<Expression>>>,
+        has_default: bool,
+    }
+
+    impl SwitchCaseInfo {
+        const fn new(id: usize) -> Self {
+            Self {
+                id,
+                cases: vec![],
+                has_default: false,
+            }
+        }
     }
 
     pub struct FileBuilder {
@@ -346,7 +373,9 @@ mod c_compiler {
                 count: self.count,
                 scope: self.scope.clone(),
                 loop_id: None,
+                break_last_seen: BreakTypes::None,
                 is_const: false,
+                switch_case_info: None,
                 file_builder: self,
             };
             // TODO: deal with specifiers
@@ -375,7 +404,9 @@ mod c_compiler {
                 count: self.count,
                 scope: self.scope.clone(),
                 loop_id: None,
+                break_last_seen: BreakTypes::None,
                 is_const: true,
+                switch_case_info: None,
                 file_builder: self,
             };
 
@@ -389,7 +420,7 @@ mod c_compiler {
             // FIXME: bad bad bad, just have a seperate global counter
             builder.file_builder.count = builder.count;
             IRTopLevel {
-                name: "".to_owned(),
+                name: String::new(),
                 ops: builder.ops,
                 parameters: 0,
                 is_initializer: true,
@@ -455,7 +486,7 @@ mod c_compiler {
                     return IRValue::Data(*self.data_count);
                 }
             }
-            return val.clone();
+            val.clone()
         }
     }
 
@@ -669,14 +700,64 @@ mod c_compiler {
                 Statement::For(stmt) => self.parse_for_statement(&stmt.node),
                 Statement::Break => self.parse_break(),
                 Statement::Continue => self.parse_continue(),
-                Statement::Labeled(label) => self.parse_label_stmt(&label.node),
+                Statement::Labeled(stmt) => self.parse_label_stmt(&stmt.node),
                 Statement::Goto(stmt) => self.parse_goto_stmt(&stmt.node),
-                Statement::Switch(switchy) => {
-                    println!("{switchy:?}");
-                    todo!("switch statements")
-                }
-                Statement::Asm(asm) => self.parse_asm(&asm.node),
+                Statement::Switch(stmt) => self.parse_switch(&stmt.node),
+                Statement::Asm(stmt) => self.parse_asm(&stmt.node),
             }
+        }
+
+        fn parse_switch(&mut self, switch: &SwitchStatement) {
+            let condition = self.parse_expression(&switch.expression.node);
+
+            let prev_seen = self.break_last_seen;
+            self.break_last_seen = BreakTypes::SwitchCase;
+
+            let old_scope = self.scope.clone();
+            let mut old_switch_case_info = self.switch_case_info.clone();
+
+            self.new_switch_case_id();
+
+            // NOTE: This is a sort of dirty hack, not super happy with it.
+            // We do all the parsing of the switch statement in a new array of ops,
+            // which we'll stick onto the end after the branching logic
+            let mut ops = vec![];
+            mem::swap(&mut self.ops, &mut ops);
+            self.parse_statement(&switch.statement.node);
+            mem::swap(&mut self.ops, &mut ops);
+
+            mem::swap(&mut self.switch_case_info, &mut old_switch_case_info);
+
+            let info = old_switch_case_info.unwrap();
+            let id = info.id;
+
+            let tmp = self.generate_pseudo();
+            for (i, expr) in info.cases.iter().enumerate() {
+                let case_value = self.parse_expression(&expr.node);
+                self.push(IROp::Two(
+                    BinOp::Equal,
+                    case_value,
+                    condition.clone(),
+                    tmp.clone(),
+                ));
+                let lbl = self.generate_switch_case_label(id, i).0;
+                self.push(IROp::CondBranch(BranchType::NonZero, lbl, tmp.clone()));
+            }
+
+            if info.has_default {
+                let lbl = self.generate_switch_case_default_label(id).0;
+                self.push(IROp::AlwaysBranch(lbl));
+            } else {
+                let lbl = self.generate_switch_case_end_label(id).0;
+                self.push(IROp::AlwaysBranch(lbl));
+            }
+
+            self.ops.extend(ops);
+            let lbl = self.generate_switch_case_end_label(id).1;
+            self.push(lbl);
+
+            self.scope = old_scope;
+            self.break_last_seen = prev_seen;
         }
 
         fn parse_goto_stmt(&mut self, ident: &Identifier) {
@@ -684,10 +765,26 @@ mod c_compiler {
         }
 
         fn parse_label_stmt(&mut self, stmt: &LabeledStatement) {
-            if let Label::Identifier(lbl) = &stmt.label.node {
-                self.push(IROp::Label(lbl.node.name.clone() + ".goto"));
-            } else {
-                panic!("non goto labels not yet supported")
+            match &stmt.label.node {
+                Label::Identifier(lbl) => self.push(IROp::Label(lbl.node.name.clone() + ".goto")),
+                Label::Case(expr) => {
+                    let id = self.switch_case_info.as_ref().unwrap().id;
+                    let count = self.switch_case_info.as_ref().unwrap().cases.len();
+                    let lbl = self.generate_switch_case_label(id, count).1;
+                    self.push(lbl);
+                    if let Some(ref mut info) = &mut self.switch_case_info {
+                        info.cases.push(expr.clone());
+                    } else {
+                        panic!("Switch case outside of switch case D:")
+                    }
+                }
+                Label::Default => {
+                    let id = self.switch_case_info.as_ref().unwrap().id;
+                    let lbl = self.generate_switch_case_default_label(id).1;
+                    self.push(lbl);
+                    self.switch_case_info.as_mut().unwrap().has_default = true;
+                }
+                Label::CaseRange(..) => todo!("GNU extension: case range"),
             }
             self.parse_statement(&stmt.statement.node);
         }
@@ -743,8 +840,18 @@ mod c_compiler {
         }
 
         fn parse_break(&mut self) {
-            let (loop_end_lbl_str, _) = self.generate_loop_break_label();
-            self.push(IROp::AlwaysBranch(loop_end_lbl_str));
+            match self.break_last_seen {
+                BreakTypes::None => panic!("nothing to break!"),
+                BreakTypes::Loop => {
+                    let lbl = self.generate_loop_break_label().0;
+                    self.push(IROp::AlwaysBranch(lbl));
+                }
+                BreakTypes::SwitchCase => {
+                    let id = self.switch_case_info.as_ref().unwrap().id;
+                    let lbl = self.generate_switch_case_end_label(id).0;
+                    self.push(IROp::AlwaysBranch(lbl));
+                }
+            }
         }
 
         fn parse_continue(&mut self) {
@@ -754,6 +861,8 @@ mod c_compiler {
 
         fn parse_while_stmt(&mut self, stmt: &WhileStatement) {
             let prev_scope = self.scope.clone();
+            let prev_seen = self.break_last_seen;
+            self.break_last_seen = BreakTypes::Loop;
             let prev_id = self.loop_id;
             self.new_loop_id();
             let (loop_lbl_str, loop_lbl) = self.generate_loop_continue_label();
@@ -766,11 +875,14 @@ mod c_compiler {
             self.push(IROp::AlwaysBranch(loop_lbl_str));
             self.push(loop_end_lbl);
             self.loop_id = prev_id;
+            self.break_last_seen = prev_seen;
             self.scope = prev_scope;
         }
 
         fn parse_do_while_stmt(&mut self, stmt: &DoWhileStatement) {
             let prev_scope = self.scope.clone();
+            let prev_seen = self.break_last_seen;
+            self.break_last_seen = BreakTypes::Loop;
             let prev_id = self.loop_id;
             self.new_loop_id();
             let (loop_lbl_str, loop_lbl) = self.generate_loop_continue_label();
@@ -782,11 +894,14 @@ mod c_compiler {
             self.push(IROp::CondBranch(BranchType::NonZero, loop_lbl_str, cond));
             self.push(loop_end_lbl);
             self.loop_id = prev_id;
+            self.break_last_seen = prev_seen;
             self.scope = prev_scope;
         }
 
         fn parse_for_statement(&mut self, stmt: &ForStatement) {
             let old_scope = self.scope.clone();
+            let prev_seen = self.break_last_seen;
+            self.break_last_seen = BreakTypes::Loop;
             let prev_id = self.loop_id;
             self.new_loop_id();
             let (start_lbl_str, start_lbl) = self.generate_loop_label();
@@ -807,6 +922,7 @@ mod c_compiler {
             self.push(IROp::AlwaysBranch(start_lbl_str));
             self.push(break_lbl);
             self.loop_id = prev_id;
+            self.break_last_seen = prev_seen;
             self.scope = old_scope;
         }
 
@@ -864,13 +980,28 @@ mod c_compiler {
                             );
                             self.generate_static_pseudo(name.clone())
                         }
-                        StorageDuration::Default => self.generate_static_pseudo(name.clone()),
+                        StorageDuration::Default => {
+                            if self.file_builder.scope.var_map.contains_key(&name) {
+                                self.file_builder.scope.var_map.get(&name).unwrap().clone()
+                            } else {
+                                self.generate_static_pseudo(name.clone())
+                            }
+                        }
                     }
                 } else {
                     match info.duration {
                         // Grab from scope outside function (note init is not allowed here)
                         StorageDuration::Extern => {
-                            self.file_builder.scope.var_map.get(&name).unwrap().clone()
+                            if self.file_builder.scope.var_map.contains_key(&name) {
+                                self.file_builder.scope.var_map.get(&name).unwrap().clone()
+                            } else {
+                                let j = self.generate_static_pseudo(name.clone());
+                                self.file_builder
+                                    .scope
+                                    .var_map
+                                    .insert(name.clone(), j.clone());
+                                j
+                            }
                         }
                         // Initialize
                         StorageDuration::Static => self.generate_static_pseudo(name.clone()),
@@ -885,7 +1016,9 @@ mod c_compiler {
                         count: self.count,
                         scope: self.file_builder.scope.clone(),
                         loop_id: None,
+                        break_last_seen: BreakTypes::None,
                         is_const: true,
+                        switch_case_info: None,
                         file_builder: self.file_builder,
                     };
                     let init = if let Some(init) = decl.node.initializer {
@@ -898,7 +1031,7 @@ mod c_compiler {
                     // FIXME: bad bad bad, just have a seperate global counter
                     self.count = builder.count;
                     let init = IRTopLevel {
-                        name: "".to_owned(),
+                        name: String::new(),
                         ops: builder.ops,
                         parameters: 0,
                         is_initializer: true,
@@ -1266,11 +1399,31 @@ mod c_compiler {
             (str.clone(), IROp::Label(str))
         }
 
-        fn new_loop_id(&mut self) -> usize {
+        fn new_loop_id(&mut self) {
             let x = self.count;
             self.loop_id = Some(x);
             self.count += 1;
-            x
+        }
+
+        fn new_switch_case_id(&mut self) {
+            let x = self.count;
+            self.switch_case_info = Some(SwitchCaseInfo::new(x));
+            self.count += 1;
+        }
+
+        fn generate_switch_case_label(&mut self, id: usize, case: usize) -> (String, IROp) {
+            let str = "switch.".to_owned() + &id.to_string() + ".case." + &case.to_string();
+            (str.clone(), IROp::Label(str))
+        }
+
+        fn generate_switch_case_default_label(&mut self, id: usize) -> (String, IROp) {
+            let str = "switch.".to_owned() + &id.to_string() + ".case.default";
+            (str.clone(), IROp::Label(str))
+        }
+
+        fn generate_switch_case_end_label(&mut self, id: usize) -> (String, IROp) {
+            let str = "switch.".to_owned() + &id.to_string() + ".end";
+            (str.clone(), IROp::Label(str))
         }
     }
 
@@ -1396,7 +1549,6 @@ fn write_each(
 // at start :)
 // FIXME: reorganise __asm__ so all [bstack]'s are loaded first
 // TODO: use seperate global counter for global values
-// TODO: for switch statements contine & break tracking must be done seperately (as switch can be breaked but not continued)
 //
 //
 // NOTE: Some custom printing thing is going to be needed for every value that isn't signed int(/long?)
