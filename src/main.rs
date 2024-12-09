@@ -70,7 +70,7 @@ pub enum IRValue {
     Register(usize), // limited to only like 70ish tho
     Data(usize),
     Psuedo { name: String },
-    StaticPsuedo { name: String },
+    StaticPsuedo { name: String, linkable: bool },
     // Must be careful when using
     BefungeStack,
 }
@@ -477,7 +477,7 @@ mod c_compiler {
                     return IRValue::Stack(self.stack_count);
                 }
             }
-            if let IRValue::StaticPsuedo { name } = val {
+            if let IRValue::StaticPsuedo { name, .. } = val {
                 if let Some(id) = self.data_map.get(name) {
                     return IRValue::Data(*id);
                 } else {
@@ -971,20 +971,14 @@ mod c_compiler {
                 let name = self.parse_declarator(&decl.node.declarator.node);
                 let loc = if self.is_const {
                     match info.duration {
-                        // Links with external file
-                        StorageDuration::Extern => panic!("Top level extern not yet added"),
-                        // No linkage from other files allowed
-                        StorageDuration::Static => {
-                            println!(
-                                "WARNING: Top level static is ignored, as linking is not yet supported"
-                            );
-                            self.generate_static_pseudo(name.clone())
-                        }
-                        StorageDuration::Default => {
-                            if self.file_builder.scope.var_map.contains_key(&name) {
-                                self.file_builder.scope.var_map.get(&name).unwrap().clone()
-                            } else {
-                                self.generate_static_pseudo(name.clone())
+                        StorageDuration::Static => IRValue::StaticPsuedo {
+                            name: name.clone(),
+                            linkable: false,
+                        },
+                        StorageDuration::Default | StorageDuration::Extern => {
+                            IRValue::StaticPsuedo {
+                                name: name.clone(),
+                                linkable: true,
                             }
                         }
                     }
@@ -995,7 +989,15 @@ mod c_compiler {
                             if self.file_builder.scope.var_map.contains_key(&name) {
                                 self.file_builder.scope.var_map.get(&name).unwrap().clone()
                             } else {
-                                let j = self.generate_static_pseudo(name.clone());
+                                // NOTE: this relies on a neat trick: if you reference a variable
+                                // via `extern` before it has been declared, then it cannot be
+                                // `static`, it must be either (top level) `extern` or have no
+                                // keyword. Both of those are linkable, so we can just generate a
+                                // linkable pseudo here instead of having to figure it out later.
+                                let j = IRValue::StaticPsuedo {
+                                    name: name.clone(),
+                                    linkable: true,
+                                };
                                 self.file_builder
                                     .scope
                                     .var_map
@@ -1004,7 +1006,7 @@ mod c_compiler {
                             }
                         }
                         // Initialize
-                        StorageDuration::Static => self.generate_static_pseudo(name.clone()),
+                        StorageDuration::Static => self.generate_unique_static_pseudo(name.clone()),
                         StorageDuration::Default => self.generate_named_pseudo(name.clone()),
                     }
                 };
@@ -1361,11 +1363,11 @@ mod c_compiler {
             }
         }
 
-        fn generate_static_pseudo(&mut self, name: String) -> IRValue {
-            // FIXME: use global counter
+        fn generate_unique_static_pseudo(&mut self, name: String) -> IRValue {
             self.count += 1;
             IRValue::StaticPsuedo {
                 name: name + "." + &self.count.to_string(),
+                linkable: false,
             }
         }
 
@@ -1550,6 +1552,7 @@ fn write_each(
 // FIXME: reorganise __asm__ so all [bstack]'s are loaded first
 // TODO: use seperate global counter for global values
 //
+// NOTE: remember, linking can only use values without . in the name
 //
 // NOTE: Some custom printing thing is going to be needed for every value that isn't signed int(/long?)
 // NOTE: When implementing unsigned ints, gonna need to have custom impls for some things
