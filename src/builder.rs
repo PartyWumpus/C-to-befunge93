@@ -5,6 +5,8 @@
 )]
 use std::collections::HashMap;
 
+use crate::{FuncInfo, IRValue};
+
 #[derive(Debug)]
 pub struct OpBuilder {
     ops: Vec<char>,
@@ -15,6 +17,7 @@ pub struct OpBuilder {
     branch_points: HashMap<String, Vec<usize>>,
     exit_points: Vec<usize>,
     return_points: Vec<usize>,
+    pub current_stack_size: usize,
 }
 
 impl OpBuilder {
@@ -31,45 +34,56 @@ impl OpBuilder {
             branch_points: HashMap::new(),
             exit_points: Vec::new(),
             return_points: Vec::new(),
+            current_stack_size: 0,
         }
     }
 
-    pub fn str(&mut self, str: &str) {
+    fn str(&mut self, str: &str) {
         self.ops.extend(str.chars());
     }
 
-    pub fn char(&mut self, char: char) {
+    fn char(&mut self, char: char) {
         self.ops.push(char);
+    }
+
+    pub fn add_space(&mut self) {
+        self.char(' ');
     }
 
     /// Puts stack ptr on bstack
     fn load_stack_ptr(&mut self) {
         self.str("00g");
+        self.current_stack_size += 1;
     }
 
     /// Set stack ptr to top of bstack
     fn set_stack_ptr(&mut self) {
         self.str("00p");
+        self.current_stack_size += 1;
     }
 
     /// Puts stack ptr on bstack
     fn load_call_stack_ptr(&mut self) {
         self.str("10g");
+        self.current_stack_size += 1;
     }
 
     /// Set stack ptr to top of bstack
     fn set_call_stack_ptr(&mut self) {
         self.str("10p");
+        self.current_stack_size += 1;
     }
 
     /// Puts return value on bstack
-    pub fn load_return_val(&mut self) {
+    fn load_return_val(&mut self) {
         self.str("20g");
+        self.current_stack_size += 1;
     }
 
     /// Set return value to top of bstack
     fn set_return_val(&mut self) {
         self.str("20p");
+        self.current_stack_size += 1;
     }
 
     /// Puts num on bstack
@@ -85,46 +99,54 @@ impl OpBuilder {
             x => number_to_bf_string(x),
         };
         self.str(&x);
+        self.current_stack_size += 1;
     }
 
     fn index_register(&mut self, id: usize) {
         let id = id + 2;
         assert!(id < 99, "attempt to index register > 99");
         self.str(&format!("{}{}", id % 10, id / 10));
+        self.current_stack_size += 2;
     }
 
-    pub fn load_register_val(&mut self, id: usize) {
+    fn load_register_val(&mut self, id: usize) {
         self.index_register(id);
         self.char('g');
+        self.current_stack_size -= 1;
     }
 
-    pub fn set_register_val(&mut self, id: usize) {
+    fn set_register_val(&mut self, id: usize) {
         self.index_register(id);
         self.char('p');
+        self.current_stack_size -= 3;
     }
 
-    pub fn load_stack_val(&mut self, offset: usize) {
+    fn load_stack_val(&mut self, offset: usize) {
         self.load_stack_ptr();
         self.load_number(offset);
         self.str("-1g");
+        self.current_stack_size -= 1;
     }
 
-    pub fn set_stack_val(&mut self, offset: usize) {
+    fn set_stack_val(&mut self, offset: usize) {
         self.load_stack_ptr();
         self.load_number(offset);
         self.str("-1p");
+        self.current_stack_size -= 3;
     }
 
     /// Puts data value on bstack
-    pub fn load_data_val(&mut self, position: usize) {
-        self.load_number(position + 30); // + 30 to avoid the register space
+    fn load_data_val(&mut self, position: usize) {
+        self.load_number(position + 31); // + 31 to avoid the register space
         self.str("3g");
+        self.current_stack_size += 0;
     }
 
     /// Set data value to top of bstack
-    pub fn set_data_val(&mut self, position: usize) {
-        self.load_number(position + 30); // + 30 to avoid the register space
+    fn set_data_val(&mut self, position: usize) {
+        self.load_number(position + 31); // + 31 to avoid the register space
         self.str("3p");
+        self.current_stack_size -= 2;
     }
 
     pub fn label(&mut self, label: String) {
@@ -138,19 +160,24 @@ impl OpBuilder {
             .entry(label)
             .or_default()
             .push(self.ops.len() - 1);
+        assert!(self.current_stack_size == 0);
     }
 
-    pub fn not_zero_branch(&mut self, label: String) {
+    pub fn not_zero_branch(&mut self, val: &IRValue, label: String) {
+        self.get_val(val);
         self.str("#v_");
         self.branch_points
             .entry(label)
             .or_default()
             .push(self.ops.len() - 2);
+        self.current_stack_size -= 1;
+        assert!(self.current_stack_size == 0);
     }
 
-    pub fn zero_branch(&mut self, label: String) {
+    pub fn zero_branch(&mut self, val: &IRValue, label: String) {
+        self.get_val(val);
         self.char('!');
-        self.not_zero_branch(label);
+        self.not_zero_branch(&IRValue::BefungeStack, label);
     }
 
     //// Function Calls
@@ -172,9 +199,11 @@ impl OpBuilder {
     fn exit(&mut self) {
         self.char('^');
         self.exit_points.push(self.ops.len() - 1);
+        self.current_stack_size = 0;
     }
 
-    pub fn return_(&mut self, stack_frame_size: usize) {
+    pub fn return_(&mut self, val: &IRValue, stack_frame_size: usize) {
+        self.get_val(val);
         self.set_return_val();
         self.decrement_stack_ptr(stack_frame_size);
 
@@ -189,17 +218,38 @@ impl OpBuilder {
         self.str("^>");
         self.exit_points.push(self.ops.len() - 2);
         self.return_points.push(self.ops.len() - 1);
+        self.current_stack_size = 0;
     }
 
-    pub fn call(&mut self) {
+    pub fn call(&mut self, caller: FuncInfo, calle: FuncInfo, params: &[IRValue]) {
+        for val in params {
+            if matches!(val, IRValue::BefungeStack) {
+                panic!("function param cannot be assumed to be on the bstack")
+            }
+            self.get_val(val);
+        }
+
+        self.increment_stack_ptr(calle.stack_frame_size);
+        for i in (0..params.len()).rev() {
+            self.put_val(&IRValue::Stack(i + 1));
+        }
+
+        self.load_number(0);
+        self.load_number(calle.id);
+
+        // Load my ID onto the call stack
         // TODO: optimize with swap op
+        self.char(' ');
+        self.load_number(caller.id);
         self.load_call_stack_ptr();
         self.str("2p");
 
+        // Load current location in function onto the call stack
         self.load_number(self.return_points.len() + 1);
         self.load_call_stack_ptr();
         self.str("1+2p");
 
+        // Increment call stack ptr
         self.load_call_stack_ptr();
         self.str("2+");
         self.set_call_stack_ptr();
@@ -212,7 +262,8 @@ impl OpBuilder {
     // actual values from 0 (0) to 63 (?)
     // then zeros from 64 (@) to 128
 
-    fn load_bit_stack(&mut self, alt: bool) {
+    fn load_bit_stack(&mut self, a: &IRValue, alt: bool) {
+        self.get_val(a);
         // TODO: clobbers 97p and 87p, as well as writing to the special bit stacks
         if alt {
             self.insert_inline_befunge(&[
@@ -227,47 +278,48 @@ impl OpBuilder {
                 r#"               > $$        ^"#.to_owned(),
             ]);
         }
+        self.current_stack_size -= 1;
     }
 
-    // Assumes two values on stack
-    pub fn bit_and(&mut self) {
-        self.load_bit_stack(false);
-        self.load_bit_stack(true);
+    pub fn bit_and(&mut self, a: &IRValue, b: &IRValue) {
+        self.load_bit_stack(a, false);
+        self.load_bit_stack(b, true);
         // For each bit, do a * b
         self.insert_inline_befunge(&[
             r#"097p"?">::9g\8g*97g2v>"#.to_owned(),
             r#"       ^-1_v#:p79+* < "#.to_owned(),
             r#"           > $  97g  ^"#.to_owned(),
         ]);
+        self.current_stack_size += 1;
     }
 
-    // Assumes two values on stack
-    pub fn bit_xor(&mut self) {
-        self.load_bit_stack(false);
-        self.load_bit_stack(true);
+    pub fn bit_xor(&mut self, a: &IRValue, b: &IRValue) {
+        self.load_bit_stack(a, false);
+        self.load_bit_stack(b, true);
         // For each bit, do (a + b) mod 2
         self.insert_inline_befunge(&[
             r#"097p"?">::9g\8g+2%97gv>"#.to_owned(),
             r#"       ^-1_v#:p79+*2 < "#.to_owned(),
             r#"           >   $  97g ^"#.to_owned(),
         ]);
+        self.current_stack_size += 1;
     }
 
-    // Assumes two values on stack
-    pub fn bit_or(&mut self) {
-        self.load_bit_stack(false);
-        self.load_bit_stack(true);
+    pub fn bit_or(&mut self, a: &IRValue, b: &IRValue) {
+        self.load_bit_stack(a, false);
+        self.load_bit_stack(b, true);
         // For each bit, do not( (a + b) > 1 )
         self.insert_inline_befunge(&[
             r#"097p"?">::9g\8g+1\`!97v>"#.to_owned(),
             r#"       ^-1_v#:p79+*2 g< "#.to_owned(),
             r#"           >   $  97g  ^"#.to_owned(),
         ]);
+        self.current_stack_size += 1;
     }
 
-    // Assumes two values on the stack, top is to be shifted, bottom is amount to shift by
-    pub fn bitshift_left(&mut self) {
-        self.load_bit_stack(true);
+    pub fn bitshift_left(&mut self, a: &IRValue, b: &IRValue) {
+        self.load_bit_stack(a, true);
+        self.get_val(b);
         self.insert_inline_befunge(&[
             r#"097p:87p"?"+>:9g97g2*+97pv>"#.to_owned(),
             r#"            ^-1_v#+g78:  < "#.to_owned(),
@@ -275,9 +327,9 @@ impl OpBuilder {
         ]);
     }
 
-    // Assumes two values on the stack, top is to be shifted, bottom is amount to shift by
-    pub fn bitshift_right(&mut self) {
-        self.load_bit_stack(true);
+    pub fn bitshift_right(&mut self, a: &IRValue, b: &IRValue) {
+        self.load_bit_stack(a, true);
+        self.get_val(b);
         self.insert_inline_befunge(&[
             r#"097p:87p"?"\->:9g97g2*+97pv>"#.to_owned(),
             r#"             ^-1_v#-\g78: < "#.to_owned(),
@@ -395,6 +447,141 @@ impl OpBuilder {
         rows.iter()
             .map(|row| row.iter().collect::<String>())
             .collect()
+    }
+}
+
+impl OpBuilder {
+    fn get_val(&mut self, val: &IRValue) {
+        match val {
+            IRValue::Stack(offset) => self.load_stack_val(*offset),
+            IRValue::Register(id) => self.load_register_val(*id),
+            IRValue::Immediate(value) => self.load_number(*value),
+            IRValue::Data(position) => self.load_data_val(*position),
+            IRValue::BefungeStack => {
+                if self.current_stack_size == 0 {
+                    panic!("Attempt to use a befunge stack value when the stack is empty!")
+                }
+            }
+            IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
+                panic!("Psuedo registers should be removed by befunge generation time")
+            }
+        }
+    }
+
+    fn put_val(&mut self, val: &IRValue) {
+        match val {
+            IRValue::Stack(offset) => self.set_stack_val(*offset),
+            IRValue::Register(id) => self.set_register_val(*id),
+            IRValue::Immediate(_) => panic!("Immediate value as output location"),
+            IRValue::Data(position) => self.set_data_val(*position),
+            IRValue::BefungeStack => (),
+            IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
+                panic!("Psuedo registers should be removed by befunge generation time")
+            }
+        }
+    }
+
+    // TODO: add special optimizations
+    fn get_two_ordered(&mut self, a: &IRValue, b: &IRValue) {
+        if matches!(b, IRValue::BefungeStack) {
+            self.get_val(b);
+            self.get_val(a);
+            self.char('\\');
+        } else {
+            self.get_val(a);
+            self.get_val(b);
+        }
+    }
+
+    fn get_two_reorderable(&mut self, a: &IRValue, b: &IRValue) {
+        if matches!(b, IRValue::BefungeStack) {
+            self.get_val(b);
+            self.get_val(a);
+        } else {
+            self.get_val(a);
+            self.get_val(b);
+        }
+    }
+    pub fn copy(&mut self, a: &IRValue, b: &IRValue) {
+        self.get_val(a);
+        self.put_val(b);
+    }
+
+    // 0 - x
+    pub fn unary_minus(&mut self, a: &IRValue) {
+        self.load_number(0);
+        self.get_val(a);
+        self.char('-');
+        self.current_stack_size -= 1;
+    }
+
+    // TODO: improve. x -> -1 - x
+    pub fn bitwise_complement(&mut self, a: &IRValue) {
+        self.load_number(0);
+        self.get_val(a);
+        self.str("-1-");
+        self.current_stack_size -= 1;
+    }
+
+    pub fn boolean_negate(&mut self, a: &IRValue) {
+        self.get_val(a);
+        self.char('!');
+    }
+
+    pub fn add(&mut self, a: &IRValue, b: &IRValue) {
+        self.get_two_reorderable(a, b);
+        self.char('+');
+        self.current_stack_size -= 1;
+    }
+    pub fn sub(&mut self, a: &IRValue, b: &IRValue) {
+        self.get_two_ordered(a, b);
+        self.char('-');
+        self.current_stack_size -= 1;
+    }
+    pub fn multiply(&mut self, a: &IRValue, b: &IRValue) {
+        self.get_two_reorderable(a, b);
+        self.char('*');
+        self.current_stack_size -= 1;
+    }
+    pub fn divide(&mut self, a: &IRValue, b: &IRValue) {
+        self.get_two_ordered(a, b);
+        self.char('/');
+        self.current_stack_size -= 1;
+    }
+    pub fn modulo(&mut self, a: &IRValue, b: &IRValue) {
+        self.get_two_ordered(a, b);
+        self.char('%');
+        self.current_stack_size -= 1;
+    }
+    pub fn is_equal(&mut self, a: &IRValue, b: &IRValue) {
+        self.get_two_reorderable(a, b);
+        self.str("-!");
+        self.current_stack_size -= 1;
+    }
+    pub fn is_not_equal(&mut self, a: &IRValue, b: &IRValue) {
+        self.get_two_reorderable(a, b);
+        self.str("-!!");
+        self.current_stack_size -= 1;
+    }
+    pub fn is_less_than(&mut self, a: &IRValue, b: &IRValue) {
+        self.get_two_ordered(a, b);
+        self.str("\\`");
+        self.current_stack_size -= 1;
+    }
+    pub fn is_less_or_equal(&mut self, a: &IRValue, b: &IRValue) {
+        self.get_two_ordered(a, b);
+        self.str("`!");
+        self.current_stack_size -= 1;
+    }
+    pub fn is_greater_than(&mut self, a: &IRValue, b: &IRValue) {
+        self.get_two_ordered(a, b);
+        self.char('`');
+        self.current_stack_size -= 1;
+    }
+    pub fn is_greater_or_equal(&mut self, a: &IRValue, b: &IRValue) {
+        self.get_two_ordered(a, b);
+        self.str("\\`!");
+        self.current_stack_size -= 1;
     }
 }
 

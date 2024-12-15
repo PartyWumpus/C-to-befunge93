@@ -23,6 +23,7 @@
 				devShell = mkShell rec {
 					packages = [
 						rust-bin.stable.latest.default
+            gcc13
             python3
 					];
 				};

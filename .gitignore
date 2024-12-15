@@ -1,3 +1,5 @@
 /target
 *.b93
 *.c
+.direnv
+a.out

@@ -146,6 +146,7 @@ impl CodeGen {
     fn compile_top_level(&mut self, func: IRTopLevel) -> Vec<String> {
         self.builder = OpBuilder::new(!func.is_initializer);
         for op in func.ops {
+            println!("{op:?}, {}", self.builder.current_stack_size);
             match &op {
                 IROp::FunctionLabel(_) => (),
                 IROp::Call(called_func_name, vals) => {
@@ -153,123 +154,60 @@ impl CodeGen {
                     // TODO: improve error on unknown func call
                     let called_func = self.function_map[called_func_name];
 
-                    // this 'leaks' a bunch of values on the stack between operations, which i have
-                    // generally been trying to avoid.
-                    for val in vals {
-                        self.get_val(val);
-                    }
                     self.builder
-                        .increment_stack_ptr(called_func.stack_frame_size);
-                    for i in (0..vals.len()).rev() {
-                        self.put_val(&IRValue::Stack(i + 1));
-                    }
-
-                    self.builder.load_number(0);
-                    self.builder.load_number(called_func.id);
-
-                    self.builder.char(' ');
-                    self.builder.load_number(self.function_map[&func.name].id);
-                    self.builder.call();
+                        .call(self.function_map[&func.name], called_func, vals);
                 }
                 IROp::Return(val) => {
-                    self.get_val(val);
-                    self.builder.return_(func.stack_frame_size);
+                    self.builder.return_(val, func.stack_frame_size);
                 }
                 IROp::Label(label) => self.builder.label(label.to_owned()),
                 IROp::InlineBefunge(lines) => self.builder.insert_inline_befunge(lines),
-                IROp::CondBranch(flavour, label, val) => {
-                    self.get_val(val);
-                    match flavour {
-                        BranchType::Zero => self.builder.zero_branch(label.to_string()),
-                        BranchType::NonZero => self.builder.not_zero_branch(label.to_string()),
-                    }
-                }
+                IROp::CondBranch(flavour, label, val) => match flavour {
+                    BranchType::Zero => self.builder.zero_branch(&val, label.to_string()),
+                    BranchType::NonZero => self.builder.not_zero_branch(&val, label.to_string()),
+                },
                 IROp::AlwaysBranch(label) => self.builder.unconditional_branch(label.to_owned()),
                 IROp::One(op, a, out) => {
                     match op {
-                        UnaryOp::Copy => self.get_val(a),
-                        UnaryOp::Minus => {
-                            self.builder.char('0');
-                            self.get_val(a);
-                            self.builder.char('-');
-                        }
-                        UnaryOp::Complement => {
-                            // TODO: improve. x -> -1 - x
-                            self.builder.char('0');
-                            self.get_val(a);
-                            self.builder.char('-');
-                            self.builder.char('1');
-                            self.builder.char('-');
-                        }
-                        UnaryOp::BooleanNegate => {
-                            self.get_val(a);
-                            self.builder.char('!');
-                        }
+                        UnaryOp::Copy => self.builder.copy(a, &IRValue::BefungeStack),
+                        UnaryOp::Minus => self.builder.unary_minus(a),
+                        UnaryOp::Complement => self.builder.bitwise_complement(a),
+                        UnaryOp::BooleanNegate => self.builder.boolean_negate(a),
                     }
-                    self.put_val(out);
+                    self.builder.copy(&IRValue::BefungeStack, out);
                 }
                 IROp::Two(op, a, b, out) => {
-                    self.get_val(a);
-                    self.get_val(b);
                     match op {
-                        BinOp::Add => self.builder.char('+'),
-                        BinOp::Sub => self.builder.char('-'),
-                        BinOp::Mult => self.builder.char('*'),
-                        BinOp::Div => self.builder.char('/'),
-                        BinOp::Mod => self.builder.char('%'),
-                        BinOp::Equal => self.builder.str("-!"),
-                        BinOp::NotEqual => self.builder.str("-!!"),
-                        BinOp::LessThan => self.builder.str("\\`"),
-                        BinOp::LessOrEqual => self.builder.str("`!"),
-                        BinOp::GreaterThan => self.builder.char('`'),
-                        BinOp::GreaterOrEqual => self.builder.str("\\`!"),
-                        BinOp::BitwiseAnd => self.builder.bit_and(),
-                        BinOp::BitwiseOr => self.builder.bit_or(),
-                        BinOp::BitwiseXor => self.builder.bit_xor(),
+                        BinOp::Add => self.builder.add(a, b),
+                        BinOp::Sub => self.builder.sub(a, b),
+                        BinOp::Mult => self.builder.multiply(a, b),
+                        BinOp::Div => self.builder.divide(a, b),
+                        BinOp::Mod => self.builder.modulo(a, b),
+                        BinOp::Equal => self.builder.is_equal(a, b),
+                        BinOp::NotEqual => self.builder.is_not_equal(a, b),
+                        BinOp::LessThan => self.builder.is_less_than(a, b),
+                        BinOp::LessOrEqual => self.builder.is_less_or_equal(a, b),
+                        BinOp::GreaterThan => self.builder.is_greater_than(a, b),
+                        BinOp::GreaterOrEqual => self.builder.is_greater_or_equal(a, b),
 
-                        // TODO: just load the values the other way around instead of swapping
+                        BinOp::BitwiseAnd => self.builder.bit_and(a, b),
+                        BinOp::BitwiseOr => self.builder.bit_or(a, b),
+                        BinOp::BitwiseXor => self.builder.bit_xor(a, b),
+
                         BinOp::ShiftLeft => {
-                            self.builder.char('\\');
-                            self.builder.bitshift_left();
+                            self.builder.bitshift_left(a, b);
                         }
                         BinOp::ShiftRight => {
-                            self.builder.char('\\');
-                            self.builder.bitshift_right();
+                            self.builder.bitshift_right(a, b);
                         }
                     }
-                    self.put_val(out);
+                    self.builder.copy(&IRValue::BefungeStack, out);
                 }
             }
-            self.builder.char(' ');
+            self.builder.add_space();
         }
 
         self.builder.finalize_function()
-    }
-
-    fn get_val(&mut self, val: &IRValue) {
-        match val {
-            IRValue::Stack(offset) => self.builder.load_stack_val(*offset),
-            IRValue::Register(id) => self.builder.load_register_val(*id),
-            IRValue::Immediate(value) => self.builder.load_number(*value),
-            IRValue::Data(position) => self.builder.load_data_val(*position),
-            IRValue::BefungeStack => (), // DANGER: assume it is already there
-            IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
-                panic!("Psuedo registers should be removed by befunge generation time")
-            }
-        }
-    }
-
-    fn put_val(&mut self, val: &IRValue) {
-        match val {
-            IRValue::Stack(offset) => self.builder.set_stack_val(*offset),
-            IRValue::Register(id) => self.builder.set_register_val(*id),
-            IRValue::Immediate(_) => panic!("Immediate value as output location"),
-            IRValue::Data(position) => self.builder.set_data_val(*position),
-            IRValue::BefungeStack => (), // DANGER: leak the value onto the stack
-            IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
-                panic!("Psuedo registers should be removed by befunge generation time")
-            }
-        }
     }
 }
 
@@ -624,7 +562,8 @@ mod c_compiler {
             match types[..] {
                 [] => panic!("No type specifiers?"),
                 [TypeSpecifier::Int | TypeSpecifier::Signed]
-                | [TypeSpecifier::Signed, TypeSpecifier::Int] => Self::UnsignedInt,
+                | [TypeSpecifier::Signed, TypeSpecifier::Int]
+                | [TypeSpecifier::Char] => Self::UnsignedInt,
                 _ => panic!("Unknown type: {types:?}"),
             }
         }
