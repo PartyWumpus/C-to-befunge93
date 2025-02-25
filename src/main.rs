@@ -75,6 +75,12 @@ pub enum IRValue {
     BefungeStack,
 }
 
+#[derive(Debug, Copy, Clone)]
+enum CType {
+    UnsignedInt,
+    UnsignedLong,
+}
+
 #[derive(Debug, Clone)]
 pub enum IROp {
     FunctionLabel(String),
@@ -146,7 +152,6 @@ impl CodeGen {
     fn compile_top_level(&mut self, func: IRTopLevel) -> Vec<String> {
         self.builder = OpBuilder::new(!func.is_initializer);
         for op in func.ops {
-            println!("{op:?}, {}", self.builder.current_stack_size);
             match &op {
                 IROp::FunctionLabel(_) => (),
                 IROp::Call(called_func_name, vals) => {
@@ -218,10 +223,10 @@ mod c_compiler {
     use lang_c::{
         ast::{
             AsmStatement, BinaryOperator, BinaryOperatorExpression, BlockItem, CallExpression,
-            ConditionalExpression, Constant, Declaration, DeclarationSpecifier, Declarator,
-            DeclaratorKind, DerivedDeclarator, DoWhileStatement, Expression, ExternalDeclaration,
-            ForInitializer, ForStatement, FunctionDefinition, GnuAsmOperand, Identifier,
-            IfStatement, Initializer, IntegerBase, Label, LabeledStatement, Statement,
+            CastExpression, ConditionalExpression, Constant, Declaration, DeclarationSpecifier,
+            Declarator, DeclaratorKind, DerivedDeclarator, DoWhileStatement, Expression,
+            ExternalDeclaration, ForInitializer, ForStatement, FunctionDefinition, GnuAsmOperand,
+            Identifier, IfStatement, Initializer, IntegerBase, Label, LabeledStatement, Statement,
             StorageClassSpecifier, SwitchStatement, TypeSpecifier, UnaryOperator,
             UnaryOperatorExpression, WhileStatement,
         },
@@ -229,7 +234,7 @@ mod c_compiler {
         span::Node,
     };
 
-    use crate::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRValue, UnaryOp};
+    use crate::{BinOp, BranchType, CType, FuncInfo, IROp, IRTopLevel, IRValue, UnaryOp};
 
     struct TopLevelBuilder<'a> {
         count: usize,
@@ -375,6 +380,26 @@ mod c_compiler {
         data_map: &'a mut HashMap<String, usize>,
     }
 
+    fn apply_to_all_ir_values(ops: &mut IRTopLevel, func: &mut impl FnMut(&mut IRValue)) {
+        for i in 0..ops.ops.len() {
+            match &mut ops.ops[i] {
+                IROp::Return(o) => func(o),
+                IROp::Call(_, ops) => ops.into_iter().for_each(|x| func(x)),
+                IROp::CondBranch(_, _, a) => func(a),
+                IROp::One(_, a, out) => {
+                    func(a);
+                    func(out);
+                }
+                IROp::Two(_, a, b, out) => {
+                    func(a);
+                    func(b);
+                    func(out);
+                }
+                _ => (),
+            }
+        }
+    }
+
     fn pseudo_removal(
         func: &mut IRTopLevel,
         data_count: &mut usize,
@@ -386,22 +411,8 @@ mod c_compiler {
             data_count,
             data_map,
         };
-        for i in 0..func.ops.len() {
-            func.ops[i] = match &func.ops[i] {
-                IROp::Return(o) => IROp::Return(map.get(o)),
-                IROp::Call(str, ops) => {
-                    IROp::Call(str.clone(), ops.iter().map(|o| map.get(o)).collect())
-                }
-                IROp::CondBranch(flavor, str, a) => {
-                    IROp::CondBranch(*flavor, str.clone(), map.get(a))
-                }
-                IROp::One(flavour, a, out) => IROp::One(*flavour, map.get(a), map.get(out)),
-                IROp::Two(flavour, a, b, o) => {
-                    IROp::Two(*flavour, map.get(a), map.get(b), map.get(o))
-                }
-                x => x.clone(),
-            }
-        }
+        let mut get = |val: &mut IRValue| *val = map.get(val);
+        apply_to_all_ir_values(func, &mut get);
     }
 
     impl PsuedoMap<'_> {
@@ -448,25 +459,9 @@ mod c_compiler {
     }
 
     fn append_to_all_psuedos(func: &mut IRTopLevel, new_suffix: &str) {
-        for i in 0..func.ops.len() {
-            match &mut func.ops[i] {
-                IROp::Return(o) => append_to_ir_value(o, new_suffix),
-                IROp::Call(_, ops) => ops
-                    .into_iter()
-                    .for_each(|x| append_to_ir_value(x, new_suffix)),
-                IROp::CondBranch(_, _, a) => append_to_ir_value(a, new_suffix),
-                IROp::One(_, a, out) => {
-                    append_to_ir_value(a, new_suffix);
-                    append_to_ir_value(out, new_suffix);
-                }
-                IROp::Two(_, a, b, out) => {
-                    append_to_ir_value(a, new_suffix);
-                    append_to_ir_value(b, new_suffix);
-                    append_to_ir_value(out, new_suffix);
-                }
-                _ => (),
-            }
-        }
+        apply_to_all_ir_values(func, &mut |value: &mut IRValue| {
+            append_to_ir_value(value, new_suffix)
+        });
     }
 
     fn append_to_ir_value(value: &mut IRValue, new_suffix: &str) {
@@ -482,33 +477,17 @@ mod c_compiler {
         }
     }
 
-    fn stack_size_recalculator(func: &IRTopLevel) -> usize {
+    fn stack_size_recalculator(func: &mut IRTopLevel) -> usize {
         // find biggest Stack value
         let mut counter = 0;
-        let mut check = |val: &IRValue| {
+        let mut check = |val: &mut IRValue| {
             if let IRValue::Stack(val) = val {
                 if *val > counter {
                     counter = *val;
                 }
             }
         };
-        for op in &func.ops {
-            match op {
-                IROp::Return(o) => check(o),
-                IROp::Call(_, ops) => ops.iter().for_each(&mut check),
-                IROp::CondBranch(_, _, a) => check(a),
-                IROp::One(_, a, out) => {
-                    check(a);
-                    check(out);
-                }
-                IROp::Two(_, a, b, out) => {
-                    check(a);
-                    check(b);
-                    check(out);
-                }
-                _ => (),
-            };
-        }
+        apply_to_all_ir_values(func, &mut check);
         std::cmp::max(counter, func.parameters)
     }
 
@@ -551,19 +530,18 @@ mod c_compiler {
             .collect()
     }
 
-    #[derive(Debug)]
-    enum CType {
-        UnsignedInt,
-    }
-
     impl CType {
         fn from(types: &[&Node<TypeSpecifier>]) -> Self {
             let types = types.iter().map(|x| x.node.clone()).collect::<Vec<_>>();
             match types[..] {
                 [] => panic!("No type specifiers?"),
                 [TypeSpecifier::Int | TypeSpecifier::Signed]
-                | [TypeSpecifier::Signed, TypeSpecifier::Int]
-                | [TypeSpecifier::Char] => Self::UnsignedInt,
+                | [TypeSpecifier::Signed, TypeSpecifier::Int] => Self::UnsignedInt,
+                [TypeSpecifier::Long]
+                | [TypeSpecifier::Long, TypeSpecifier::Int]
+                | [TypeSpecifier::Signed, TypeSpecifier::Long, TypeSpecifier::Int] => {
+                    Self::UnsignedLong
+                }
                 _ => panic!("Unknown type: {types:?}"),
             }
         }
@@ -1062,10 +1040,10 @@ mod c_compiler {
                 Expression::Call(call_expr) => self.parse_call(&call_expr.node),
 
                 // Type stuff
+                Expression::Cast(cast_expr) => self.parse_cast(&cast_expr.node),
                 Expression::SizeOfTy(_) => todo!("SizeOfTy {expr:?}"),
                 Expression::SizeOfVal(_) => todo!("SizeOfVal {expr:?}"),
                 Expression::AlignOf(_) => todo!("AlignOf {expr:?}"),
-                Expression::Cast(_) => todo!("Cast {expr:?}"),
 
                 // Struct stuff
                 Expression::Member(_) => todo!("Member {expr:?}"),
@@ -1082,6 +1060,10 @@ mod c_compiler {
                 // Extension
                 Expression::Statement(_) => todo!("Statement {expr:?}"),
             }
+        }
+
+        fn parse_cast(&mut self, node: &CastExpression) -> IRValue {
+            todo!("Cast {node:?}")
         }
 
         fn parse_ternary(&mut self, node: &ConditionalExpression) -> IRValue {
