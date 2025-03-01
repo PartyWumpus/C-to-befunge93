@@ -79,6 +79,7 @@ pub enum IRValue {
 enum CType {
     UnsignedInt,
     UnsignedLong,
+    Void,
 }
 
 #[derive(Debug, Clone)]
@@ -242,6 +243,7 @@ mod c_compiler {
         scope: ScopeInfo,
         break_last_seen: BreakTypes,
         loop_id: Option<usize>,
+        return_type: CType,
         switch_case_info: Option<SwitchCaseInfo>,
         /// If const (not inside a function), use Data instead of Stack
         is_const: bool,
@@ -311,6 +313,7 @@ mod c_compiler {
         }
 
         fn parse_function(&mut self, func: &FunctionDefinition) -> IRTopLevel {
+            let info = DeclarationInfo::from(&func.specifiers);
             let mut builder = TopLevelBuilder {
                 ops: vec![],
                 count: self.count,
@@ -320,10 +323,11 @@ mod c_compiler {
                 is_const: false,
                 switch_case_info: None,
                 file_builder: self,
+                return_type: info.c_type,
             };
-            // TODO: deal with specifiers
+
             // TODO: deal with K&R declarations
-            let name = builder.parse_declarator(&func.declarator.node);
+            let name = builder.parse_declarator_name(&func.declarator.node);
 
             let param_count = builder.parse_func_declarator(&func.declarator.node);
             builder.parse_statement(&func.statement.node);
@@ -342,6 +346,7 @@ mod c_compiler {
         }
 
         fn parse_top_level_declaration(&mut self, decl: &Declaration) -> IRTopLevel {
+            let info = DeclarationInfo::from(&decl.specifiers);
             let mut builder = TopLevelBuilder {
                 ops: vec![],
                 count: self.count,
@@ -351,6 +356,7 @@ mod c_compiler {
                 is_const: true,
                 switch_case_info: None,
                 file_builder: self,
+                return_type: info.c_type,
             };
 
             builder.parse_declarations(decl);
@@ -542,6 +548,7 @@ mod c_compiler {
                 | [TypeSpecifier::Signed, TypeSpecifier::Long, TypeSpecifier::Int] => {
                     Self::UnsignedLong
                 }
+                [TypeSpecifier::Void] => Self::Void,
                 _ => panic!("Unknown type: {types:?}"),
             }
         }
@@ -610,8 +617,10 @@ mod c_compiler {
                         // we don't care about func_decl.node.ellipsis
                         for param in &func_decl.node.parameters {
                             // TODO: deal with types in decls
+                            let _info = DeclarationInfo::from(&param.node.specifiers);
+
                             if let Some(decl) = param.node.declarator.clone() {
-                                let name = self.parse_declarator(&decl.node);
+                                let name = self.parse_declarator_name(&decl.node);
                                 let loc = IRValue::Stack(count);
                                 count += 1;
                                 self.scope.var_map.insert(name, loc.clone());
@@ -625,7 +634,7 @@ mod c_compiler {
             count - 1
         }
 
-        fn parse_declarator(&self, decl: &Declarator) -> String {
+        fn parse_declarator_name(&self, decl: &Declarator) -> String {
             match &decl.kind.node {
                 DeclaratorKind::Identifier(node) => node.node.name.clone(),
                 _ => todo!("non trivial identifier functions"),
@@ -641,8 +650,10 @@ mod c_compiler {
                 Statement::Return(maybe_expr) => {
                     if let Some(expr) = maybe_expr {
                         let value = self.parse_expression(&expr.node);
+                        // TODO: check value's type == self.return_type
                         self.push(IROp::Return(value));
                     } else {
+                        // return type check not needed, as this is only reachable via UB
                         self.push(IROp::Return(IRValue::Immediate(0)));
                     };
                 }
@@ -931,7 +942,7 @@ mod c_compiler {
             // FIXME: this is horrific.
             // TODO: use type info
             for decl in decls.declarators.clone() {
-                let name = self.parse_declarator(&decl.node.declarator.node);
+                let name = self.parse_declarator_name(&decl.node.declarator.node);
                 let loc = if self.is_const {
                     match info.duration {
                         StorageDuration::Static => IRValue::StaticPsuedo {
@@ -952,7 +963,7 @@ mod c_compiler {
                             if self.file_builder.scope.var_map.contains_key(&name) {
                                 self.file_builder.scope.var_map.get(&name).unwrap().clone()
                             } else {
-                                // NOTE: this relies on a neat trick: if you reference a variable
+                                // NOTE: this relies on a c quirk: if you reference a variable
                                 // via `extern` before it has been declared, then it cannot be
                                 // `static`, it must be either (top level) `extern` or have no
                                 // keyword. Both of those are linkable, so we can just generate a
@@ -985,6 +996,7 @@ mod c_compiler {
                         is_const: true,
                         switch_case_info: None,
                         file_builder: self.file_builder,
+                        return_type: info.c_type
                     };
                     let init = if let Some(init) = decl.node.initializer {
                         builder.parse_initializer(&init.node)
@@ -1024,7 +1036,7 @@ mod c_compiler {
             }
         }
 
-        fn parse_expression(&mut self, expr: &Expression) -> IRValue {
+        fn parse_expression(&mut self, expr: &Expression) -> IRValue { // TODO: (IRValue, CType)
             match expr {
                 Expression::Constant(constant) => self.parse_constant(&constant.node),
                 Expression::UnaryOperator(unary_expr) => {
