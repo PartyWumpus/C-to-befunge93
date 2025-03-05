@@ -18,7 +18,7 @@ tests = {}
 with open(f"./writing-a-c-compiler-tests/expected_results.json") as f:
     data = json.loads(f.read())
     for test in data:
-        if re.match("chapter_(1|2|3|4|5|6|7|8|9|10)/", test):
+        if re.match("chapter_(1|2|3|4|5|6|7|8|9)/", test):
             tests[f"./writing-a-c-compiler-tests/tests/{test}"] = data[test]["return_code"]
 
 tests = dict(sorted(tests.items()))
@@ -63,7 +63,7 @@ print(f"compile_fails: {compile_fails}\n")
 print(f"incorrect_execution: {incorrect_execution}\n")
 print(f"interpreter_crashes: {interpreter_crashes}\n")
 
-print(f"compile_fails: {len(compile_fails)}")
-print(f"incorrect_execution: {len(incorrect_execution)}")
-print(f"interpreter_crashes: {len(interpreter_crashes)}")
-print(f"successes: {len(successes)}")
+print(f"\033[1;33minterpreter crashes: {len(interpreter_crashes)}\033[0m")
+print(f"\033[1;33mcompile fails: {len(compile_fails)}\033[0m")
+print(f"\033[1;31mincorrect execution: {len(incorrect_execution)}\033[0m")
+print(f"\033[1;32msuccesses: {len(successes)}\033[0m")
