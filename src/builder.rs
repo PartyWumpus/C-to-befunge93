@@ -582,6 +582,47 @@ impl OpBuilder {
         self.char('!');
     }
 
+    pub fn address_of(&mut self, a: &IRValue) {
+        match a {
+            IRValue::Stack(offset) => {
+                // TODO: optimize this
+                self.load_number(0b001 * 2_usize.pow(61) - *offset);
+                self.load_stack_ptr();
+                self.add(&IRValue::BefungeStack, &IRValue::BefungeStack);
+            }
+            IRValue::Data(position) => {
+                // TODO: fix load number so this just works
+                //self.load_number(0b001 * 2_usize.pow(61) + *position);
+                self.add(
+                    &IRValue::Immediate(0b011 * 2_usize.pow(61)),
+                    &IRValue::Immediate(*position),
+                );
+            }
+            IRValue::Register(_)
+            | IRValue::Psuedo { .. }
+            | IRValue::StaticPsuedo { .. }
+            | IRValue::Immediate(_)
+            | IRValue::BefungeStack => panic!("invalid location to get the address of"),
+        }
+    }
+
+    pub fn dereference(&mut self, a: &IRValue) {
+        self.get_val(a);
+        self.char(':');
+        self.current_stack_size += 1;
+
+        self.load_number(2_usize.pow(61));
+        self.modulo(&IRValue::BefungeStack, &IRValue::BefungeStack);
+
+        self.char('\\');
+
+        self.load_number(2_usize.pow(61));
+        self.divide(&IRValue::BefungeStack, &IRValue::BefungeStack);
+
+        self.char('g');
+        self.current_stack_size -= 1;
+    }
+
     pub fn add(&mut self, a: &IRValue, b: &IRValue) {
         self.get_two_reorderable(a, b);
         self.char('+');

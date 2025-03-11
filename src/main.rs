@@ -107,6 +107,8 @@ pub enum UnaryOp {
     Complement,
     Copy,
     BooleanNegate,
+    Dereference,
+    AddressOf,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -179,6 +181,8 @@ impl CodeGen {
                         UnaryOp::Minus => self.builder.unary_minus(a),
                         UnaryOp::Complement => self.builder.bitwise_complement(a),
                         UnaryOp::BooleanNegate => self.builder.boolean_negate(a),
+                        UnaryOp::Dereference => self.builder.dereference(a),
+                        UnaryOp::AddressOf => self.builder.address_of(a),
                     }
                     self.builder.copy(&IRValue::BefungeStack, out);
                 }
