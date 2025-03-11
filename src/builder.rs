@@ -262,10 +262,27 @@ impl OpBuilder {
     // actual values from 0 (0) to 63 (?)
     // then zeros from 64 (@) to 128
 
-    fn load_bit_stack(&mut self, a: &IRValue, alt: bool) {
+    // Puts sign bit and abs(a) on the bstack
+    fn absolute_value_and_sign_bit(&mut self, a: &IRValue) {
         self.get_val(a);
+
+        self.insert_inline_befunge(&[
+            r#"v    >>\ "#.to_owned(),
+            r#">:0`:|^0<"#.to_owned(),
+            r#"     >\-^"#.to_owned(),
+        ]);
+
+        self.current_stack_size += 1;
+    }
+
+    // Leaves sign bit on the stack!
+    fn load_bit_stack(&mut self, a: &IRValue, first: bool) {
+        self.get_val(a);
+
+        self.absolute_value_and_sign_bit(&IRValue::BefungeStack);
+
         // TODO: clobbers 97p and 87p, as well as writing to the special bit stacks
-        if alt {
+        if first {
             self.insert_inline_befunge(&[
                 r#":97p01-\>2%87p1+:87g\9p97gv>"#.to_owned(),
                 r#"        ^p79:\_v#-"?":\/2 < "#.to_owned(),
@@ -282,8 +299,12 @@ impl OpBuilder {
     }
 
     pub fn bit_and(&mut self, a: &IRValue, b: &IRValue) {
-        self.load_bit_stack(a, false);
-        self.load_bit_stack(b, true);
+        self.load_bit_stack(a, true);
+        self.load_bit_stack(b, false);
+        // Calculate sign for later: (a*b)*2-1
+        self.str(r"*2*1-");
+        self.current_stack_size -= 1;
+
         // For each bit, do a * b
         self.insert_inline_befunge(&[
             r#"097p"?">::9g\8g*97g2v>"#.to_owned(),
@@ -291,11 +312,19 @@ impl OpBuilder {
             r#"           > $  97g  ^"#.to_owned(),
         ]);
         self.current_stack_size += 1;
+
+        // Times by the sign from earlier
+        self.char('*');
+        self.current_stack_size -= 1;
     }
 
     pub fn bit_xor(&mut self, a: &IRValue, b: &IRValue) {
-        self.load_bit_stack(a, false);
-        self.load_bit_stack(b, true);
+        self.load_bit_stack(a, true);
+        self.load_bit_stack(b, false);
+        // Calculate sign for later: (a+b mod 2) * -2 + 1
+        self.str("+2%02-*1+");
+        self.current_stack_size -= 1;
+
         // For each bit, do (a + b) mod 2
         self.insert_inline_befunge(&[
             r#"097p"?">::9g\8g+2%97gv>"#.to_owned(),
@@ -303,11 +332,19 @@ impl OpBuilder {
             r#"           >   $  97g ^"#.to_owned(),
         ]);
         self.current_stack_size += 1;
+
+        // Times by the sign from earlier
+        self.char('*');
+        self.current_stack_size -= 1;
     }
 
     pub fn bit_or(&mut self, a: &IRValue, b: &IRValue) {
-        self.load_bit_stack(a, false);
-        self.load_bit_stack(b, true);
+        self.load_bit_stack(a, true);
+        self.load_bit_stack(b, false);
+        // If both one, -> 1 else -1
+        self.str(r"+1`2*1-");
+        self.current_stack_size -= 1;
+
         // For each bit, do not( (a + b) > 1 )
         self.insert_inline_befunge(&[
             r#"097p"?">::9g\8g+1\`!97v>"#.to_owned(),
@@ -315,26 +352,43 @@ impl OpBuilder {
             r#"           >   $  97g  ^"#.to_owned(),
         ]);
         self.current_stack_size += 1;
+
+        // Times by the sign from earlier
+        self.char('*');
+        self.current_stack_size -= 1;
     }
 
     pub fn bitshift_left(&mut self, a: &IRValue, b: &IRValue) {
         self.load_bit_stack(a, true);
+        // sign bit (0/1) to sign (-1/1)
+        self.str("2*1-");
         self.get_val(b);
         self.insert_inline_befunge(&[
             r#"097p:87p"?"+>:9g97g2*+97pv>"#.to_owned(),
             r#"            ^-1_v#+g78:  < "#.to_owned(),
             r#"                >   $ 97g ^"#.to_owned(),
         ]);
+
+        // Times by the sign from earlier
+        self.char('*');
+        self.current_stack_size -= 1;
     }
 
+    // NOTE: this does not match gcc.
+    // gcc does sign extension (extend with 1s) but too much effort
     pub fn bitshift_right(&mut self, a: &IRValue, b: &IRValue) {
         self.load_bit_stack(a, true);
+        // sign bit (0/1) to sign (-1/1)
+        self.str("2*1-");
         self.get_val(b);
         self.insert_inline_befunge(&[
             r#"097p:87p"?"\->:9g97g2*+97pv>"#.to_owned(),
             r#"             ^-1_v#-\g78: < "#.to_owned(),
             r#"                 >   $ 97g ^"#.to_owned(),
         ]);
+
+        // Times by the sign from earlier
+        self.char('*');
     }
 
     pub fn insert_inline_befunge(&mut self, lines: &[String]) {
@@ -483,7 +537,7 @@ impl OpBuilder {
 
     // TODO: add special optimizations
     fn get_two_ordered(&mut self, a: &IRValue, b: &IRValue) {
-        if matches!(b, IRValue::BefungeStack) {
+        if matches!(b, IRValue::BefungeStack) && !matches!(a, IRValue::BefungeStack) {
             self.get_val(b);
             self.get_val(a);
             self.char('\\');
