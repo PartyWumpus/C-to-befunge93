@@ -4,13 +4,13 @@
     clippy::needless_raw_strings
 )]
 
-use std::collections::HashMap;
-
 use builder::OpBuilder;
 use c_compiler::{
     function_id_mapping_pass, pseudo_removal_pass, sort_functions_pass, stack_size_reducer_pass,
     the_linkening, FileBuilder,
 };
+use colored::Colorize;
+use std::collections::HashMap;
 
 mod builder;
 
@@ -39,6 +39,7 @@ pub static POST_INIT_PRELUDE: &str = "0
  v  <";
 
 use clap::Parser;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Parser, Debug)]
 #[command(about="A C compiler that outputs befunge93 instead of assembly.", long_about = None)]
@@ -1442,7 +1443,50 @@ fn main() {
         println!("{c_source}\n");
     }
     let program = match FileBuilder::parse_c(&args.filename) {
-        Err(err) => panic!("Error occurred during parsing: {err:?}"),
+        Err(lang_c::driver::Error::PreprocessorError(err)) => {
+            panic!("Error occurred during preprocessing: {err:?}")
+        }
+        Err(lang_c::driver::Error::SyntaxError(err)) => {
+            let lang_c::driver::SyntaxError {
+                source,
+                line,
+                column,
+                offset,
+                expected,
+            } = err;
+
+            // sorry.
+            let relevant_line = source.lines().into_iter().collect::<Vec<_>>()[line - 1]
+                .chars()
+                .into_iter()
+                .collect::<Vec<char>>();
+            let real_pos = relevant_line[..column].iter().collect::<String>().width();
+            let line_marker = format!("{line} | ");
+
+            let formatted_line = format!(
+                "{line_marker}{}{}{}",
+                &relevant_line[..column - 1].iter().collect::<String>(),
+                String::from(relevant_line[column - 1]).underline(),
+                &relevant_line[column..].iter().collect::<String>()
+            );
+
+            let marker = (std::iter::repeat(" ")
+                .take(line_marker.width() + real_pos - 1)
+                .collect::<String>()
+                + "^")
+                .bold();
+
+            panic!(
+                r"
+{} During C parsing on line {line}.
+Expected one of {expected:?} at column {column}. 
+{formatted_line}
+{marker}
+",
+                "Error:".red().bold()
+            );
+            // end sorry.
+        }
         Ok(x) => x,
     };
     if args.verbose {
@@ -1524,7 +1568,7 @@ fn main() {
         ]);
     }
 
-    if !args.silent {
+    if !args.silent && args.outfile.is_none() {
         for line in out.clone() {
             println!("{line}");
         }
