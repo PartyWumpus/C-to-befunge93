@@ -76,11 +76,48 @@ pub enum IRValue {
     BefungeStack,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
 enum CType {
-    UnsignedInt,
-    UnsignedLong,
+    // TODO: add runtime wraparound for ints bigger than 2^15ish and smaller than -2^15ish
+    SignedInt,
+    SignedLong,
     Void,
+    Pointer(Box<CType>),
+    Array(Box<CType>, usize),
+}
+
+impl CType {
+    fn is_integer(&self) -> bool {
+        matches!(self, CType::SignedInt | CType::SignedLong)
+    }
+
+    fn get_common(type1: &CType, type2: &CType) -> CType {
+        // If the same, no conversions are needed
+        if type1 == type2 {
+            return type1.clone()
+        }
+
+        // TODO: array types!
+
+        // If one is a pointer, they must be the same (already checked) or one must be an integer
+        if matches!(type1, CType::Pointer(_)) {
+            if type2.is_integer() {
+                return CType::SignedInt;
+            } else {
+                panic!("Cannot coerce {type1:?} and {type2:?}")
+            }
+        }
+
+        if matches!(type2, CType::Pointer(_)) {
+            if type1.is_integer() {
+                return CType::SignedInt;
+            } else {
+                panic!("Cannot coerce {type1:?} and {type2:?}")
+            }
+        }
+
+        CType::SignedLong
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +131,7 @@ pub enum IROp {
     CondBranch(BranchType, String, IRValue),
     One(UnaryOp, IRValue, IRValue),
     Two(BinOp, IRValue, IRValue, IRValue),
+    Cast(CType, (IRValue, CType), IRValue),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -139,6 +177,7 @@ struct IRTopLevel {
     parameters: usize,
     ops: Vec<IROp>,
     is_initializer: bool,
+    return_type: Option<CType>,
 }
 
 struct CodeGen {
@@ -168,6 +207,9 @@ impl CodeGen {
                 }
                 IROp::Return(val) => {
                     self.builder.return_(val, func.stack_frame_size);
+                }
+                IROp::Cast(_ctype, _val, _output) => {
+                    // FIXME: Casts are currently no op, through the power of being incorrect
                 }
                 IROp::Label(label) => self.builder.label(label.to_owned()),
                 IROp::InlineBefunge(lines) => self.builder.insert_inline_befunge(lines),
@@ -228,15 +270,10 @@ mod c_compiler {
 
     use lang_c::{
         ast::{
-            AsmStatement, BinaryOperator, BinaryOperatorExpression, BlockItem, CallExpression,
-            CastExpression, ConditionalExpression, Constant, Declaration, DeclarationSpecifier,
-            Declarator, DeclaratorKind, DerivedDeclarator, DoWhileStatement, Expression,
-            ExternalDeclaration, ForInitializer, ForStatement, FunctionDefinition, GnuAsmOperand,
-            Identifier, IfStatement, Initializer, IntegerBase, Label, LabeledStatement, Statement,
-            StorageClassSpecifier, SwitchStatement, TypeSpecifier, UnaryOperator,
-            UnaryOperatorExpression, WhileStatement,
+            ArraySize, AsmStatement, BinaryOperator, BinaryOperatorExpression, BlockItem, CallExpression, CastExpression, ConditionalExpression, Constant, Declaration, DeclarationSpecifier, Declarator, DeclaratorKind, DerivedDeclarator, DoWhileStatement, Expression, ExternalDeclaration, ForInitializer, ForStatement, FunctionDefinition, GnuAsmOperand, Identifier, IfStatement, Initializer, Integer, IntegerBase, IntegerSize, IntegerSuffix, Label, LabeledStatement, SpecifierQualifier, Statement, StorageClassSpecifier, SwitchStatement, TypeName, TypeSpecifier, UnaryOperator, UnaryOperatorExpression, WhileStatement
         },
-        driver::{parse, Config},
+        driver::{parse, Config, Flavor},
+        print,
         span::Node,
     };
 
@@ -283,13 +320,14 @@ mod c_compiler {
     pub struct FileBuilder {
         count: usize,
         scope: ScopeInfo,
+        // TODO: make hashmap so can be searched through easier
         funcs: Vec<IRTopLevel>,
     }
 
     // TODO: scope system will need a bit of a refactor to make unshadowing of globals possible
     #[derive(Debug, Clone, Default)]
     struct ScopeInfo {
-        var_map: HashMap<String, IRValue>,
+        var_map: HashMap<String, (IRValue, CType)>,
     }
 
     impl FileBuilder {
@@ -300,6 +338,8 @@ mod c_compiler {
                 funcs: vec![],
             };
             let config = Config::default();
+            // TODO: consider
+            // config.flavor = Flavor::StdC11;
             let parsed = parse(&config, file)?;
             for obj in &parsed.unit.0 {
                 match &obj.node {
@@ -318,7 +358,7 @@ mod c_compiler {
         }
 
         fn parse_function(&mut self, func: &FunctionDefinition) -> IRTopLevel {
-            let info = DeclarationInfo::from(&func.specifiers);
+            let info = DeclarationInfo::from_decl(&func.specifiers);
             let mut builder = TopLevelBuilder {
                 ops: vec![],
                 count: self.count,
@@ -345,13 +385,14 @@ mod c_compiler {
                 ops: builder.ops,
                 parameters: param_count,
                 is_initializer: false,
+                return_type: Some(builder.return_type),
                 stack_frame_size: builder.count, // NOTE: this is a 'worst case' value,
                                                  // and should be recalculated in a later pass
             }
         }
 
         fn parse_top_level_declaration(&mut self, decl: &Declaration) -> IRTopLevel {
-            let info = DeclarationInfo::from(&decl.specifiers);
+            let info = DeclarationInfo::from_decl(&decl.specifiers);
             let mut builder = TopLevelBuilder {
                 ops: vec![],
                 count: self.count,
@@ -378,6 +419,7 @@ mod c_compiler {
                 ops: builder.ops,
                 parameters: 0,
                 is_initializer: true,
+                return_type: Some(builder.return_type),
                 stack_frame_size: builder.count, // NOTE: this is a 'worst case' value,
                                                  // and should be recalculated in a later pass
             }
@@ -406,8 +448,12 @@ mod c_compiler {
                     func(b);
                     func(out);
                 }
+                IROp::Cast(_, (a, _), out) => {
+                    func(a);
+                    func(out);
+                }
                 _ => (),
-            }
+            };
         }
     }
 
@@ -542,20 +588,88 @@ mod c_compiler {
     }
 
     impl CType {
-        fn from(types: &[&Node<TypeSpecifier>]) -> Self {
+        fn from_specifiers(types: &[&Node<TypeSpecifier>]) -> Self {
             let types = types.iter().map(|x| x.node.clone()).collect::<Vec<_>>();
             match types[..] {
                 [] => panic!("No type specifiers?"),
                 [TypeSpecifier::Int | TypeSpecifier::Signed]
-                | [TypeSpecifier::Signed, TypeSpecifier::Int] => Self::UnsignedInt,
+                | [TypeSpecifier::Signed, TypeSpecifier::Int] => Self::SignedInt,
                 [TypeSpecifier::Long]
                 | [TypeSpecifier::Long, TypeSpecifier::Int]
                 | [TypeSpecifier::Signed, TypeSpecifier::Long, TypeSpecifier::Int] => {
-                    Self::UnsignedLong
+                    Self::SignedLong
                 }
                 [TypeSpecifier::Void] => Self::Void,
                 _ => panic!("Unknown type: {types:?}"),
             }
+        }
+
+fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
+            let mut c_types = vec![];
+            for specifier in specifiers {
+                match &specifier.node {
+                    SpecifierQualifier::TypeSpecifier(spec) => c_types.push(spec),
+                    // Consider implementing just volatile
+                    SpecifierQualifier::TypeQualifier(_) => {
+                        println!("WARNING: All type qualifiers are ignored {specifier:?}");
+                    }
+                    SpecifierQualifier::Extension(_) => println!(
+                        "WARNING: GNU declaration specifier extensions are ignored {specifier:?}"
+                    ),
+                };
+            }
+
+            CType::from_specifiers(&c_types)
+        }
+
+
+        fn from_declarator(declarator: &Declarator, base_type: &CType) -> Self {
+            let mut out = base_type.clone();
+            // TODO: follow
+            match &declarator.kind.node {
+                DeclaratorKind::Identifier(_) | DeclaratorKind::Abstract => (),
+                DeclaratorKind::Declarator(nested_decl) => {
+                    out = Self::from_declarator(&nested_decl.node, &out);
+                }
+            }
+
+            for modifier in declarator.derived.iter().rev() {
+                match &modifier.node {
+                    DerivedDeclarator::Pointer(qualifiers) => {
+                        assert_eq!(qualifiers.len(), 0, "Pointer qualifiers not yet supported");
+                        out = CType::Pointer(Box::new(out));
+                    }
+                    DerivedDeclarator::Array(array_decl) => {
+                        assert_eq!(
+                            array_decl.node.qualifiers.len(),
+                            0,
+                            "Array qualifiers not yet supported"
+                        );
+                        let size = match &array_decl.node.size {
+                            ArraySize::VariableExpression(expr) => {
+                                match &expr.node {
+                                    Expression::Constant(val) => match &val.node {
+                                        Constant::Float(_) => panic!("Non integer array length"),
+                                        Constant::Integer(int) => integer_constant_to_usize(&int),
+                                        Constant::Character(str) => char_constant_to_usize(str),
+                                    },
+                                    _ => panic!("Non immediate constant array length (VLAs are scary, and i can't handle constant expressions yet)"),
+                                }
+
+                            }
+                            ArraySize::StaticExpression(..) => panic!("I don't even know what a 'static expression' array size means, sorry"),
+                            ArraySize::VariableUnknown | ArraySize::Unknown => todo!("Array size must be manually specified")
+                        };
+                        out = CType::Array(Box::new(out), size);
+                        panic!("Arrays not yet implemented");
+                    }
+                    DerivedDeclarator::Function(_) | DerivedDeclarator::KRFunction(_) => {
+                        panic!("func declarator in not the func declarator parser??")
+                    }
+                    DerivedDeclarator::Block(_) => panic!("GNU block types are not supported"),
+                }
+            }
+            return out;
         }
     }
 
@@ -573,7 +687,7 @@ mod c_compiler {
     }
 
     impl DeclarationInfo {
-        fn from(specifiers: &[Node<DeclarationSpecifier>]) -> Self {
+        fn from_decl(specifiers: &[Node<DeclarationSpecifier>]) -> Self {
             let mut c_types = vec![];
             let mut duration: StorageDuration = StorageDuration::Default;
             // this allows for loads of invalid code, like
@@ -608,27 +722,27 @@ mod c_compiler {
 
             Self {
                 duration,
-                c_type: CType::from(&c_types),
+                c_type: CType::from_specifiers(&c_types),
             }
-        }
+        } 
     }
 
     impl TopLevelBuilder<'_> {
         fn parse_func_declarator(&mut self, decl: &Declarator) -> usize {
-            let mut count = 1;
+            let mut count = 0;
             for node in &decl.derived {
                 match &node.node {
                     DerivedDeclarator::Function(func_decl) => {
                         // we don't care about func_decl.node.ellipsis
                         for param in &func_decl.node.parameters {
                             // TODO: deal with types in decls
-                            let _info = DeclarationInfo::from(&param.node.specifiers);
+                            let info = DeclarationInfo::from_decl(&param.node.specifiers);
 
                             if let Some(decl) = param.node.declarator.clone() {
                                 let name = self.parse_declarator_name(&decl.node);
-                                let loc = IRValue::Stack(count);
+                                let loc = IRValue::Stack(count + 1);
                                 count += 1;
-                                self.scope.var_map.insert(name, loc.clone());
+                                self.scope.var_map.insert(name, (loc, info.c_type));
                             }
                         }
                     }
@@ -636,12 +750,13 @@ mod c_compiler {
                     _ => panic!("non func declarator in the func declarator parser??"),
                 }
             }
-            count - 1
+            return count;
         }
 
         fn parse_declarator_name(&self, decl: &Declarator) -> String {
             match &decl.kind.node {
                 DeclaratorKind::Identifier(node) => node.node.name.clone(),
+                DeclaratorKind::Declarator(node) => self.parse_declarator_name(&node.node),
                 _ => todo!("non trivial identifier functions"),
             }
         }
@@ -654,9 +769,9 @@ mod c_compiler {
             match stmt {
                 Statement::Return(maybe_expr) => {
                     if let Some(expr) = maybe_expr {
-                        let value = self.parse_expression(&expr.node);
-                        // TODO: check value's type == self.return_type
-                        self.push(IROp::Return(value));
+                        let (value, ctype) = self.parse_expression(&expr.node);
+                        let out = self.convert_to((value, ctype), self.return_type.clone());
+                        self.push(IROp::Return(out));
                     } else {
                         // return type check not needed, as this is only reachable via UB
                         self.push(IROp::Return(IRValue::Immediate(0)));
@@ -715,8 +830,8 @@ mod c_compiler {
                 let case_value = self.parse_expression(&expr.node);
                 self.push(IROp::Two(
                     BinOp::Equal,
-                    case_value,
-                    condition.clone(),
+                    case_value.0,
+                    condition.0.clone(),
                     tmp.clone(),
                 ));
                 let lbl = self.generate_switch_case_label(id, i).0;
@@ -798,7 +913,7 @@ mod c_compiler {
 
         fn parse_asm_operand(&mut self, op: &GnuAsmOperand, input: bool) {
             if let Some(output_name) = &op.symbolic_name {
-                let c_value = self.parse_expression(&op.variable_name.node);
+                let (c_value, ctype) = self.parse_expression(&op.variable_name.node);
                 let asm_value = Self::parse_asm_symbolic(&output_name.node.name);
                 if input {
                     self.push(IROp::One(UnaryOp::Copy, c_value, asm_value));
@@ -848,7 +963,7 @@ mod c_compiler {
             let (loop_end_lbl_str, loop_end_lbl) = self.generate_loop_break_label();
 
             self.push(loop_lbl);
-            let cond = self.parse_expression(&stmt.expression.node);
+            let (cond, _cond_type) = self.parse_expression(&stmt.expression.node);
             self.push(IROp::CondBranch(BranchType::Zero, loop_end_lbl_str, cond));
             self.parse_statement(&stmt.statement.node);
             self.push(IROp::AlwaysBranch(loop_lbl_str));
@@ -869,7 +984,7 @@ mod c_compiler {
 
             self.push(loop_lbl);
             self.parse_statement(&stmt.statement.node);
-            let cond = self.parse_expression(&stmt.expression.node);
+            let (cond, _cond_type) = self.parse_expression(&stmt.expression.node);
             self.push(IROp::CondBranch(BranchType::NonZero, loop_lbl_str, cond));
             self.push(loop_end_lbl);
             self.loop_id = prev_id;
@@ -890,7 +1005,7 @@ mod c_compiler {
             self.parse_for_initializer(&stmt.initializer.node);
             self.push(start_lbl);
             if let Some(cond) = &stmt.condition {
-                let cond = self.parse_expression(&cond.node);
+                let (cond, _cond_type) = self.parse_expression(&cond.node);
                 self.push(IROp::CondBranch(BranchType::Zero, break_lbl_str, cond));
             }
             self.parse_statement(&stmt.statement.node);
@@ -917,7 +1032,7 @@ mod c_compiler {
         }
 
         fn parse_if(&mut self, if_stmt: &IfStatement) {
-            let cond = self.parse_expression(&if_stmt.condition.node);
+            let (cond, _cond_type) = self.parse_expression(&if_stmt.condition.node);
             let (else_str, else_label) = self.generate_label("else");
             let (end_str, end_label) = self.generate_label("else");
             self.push(IROp::CondBranch(BranchType::Zero, else_str, cond));
@@ -943,11 +1058,12 @@ mod c_compiler {
         }
 
         fn parse_declarations(&mut self, decls: &Declaration) {
-            let info = DeclarationInfo::from(&decls.specifiers);
+            let info = DeclarationInfo::from_decl(&decls.specifiers);
             // FIXME: this is horrific.
             // TODO: use type info
-            for decl in decls.declarators.clone() {
+            for decl in &decls.declarators {
                 let name = self.parse_declarator_name(&decl.node.declarator.node);
+                let ctype = CType::from_declarator(&decl.node.declarator.node, &info.c_type);
                 let loc = if self.is_const {
                     match info.duration {
                         StorageDuration::Static => IRValue::StaticPsuedo {
@@ -966,7 +1082,13 @@ mod c_compiler {
                         // Grab from scope outside function (note init is not allowed here)
                         StorageDuration::Extern => {
                             if self.file_builder.scope.var_map.contains_key(&name) {
-                                self.file_builder.scope.var_map.get(&name).unwrap().clone()
+                                self.file_builder
+                                    .scope
+                                    .var_map
+                                    .get(&name)
+                                    .unwrap()
+                                    .0
+                                    .clone()
                             } else {
                                 // NOTE: this relies on a c quirk: if you reference a variable
                                 // via `extern` before it has been declared, then it cannot be
@@ -980,7 +1102,7 @@ mod c_compiler {
                                 self.file_builder
                                     .scope
                                     .var_map
-                                    .insert(name.clone(), j.clone());
+                                    .insert(name.clone(), (j.clone(), ctype.clone()));
                                 j
                             }
                         }
@@ -989,7 +1111,9 @@ mod c_compiler {
                         StorageDuration::Default => self.generate_named_pseudo(name.clone()),
                     }
                 };
-                self.scope.var_map.insert(name, loc.clone());
+                self.scope
+                    .var_map
+                    .insert(name, (loc.clone(), ctype.clone()));
 
                 if !self.is_const && matches!(info.duration, StorageDuration::Static) {
                     let mut builder = TopLevelBuilder {
@@ -1001,14 +1125,16 @@ mod c_compiler {
                         is_const: true,
                         switch_case_info: None,
                         file_builder: self.file_builder,
-                        return_type: info.c_type
+                        return_type: ctype.clone(),
                     };
-                    let init = if let Some(init) = decl.node.initializer {
-                        builder.parse_initializer(&init.node)
+                    let init = if let Some(init) = &decl.node.initializer {
+                        let (rhs, rhs_type) = builder.parse_initializer(&init.node);
+                        builder.convert_to((rhs, rhs_type), ctype)
                     } else {
                         IRValue::Immediate(0)
                     };
 
+                    // NOTE: TYPE HERE WILL BE ctype !
                     builder.push(IROp::One(UnaryOp::Copy, init, loc));
                     // FIXME: bad bad bad, just have a seperate global counter
                     self.count = builder.count;
@@ -1018,11 +1144,13 @@ mod c_compiler {
                         parameters: 0,
                         is_initializer: true,
                         stack_frame_size: builder.count,
+                        return_type: Some(builder.return_type),
                     };
                     self.file_builder.funcs.push(init);
                 } else {
-                    let init = if let Some(init) = decl.node.initializer {
-                        self.parse_initializer(&init.node)
+                    let init = if let Some(init) = &decl.node.initializer {
+                        let (rhs, rhs_type) = self.parse_initializer(&init.node);
+                        self.convert_to((rhs, rhs_type), ctype)
                     } else if self.is_const {
                         IRValue::Immediate(0)
                     } else {
@@ -1034,14 +1162,23 @@ mod c_compiler {
             }
         }
 
-        fn parse_initializer(&mut self, init: &Initializer) -> IRValue {
+        fn parse_type_name(&self, type_name: &TypeName) -> CType {
+            // NOTE: type_name.declarator.kind is always Abstract
+            let ctype = CType::from_qualifiers(&type_name.specifiers);
+            if let Some(declarator) = &type_name.declarator {
+            return CType::from_declarator(&declarator.node, &ctype)
+            }
+            ctype
+        }
+
+        fn parse_initializer(&mut self, init: &Initializer) -> (IRValue, CType) {
             match init {
                 Initializer::Expression(expr) => self.parse_expression(&expr.node),
                 Initializer::List(_) => todo!("lists in initializers"),
             }
         }
 
-        fn parse_expression(&mut self, expr: &Expression) -> IRValue { // TODO: (IRValue, CType)
+        fn parse_expression(&mut self, expr: &Expression) -> (IRValue, CType) {
             match expr {
                 Expression::Constant(constant) => self.parse_constant(&constant.node),
                 Expression::UnaryOperator(unary_expr) => {
@@ -1079,47 +1216,89 @@ mod c_compiler {
             }
         }
 
-        fn parse_cast(&mut self, node: &CastExpression) -> IRValue {
-            todo!("Cast {node:?}")
+        fn parse_cast(&mut self, cast: &CastExpression) -> (IRValue, CType) {
+            let (expr, expr_type) = self.parse_expression(&cast.expression.node);
+            let out_type = self.parse_type_name(&cast.type_name.node);
+            let out = self.generate_pseudo();
+            self.push(IROp::Cast(out_type.clone(), (expr, expr_type), out.clone()));
+            (out, out_type)
         }
 
-        fn parse_ternary(&mut self, node: &ConditionalExpression) -> IRValue {
+        fn parse_ternary(&mut self, node: &ConditionalExpression) -> (IRValue, CType) {
             let out = self.generate_pseudo();
             let (else_str, else_lbl) = self.generate_label("else");
             let (end_str, end_lbl) = self.generate_label("end");
 
-            let cond = self.parse_expression(&node.condition.node);
+            let (cond, _cond_type) = self.parse_expression(&node.condition.node);
             self.push(IROp::CondBranch(BranchType::Zero, else_str, cond));
-            let temp = self.parse_expression(&node.then_expression.node);
-            self.push(IROp::One(UnaryOp::Copy, temp, out.clone()));
+            let (temp1, temp1_type) = self.parse_expression(&node.then_expression.node);
+            self.push(IROp::One(UnaryOp::Copy, temp1, out.clone()));
             self.push(IROp::AlwaysBranch(end_str));
             self.push(else_lbl);
-            let temp = self.parse_expression(&node.else_expression.node);
-            self.push(IROp::One(UnaryOp::Copy, temp, out.clone()));
+            let (temp2, temp2_type) = self.parse_expression(&node.else_expression.node);
+            self.push(IROp::One(UnaryOp::Copy, temp2, out.clone()));
             self.push(end_lbl);
-            out
+
+            assert_eq!(temp2_type, temp1_type);
+            (out, temp2_type)
         }
 
-        fn parse_call(&mut self, expr: &CallExpression) -> IRValue {
+        fn parse_call(&mut self, expr: &CallExpression) -> (IRValue, CType) {
+            // TODO: check args are all the correct types
             let args = expr
                 .arguments
                 .iter()
-                .map(|expr| self.parse_expression(&expr.node))
+                .map(|expr| self.parse_expression(&expr.node).0)
                 .collect::<Vec<IRValue>>();
+
+            let mut ctype = None;
             match &expr.callee.node {
                 Expression::Identifier(ident) => {
+                    let name = ident.node.name.clone();
+                    // TODO: remove jank iterating :( (who up hashing they map!!!)
+                    // FIXME: DOESN'T SUPPORT RECURSION!
+                    for func in &self.file_builder.funcs {
+                        if func.name == name {
+                            assert!(
+                                func.return_type.is_some(),
+                                "Function is missing return type?"
+                            );
+                            ctype = func.return_type.clone();
+                        }
+                    }
+                    assert!(ctype.is_some(), "Called function not found");
                     self.push(IROp::Call(ident.node.name.clone(), args));
                 }
                 _ => todo!("non trival ident calls"),
             };
             let out = self.generate_pseudo();
             self.push(IROp::One(UnaryOp::Copy, IRValue::Register(0), out.clone()));
-            out
+            (out, ctype.unwrap())
         }
 
-        fn parse_unary_expression(&mut self, expr: &UnaryOperatorExpression) -> IRValue {
-            let val = self.parse_expression(&expr.operand.node);
+        fn parse_unary_expression(&mut self, expr: &UnaryOperatorExpression) -> (IRValue, CType) {
+            let (val, val_type) = self.parse_expression(&expr.operand.node);
             let out = self.generate_pseudo();
+
+            match expr.operator.node {
+                UnaryOperator::Address => {
+                    // FIXME: check if is lvalue!!
+                    // ie &25 is invalid
+                    self.push(IROp::One(UnaryOp::AddressOf, val, out.clone()));
+                    return (out, CType::Pointer(Box::new(val_type)));
+                }
+                UnaryOperator::Indirection => {
+                    match val_type {
+                        CType::Pointer(pointee_type) => {
+                            self.push(IROp::One(UnaryOp::Dereference, val, out.clone()));
+                            return (out, *pointee_type);
+                        }
+                        _ => panic!("Cannot dereference non-pointers")
+                    }
+                }
+                _ => (),
+            };
+
             match expr.operator.node {
                 UnaryOperator::Complement => {
                     self.push(IROp::One(UnaryOp::Complement, val, out.clone()));
@@ -1127,6 +1306,8 @@ mod c_compiler {
                 UnaryOperator::Minus => self.push(IROp::One(UnaryOp::Minus, val, out.clone())),
                 UnaryOperator::Negate => {
                     self.push(IROp::One(UnaryOp::BooleanNegate, val, out.clone()));
+                    // ! is special, always returns Int
+                    return (out, CType::SignedInt);
                 }
                 UnaryOperator::Plus => self.push(IROp::One(UnaryOp::Copy, val, out.clone())), // silly
 
@@ -1138,7 +1319,7 @@ mod c_compiler {
                         IRValue::Immediate(1),
                         val.clone(),
                     ));
-                    return val;
+                    return (val, val_type);
                 }
                 // --x, decrement and evaluate to x-1
                 UnaryOperator::PreDecrement => {
@@ -1148,7 +1329,7 @@ mod c_compiler {
                         IRValue::Immediate(1),
                         val.clone(),
                     ));
-                    return val;
+                    return (val, val_type);
                 }
 
                 // x++, increment and evaluate to x
@@ -1173,17 +1354,17 @@ mod c_compiler {
                 }
 
                 // Memory stuff
-                UnaryOperator::Address => todo!("Address {expr:?}"),
-                UnaryOperator::Indirection => todo!("Indirection {expr:?}"),
+                UnaryOperator::Address | UnaryOperator::Indirection => unreachable!(),
             };
-            out
+
+            (out, val_type)
         }
 
-        fn parse_binary_expression(&mut self, expr: &BinaryOperatorExpression) -> IRValue {
+        fn parse_binary_expression(&mut self, expr: &BinaryOperatorExpression) -> (IRValue, CType) {
             let (skip_label_str, skip_label) = self.generate_label("logical_skip");
             let (end_label_str, end_label) = self.generate_label("logical_end");
 
-            let lhs = self.parse_expression(&expr.lhs.node);
+            let (mut lhs, lhs_type) = self.parse_expression(&expr.lhs.node);
 
             if matches!(expr.operator.node, BinaryOperator::LogicalAnd) {
                 self.push(IROp::CondBranch(
@@ -1200,7 +1381,7 @@ mod c_compiler {
                 ));
             }
 
-            let rhs = self.parse_expression(&expr.rhs.node);
+            let (mut rhs, rhs_type) = self.parse_expression(&expr.rhs.node);
 
             if matches!(expr.operator.node, BinaryOperator::LogicalAnd) {
                 self.push(IROp::CondBranch(
@@ -1227,7 +1408,7 @@ mod c_compiler {
                 self.ops
                     .push(IROp::One(UnaryOp::Copy, IRValue::Immediate(0), out.clone()));
                 self.push(end_label);
-                return out;
+                return (out, CType::SignedInt);
             };
 
             if matches!(expr.operator.node, BinaryOperator::LogicalOr) {
@@ -1240,10 +1421,54 @@ mod c_compiler {
                 self.ops
                     .push(IROp::One(UnaryOp::Copy, IRValue::Immediate(1), out.clone()));
                 self.push(end_label);
-                return out;
+                return (out, CType::SignedInt);
             };
 
             let out = self.generate_pseudo();
+            let out_type = match expr.operator.node {
+                BinaryOperator::AssignPlus
+                | BinaryOperator::AssignMinus
+                | BinaryOperator::AssignMultiply
+                | BinaryOperator::AssignDivide
+                | BinaryOperator::AssignModulo
+                | BinaryOperator::AssignShiftLeft
+                | BinaryOperator::AssignShiftRight
+                | BinaryOperator::AssignBitwiseAnd
+                | BinaryOperator::AssignBitwiseXor
+                | BinaryOperator::AssignBitwiseOr
+                | BinaryOperator::Assign => {
+                    // on assignment, rhs is casted to lhs
+                    rhs = self.convert_to((rhs, rhs_type), lhs_type.clone());
+                    lhs_type
+                }
+
+                BinaryOperator::Less
+                | BinaryOperator::Greater
+                | BinaryOperator::LessOrEqual
+                | BinaryOperator::GreaterOrEqual
+                | BinaryOperator::Equals
+                | BinaryOperator::NotEquals
+                | BinaryOperator::Plus
+                | BinaryOperator::Minus
+                | BinaryOperator::Multiply
+                | BinaryOperator::Divide
+                | BinaryOperator::Modulo
+                | BinaryOperator::ShiftLeft
+                | BinaryOperator::ShiftRight
+                | BinaryOperator::BitwiseAnd
+                | BinaryOperator::BitwiseXor
+                | BinaryOperator::BitwiseOr => {
+                    let common_type = CType::get_common(&lhs_type, &rhs_type);
+                    lhs = self.convert_to((lhs, lhs_type), common_type.clone());
+                    rhs = self.convert_to((rhs, rhs_type), common_type.clone());
+                    common_type
+                }
+
+                BinaryOperator::Index => todo!(),
+                // dealt with higher up
+                BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr => unreachable!(),
+            };
+
             let lhs2 = lhs.clone();
             self.push(match expr.operator.node {
                 BinaryOperator::Plus | BinaryOperator::AssignPlus => {
@@ -1292,10 +1517,10 @@ mod c_compiler {
 
                 BinaryOperator::Assign => {
                     self.push(IROp::One(UnaryOp::Copy, rhs.clone(), lhs));
-                    return rhs;
+                    return (rhs, out_type);
                 }
 
-                // FREAKY SHORT CIRCUITING OPS!
+                // dealt with higher up
                 BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr => unreachable!(),
             });
 
@@ -1314,22 +1539,65 @@ mod c_compiler {
             ) {
                 self.push(IROp::One(UnaryOp::Copy, out.clone(), lhs2));
             };
-            out
+            (out, out_type)
         }
 
         #[allow(clippy::from_str_radix_10)]
-        fn parse_constant(&self, val: &Constant) -> IRValue {
+        fn parse_constant(&self, val: &Constant) -> (IRValue, CType) {
+            // TODO: add checks for size to stop overflow or smth
             match val {
                 Constant::Integer(int) => {
-                    let x: usize = match int.base {
-                        IntegerBase::Decimal => usize::from_str_radix(&int.number, 10).unwrap(),
-                        IntegerBase::Octal => usize::from_str_radix(&int.number, 8).unwrap(),
-                        IntegerBase::Hexadecimal => usize::from_str_radix(&int.number, 16).unwrap(),
-                        IntegerBase::Binary => usize::from_str_radix(&int.number, 2).unwrap(),
+                    let x = integer_constant_to_usize(int);
+                    let ctype = match int.suffix {
+                        IntegerSuffix {
+                            size: IntegerSize::Int,
+                            unsigned: false,
+                            ..
+                        } => CType::SignedInt,
+                        IntegerSuffix {
+                            size: IntegerSize::Int,
+                            unsigned: true,
+                            ..
+                        } => todo!("unsigned int constants"),
+                        IntegerSuffix {
+                            size: IntegerSize::Long,
+                            unsigned: false,
+                            ..
+                        } => CType::SignedLong,
+                        IntegerSuffix {
+                            size: IntegerSize::Long,
+                            unsigned: true,
+                            ..
+                        } => todo!("unsigned long constants"),
+                        IntegerSuffix {
+                            size: IntegerSize::LongLong,
+                            unsigned: false,
+                            ..
+                        } => todo!("signed long long constants"),
+                        IntegerSuffix {
+                            size: IntegerSize::LongLong,
+                            unsigned: true,
+                            ..
+                        } => todo!("unsigned long long constants"),
                     };
-                    IRValue::Immediate(x)
+                    (IRValue::Immediate(x), ctype)
+                }
+                Constant::Character(str) => {
+                    let x = char_constant_to_usize(str);
+                    // NOTE: This is not a typo, char literals are ints.
+                    (IRValue::Immediate(x), CType::SignedInt)
                 }
                 _ => todo!("Non integer constants {:?}", val),
+            }
+        }
+
+        fn convert_to(&mut self, input: (IRValue, CType), ctype: CType) -> IRValue {
+            if input.1 == ctype {
+                input.0
+            } else {
+                let out = self.generate_pseudo();
+                self.push(IROp::Cast(ctype.clone(), input, out.clone()));
+                out
             }
         }
 
@@ -1419,6 +1687,26 @@ mod c_compiler {
             .map(|line| line.trim_matches(|x| x == '"').to_owned())
             .collect()
     }
+
+    #[allow(clippy::from_str_radix_10)]
+    fn integer_constant_to_usize(int: &Integer) -> usize {
+        match int.base {
+            IntegerBase::Decimal => usize::from_str_radix(&int.number, 10).unwrap(),
+            IntegerBase::Octal => usize::from_str_radix(&int.number, 8).unwrap(),
+            IntegerBase::Hexadecimal => usize::from_str_radix(&int.number, 16).unwrap(),
+            IntegerBase::Binary => usize::from_str_radix(&int.number, 2).unwrap(),
+        }
+    }
+
+    fn char_constant_to_usize(str: &String) -> usize {
+        assert_eq!(str.chars().count(), 3, "Char constant must be length 1");
+        let mut chars = str.chars();
+        assert_eq!(chars.next().unwrap(), '\'');
+        let out = chars.next().unwrap() as usize;
+        assert_eq!(chars.next().unwrap(), '\'');
+
+        out
+    }
 }
 
 fn print_ir(ir: &Vec<IRTopLevel>) {
@@ -1474,7 +1762,8 @@ fn main() {
                 .take(line_marker.width() + real_pos - 1)
                 .collect::<String>()
                 + "^")
-                .bold();
+                .bold()
+                .red();
 
             panic!(
                 r"
@@ -1497,17 +1786,26 @@ Expected one of {expected:?} at column {column}.
     let mut program = the_linkening(vec![
         program,
         /*vec![IRTopLevel {
-            ops: vec![IROp::One(
+            ops: vec![
+                IROp::One(
                 UnaryOp::Copy,
                 IRValue::Immediate(5),
-                IRValue::StaticPsuedo {
-                    name: "j".to_string(),
-                    linkable: true,
-                },
-            )],
-            name: "".to_string(),
-            stack_frame_size: 1,
-            is_initializer: true,
+                IRValue::Stack(1)
+            ),
+            IROp::One(
+                UnaryOp::AddressOf,
+                IRValue::Stack(1),
+                IRValue::Stack(2)
+            ),
+            IROp::One(
+                UnaryOp::Dereference,
+                IRValue::Stack(2),
+                IRValue::Stack(3)
+            )
+            ],
+            name: "main".to_string(),
+            stack_frame_size: 3,
+            is_initializer: false,
             parameters: 0,
         }],*/
     ]);

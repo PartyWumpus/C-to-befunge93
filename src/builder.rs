@@ -602,7 +602,7 @@ impl OpBuilder {
             | IRValue::Psuedo { .. }
             | IRValue::StaticPsuedo { .. }
             | IRValue::Immediate(_)
-            | IRValue::BefungeStack => panic!("invalid location to get the address of"),
+            | IRValue::BefungeStack => panic!("{a:?} is an invalid location to get the address of"),
         }
     }
 
