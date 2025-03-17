@@ -499,7 +499,7 @@ impl OpBuilder {
             rows.push(row);
         }
         rows.iter()
-            .map(|row| row.iter().collect::<String>())
+            .map(|row| row.iter().collect::<String>().trim_end().to_owned())
             .collect()
     }
 }

@@ -1,16 +1,21 @@
 #![allow(
     clippy::needless_pass_by_ref_mut,
     clippy::needless_raw_string_hashes,
-    clippy::needless_raw_strings
+    clippy::needless_raw_strings,
+    clippy::unused_self
 )]
 
 use builder::OpBuilder;
 use c_compiler::{
     function_id_mapping_pass, pseudo_removal_pass, sort_functions_pass, stack_size_reducer_pass,
-    the_linkening, FileBuilder,
+    the_linkening, CompilerError, FileBuilder, IRGenerationError,
 };
-use colored::Colorize;
+use lang_c::print;
 use std::collections::HashMap;
+use std::fmt::Display;
+use std::process::exit;
+use thiserror::Error;
+use walkdir::WalkDir;
 
 mod builder;
 
@@ -35,11 +40,10 @@ v $ <
 pub static POST_INIT_PRELUDE: &str = "0
 1
 >v
- >:#v_  $$ 20g . @
+ >:#v_  $$ 55+ , 20g . @
  v  <";
 
 use clap::Parser;
-use unicode_width::UnicodeWidthStr;
 
 #[derive(Parser, Debug)]
 #[command(about="A C compiler that outputs befunge93 instead of assembly.", long_about = None)]
@@ -52,6 +56,10 @@ struct Args {
     verbose: bool,
 
     /// Don't print the output program
+    #[arg(short, long)]
+    quiet: bool,
+
+    /// Don't output any errors
     #[arg(short, long)]
     silent: bool,
 
@@ -84,6 +92,15 @@ enum CType {
     Void,
     Pointer(Box<CType>),
     Array(Box<CType>, usize),
+    Function(Vec<CType>, Box<CType>),
+}
+
+#[derive(Error, Debug)]
+struct InvalidCoercionError(CType, CType);
+impl Display for InvalidCoercionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Invalid coersion between {:?} and {:?}", self.0, self.1)
+    }
 }
 
 impl CType {
@@ -91,32 +108,32 @@ impl CType {
         matches!(self, CType::SignedInt | CType::SignedLong)
     }
 
-    fn get_common(type1: &CType, type2: &CType) -> CType {
+    fn get_common(type1: &CType, type2: &CType) -> Result<CType, InvalidCoercionError> {
         // If the same, no conversions are needed
         if type1 == type2 {
-            return type1.clone()
+            return Ok(type1.clone());
         }
 
         // TODO: array types!
 
         // If one is a pointer, they must be the same (already checked) or one must be an integer
         if matches!(type1, CType::Pointer(_)) {
-            if type2.is_integer() {
-                return CType::SignedInt;
+            return if type2.is_integer() {
+                Ok(CType::SignedInt)
             } else {
-                panic!("Cannot coerce {type1:?} and {type2:?}")
-            }
+                Err(InvalidCoercionError(type1.clone(), type2.clone()))
+            };
         }
 
         if matches!(type2, CType::Pointer(_)) {
-            if type1.is_integer() {
-                return CType::SignedInt;
+            return if type1.is_integer() {
+                Ok(CType::SignedInt)
             } else {
-                panic!("Cannot coerce {type1:?} and {type2:?}")
-            }
+                Err(InvalidCoercionError(type1.clone(), type2.clone()))
+            };
         }
 
-        CType::SignedLong
+        Ok(CType::SignedLong)
     }
 }
 
@@ -192,6 +209,49 @@ struct FuncInfo {
 }
 
 impl CodeGen {
+    fn compile_program(
+        program: Vec<IRTopLevel>,
+        function_map: HashMap<String, FuncInfo>,
+        args: &Args,
+    ) -> Vec<String> {
+        let mut cg = CodeGen {
+            builder: OpBuilder::new(false),
+            function_map,
+        };
+
+        let mut out: Vec<String> = vec![];
+        out.extend(PRE_INIT_PRELUDE.lines().map(ToOwned::to_owned));
+        let mut funcs: Vec<String> = vec![];
+        let mut inits: Vec<String> = vec![];
+        for func in program {
+            let init = func.is_initializer;
+            let x = cg.compile_top_level(func);
+            if init {
+                inits.extend(x);
+            } else {
+                funcs.extend(x);
+            }
+        }
+        out.extend(inits);
+        out.extend(POST_INIT_PRELUDE.lines().map(ToOwned::to_owned));
+        let func_finder_pos = (3, out.len() - 2);
+        out.extend(funcs);
+
+        // Sneaky stick filename at top
+        out[0] += &(" file: ".to_owned() + &args.filename);
+
+        // Stick preproccesor info at the bottom
+        if args.preprocessor_info {
+            out.extend(vec![
+                "#$watch[0,0]:int = stack".to_owned(),
+                "#$watch[1,0]:int = call stack".to_owned(),
+                "#$watch[2,0]:int = return".to_owned(),
+                format!("#$break[{},{}]", func_finder_pos.0, func_finder_pos.1),
+            ]);
+        };
+        out
+    }
+
     fn compile_top_level(&mut self, func: IRTopLevel) -> Vec<String> {
         self.builder = OpBuilder::new(!func.is_initializer);
         for op in func.ops {
@@ -200,10 +260,12 @@ impl CodeGen {
                 IROp::Call(called_func_name, vals) => {
                     assert!(!func.is_initializer, "Non static call in static context");
                     // TODO: improve error on unknown func call
-                    let called_func = self.function_map[called_func_name];
+                    let Some(called_func) = self.function_map.get(called_func_name) else {
+                        panic!("Function '{}' not found", called_func_name);
+                    };
 
                     self.builder
-                        .call(self.function_map[&func.name], called_func, vals);
+                        .call(self.function_map[&func.name], *called_func, vals);
                 }
                 IROp::Return(val) => {
                     self.builder.return_(val, func.stack_frame_size);
@@ -266,18 +328,287 @@ impl CodeGen {
 
 mod c_compiler {
 
-    use std::{collections::HashMap, mem, path::Path};
+    use clap::error;
+    use colored::Colorize;
+    use line_numbers::LinePositions;
+    use unicode_width::UnicodeWidthStr;
+
+    use std::{
+        collections::HashMap,
+        f32::consts::E,
+        fmt::{write, Debug, Display},
+        mem,
+        path::Path,
+    };
 
     use lang_c::{
         ast::{
-            ArraySize, AsmStatement, BinaryOperator, BinaryOperatorExpression, BlockItem, CallExpression, CastExpression, ConditionalExpression, Constant, Declaration, DeclarationSpecifier, Declarator, DeclaratorKind, DerivedDeclarator, DoWhileStatement, Expression, ExternalDeclaration, ForInitializer, ForStatement, FunctionDefinition, GnuAsmOperand, Identifier, IfStatement, Initializer, Integer, IntegerBase, IntegerSize, IntegerSuffix, Label, LabeledStatement, SpecifierQualifier, Statement, StorageClassSpecifier, SwitchStatement, TypeName, TypeSpecifier, UnaryOperator, UnaryOperatorExpression, WhileStatement
+            ArraySize, AsmStatement, BinaryOperator, BinaryOperatorExpression, BlockItem,
+            CallExpression, CastExpression, ConditionalExpression, Constant, Declaration,
+            DeclarationSpecifier, Declarator, DeclaratorKind, DerivedDeclarator, DoWhileStatement,
+            Ellipsis, Expression, ExternalDeclaration, ForInitializer, ForStatement,
+            FunctionDefinition, GnuAsmOperand, Identifier, IfStatement, Initializer, Integer,
+            IntegerBase, IntegerSize, IntegerSuffix, Label, LabeledStatement, SpecifierQualifier,
+            Statement, StorageClassSpecifier, SwitchStatement, TypeName, TypeSpecifier,
+            UnaryOperator, UnaryOperatorExpression, WhileStatement,
         },
         driver::{parse, Config, Flavor},
         print,
         span::Node,
     };
+    use thiserror::Error;
 
-    use crate::{BinOp, BranchType, CType, FuncInfo, IROp, IRTopLevel, IRValue, UnaryOp};
+    use crate::{
+        main, Args, BinOp, BranchType, CType, FuncInfo, IROp, IRTopLevel, IRValue,
+        InvalidCoercionError, UnaryOp,
+    };
+
+    #[derive(Error, Debug)]
+    pub enum IRGenerationErrorType {
+        #[error(transparent)]
+        InvalidCoercion(#[from] InvalidCoercionError),
+        #[error("Cannot dereference non-pointers")]
+        DereferenceNonPointer,
+        #[error("Unknown type {0:?}")]
+        UnknownType(Vec<TypeSpecifier>),
+        #[error("Unknown identifier")]
+        UnknownIdentifier,
+        #[error("Non-integer array length")]
+        NonIntegerArrayLength,
+        #[error("(TODO) Non trivial array length. VLAs are not supported and neither are constant expressions.")]
+        TODONonConstantArrayLength,
+        #[error("(TODO) Array length must be manually specified for now.")]
+        TODOUnknownArrayLength,
+        #[error("K&R function definitions are not supported.")]
+        KRFunctionDefinition,
+        #[error("Ellipsis are not yet supported.")]
+        TODOEllipsis,
+        #[error("Function expected {expected} args, but recieved {recieved}")]
+        IncorrectNumberOfArguments { expected: usize, recieved: usize },
+        #[error("Attempted to call non function")]
+        CallNonFunction,
+        #[error("Attempted to use function as a variable")]
+        FunctionUsedAsVariable,
+        #[error("GNU block types are not supported")]
+        TODOBlockTypes,
+        #[error("Invalid ASM symbol '{0}'")]
+        InvalidASMSymbol(String),
+        #[error("Imaginary numbers are not supported")]
+        TODOImaginary,
+        #[error("Floats are not yet supported")]
+        TODOFloats,
+        #[error("Breaks can only appear inside loops or switch case statements")]
+        InvalidBreak,
+        #[error("Continues can only appear inside loops")]
+        InvalidContinue,
+        #[error("Case statement not in switch statement")]
+        CaseNotInSwitch,
+        #[error("'default' not in switch statement")]
+        DefaultNotInSwitch,
+
+        // TODO: store the span of the location of the first declaration!
+        #[error("Type {0:?} does not match earlier defined {1:?}")]
+        NonMatchingDeclarations(CType, CType),
+    }
+
+    #[derive(Error, Debug)]
+    pub(crate) struct IRGenerationError {
+        #[source]
+        pub err: IRGenerationErrorType,
+        pub span: Option<lang_c::span::Span>,
+    }
+
+    impl From<IRGenerationErrorType> for IRGenerationError {
+        fn from(value: IRGenerationErrorType) -> Self {
+            Self {
+                err: value,
+                span: None,
+            }
+        }
+    }
+
+    impl From<InvalidCoercionError> for IRGenerationError {
+        fn from(value: InvalidCoercionError) -> Self {
+            Self {
+                err: IRGenerationErrorType::InvalidCoercion(value),
+                span: None,
+            }
+        }
+    }
+
+    fn apply_span(err: IRGenerationError, span: lang_c::span::Span) -> IRGenerationError {
+        if err.span.is_none() {
+            IRGenerationError {
+                err: err.err,
+                span: Some(span),
+            }
+        } else {
+            err
+        }
+    }
+
+    impl Display for IRGenerationError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{} at span {:?} ", self.err, self.span)
+        }
+    }
+
+    #[derive(Error, Debug)]
+    pub(crate) enum CompilerError {
+        IRGenerationError {
+            #[source]
+            err: IRGenerationErrorType,
+            span: Option<lang_c::span::Span>,
+            source: String,
+            filename: Option<String>,
+        },
+        #[error(transparent)]
+        ParseError(#[from] lang_c::driver::Error),
+    }
+
+    // sorry.
+    impl Display for CompilerError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::ParseError(lang_c::driver::Error::PreprocessorError(err)) => {
+                    write!(
+                        f,
+                        "{} occurred during preprocessing:\n{err}",
+                        "Error:".red().bold()
+                    )
+                }
+                Self::ParseError(lang_c::driver::Error::SyntaxError(err)) => {
+                    let lang_c::driver::SyntaxError {
+                        source,
+                        line,
+                        column,
+                        offset: _offset,
+                        expected,
+                    } = err;
+
+                    let relevant_line = source.lines().into_iter().collect::<Vec<_>>()[line - 1]
+                        .chars()
+                        .into_iter()
+                        .collect::<Vec<char>>();
+                    let real_pos = relevant_line[..*column].iter().collect::<String>().width();
+                    let line_marker = format!(" {line} | ");
+
+                    let formatted_line = format!(
+                        "{line_marker}{}{}{}",
+                        &relevant_line[..column - 1].iter().collect::<String>(),
+                        String::from(relevant_line[column - 1]).underline(),
+                        &relevant_line[*column..].iter().collect::<String>()
+                    );
+
+                    let marker = (std::iter::repeat(" ")
+                        .take(line_marker.width() + real_pos - 1)
+                        .collect::<String>()
+                        + "^")
+                        .bold()
+                        .red();
+
+                    write!(
+                        f,
+                        r"
+{} Unexpected token.
+Expected one of {expected:?} at column {column}. 
+{formatted_line}
+{marker}",
+                        "Error:".red().bold()
+                    )
+                }
+
+                Self::IRGenerationError {
+                    err,
+                    span,
+                    source,
+                    filename,
+                } => {
+                    match span {
+                        Some(span) => {
+                            let lines = source.lines().collect::<Vec<_>>();
+                            let line_positions = LinePositions::from(source.as_str());
+                            let (start_line_num, start) = line_positions.from_offset(span.start);
+                            let (end_line_num, end) = line_positions.from_offset(span.end);
+
+                            assert_eq!(start_line_num, end_line_num); // TODO:
+                            let relevant_line = lines[start_line_num.as_usize()]
+                                .chars()
+                                .collect::<Vec<char>>();
+                            let line_marker = format!(" {} | ", start_line_num.display());
+
+                            let formatted_line = format!(
+                                "{line_marker}{}{}{}",
+                                &relevant_line[..start].iter().collect::<String>(),
+                                &relevant_line[start..end]
+                                    .iter()
+                                    .collect::<String>()
+                                    .underline(),
+                                &relevant_line[end..].iter().collect::<String>()
+                            );
+
+                            let real_pos =
+                                relevant_line[..start].iter().collect::<String>().width();
+                            let width =
+                                relevant_line[start..end].iter().collect::<String>().width();
+                            let marker = (std::iter::repeat(" ")
+                                .take(line_marker.width() + real_pos)
+                                .collect::<String>()
+                                + &std::iter::repeat("^").take(width).collect::<String>())
+                                .bold()
+                                .red();
+
+                            let filename = match filename {
+                                Some(name) => format!("- in file {name}"),
+                                None => "".to_owned(),
+                            };
+
+                            write!(
+                                f,
+                                r"
+{filename}
+{} {err}.
+{formatted_line}
+{marker}",
+                                "Error:".red().bold()
+                            )
+                        }
+                        None => write!(f, "(no span) {err}"),
+                    }
+                    /*let relevant_line = source.lines().into_iter().collect::<Vec<_>>()[line - 1]
+                                            .chars()
+                                            .into_iter()
+                                            .collect::<Vec<char>>();
+                                        let real_pos = relevant_line[..column].iter().collect::<String>().width();
+                                        let line_marker = format!("{line} | ");
+
+                                        let formatted_line = format!(
+                                            "{line_marker}{}{}{}",
+                                            &relevant_line[..column - 1].iter().collect::<String>(),
+                                            String::from(relevant_line[column - 1]).underline(),
+                                            &relevant_line[column..].iter().collect::<String>()
+                                        );
+
+                                        let marker = (std::iter::repeat(" ")
+                                            .take(line_marker.width() + real_pos - 1)
+                                            .collect::<String>()
+                                            + "^")
+                                            .bold()
+                                            .red();
+
+                                        panic!(
+                                            r"
+                    {} Unexpected token on {line}.
+                    Expected one of {expected:?} at column {column}.
+                    {formatted_line}
+                    {marker}
+                    ",
+                                            "Error:".red().bold()
+                                        );*/
+                }
+            }
+        }
+    }
 
     struct TopLevelBuilder<'a> {
         count: usize,
@@ -327,29 +658,60 @@ mod c_compiler {
     // TODO: scope system will need a bit of a refactor to make unshadowing of globals possible
     #[derive(Debug, Clone, Default)]
     struct ScopeInfo {
-        var_map: HashMap<String, (IRValue, CType)>,
+        // IRValue is only None when CType is Function
+        var_map: HashMap<String, (Option<IRValue>, CType)>,
     }
 
     impl FileBuilder {
-        pub fn parse_c<P: AsRef<Path>>(file: P) -> Result<Vec<IRTopLevel>, lang_c::driver::Error> {
+        pub fn parse_c<P: AsRef<Path> + Debug>(
+            file: P,
+            args: &Args,
+        ) -> Result<Vec<IRTopLevel>, CompilerError> {
             let mut builder = Self {
                 count: 0,
                 scope: ScopeInfo::default(),
                 funcs: vec![],
             };
-            let config = Config::default();
-            // TODO: consider
-            // config.flavor = Flavor::StdC11;
-            let parsed = parse(&config, file)?;
+            let config = lang_c::driver::Config {
+                flavor: Flavor::GnuC11,
+                cpp_command: "gcc".into(),
+                cpp_options: vec![
+                    "-nostdinc".into(),
+                    "-I".into(),
+                    "befunge_libc".into(),
+                    "-E".into(),
+                ],
+            };
+            let parsed = parse(&config, &file)?;
+
+            if args.verbose {
+                println!("-- C SOURCE (post preprocessor)");
+                println!("{}\n", parsed.source);
+            }
+
             for obj in &parsed.unit.0 {
                 match &obj.node {
                     ExternalDeclaration::Declaration(decl) => {
                         let x = builder.parse_top_level_declaration(&decl.node);
-                        builder.funcs.push(x);
+                        builder
+                            .funcs
+                            .push(x.map_err(|err| CompilerError::IRGenerationError {
+                                err: err.err,
+                                span: err.span,
+                                source: parsed.source.clone(),
+                                filename: Some(format!("{:?}", file)),
+                            })?);
                     }
                     ExternalDeclaration::StaticAssert(_) => todo!("add static asserts"),
                     ExternalDeclaration::FunctionDefinition(func) => {
-                        let x = builder.parse_function(&func.node);
+                        let x = builder.parse_function(&func.node).map_err(|err| {
+                            CompilerError::IRGenerationError {
+                                err: err.err,
+                                span: err.span,
+                                source: parsed.source.clone(),
+                                filename: Some(format!("{:?}", file)),
+                            }
+                        })?;
                         builder.funcs.push(x);
                     }
                 }
@@ -357,8 +719,11 @@ mod c_compiler {
             Ok(builder.funcs)
         }
 
-        fn parse_function(&mut self, func: &FunctionDefinition) -> IRTopLevel {
-            let info = DeclarationInfo::from_decl(&func.specifiers);
+        fn parse_function(
+            &mut self,
+            func: &FunctionDefinition,
+        ) -> Result<IRTopLevel, IRGenerationError> {
+            let info = DeclarationInfo::from_decl(&func.specifiers)?;
             let mut builder = TopLevelBuilder {
                 ops: vec![],
                 count: self.count,
@@ -371,16 +736,14 @@ mod c_compiler {
                 return_type: info.c_type,
             };
 
-            // TODO: deal with K&R declarations
             let name = builder.parse_declarator_name(&func.declarator.node);
-
-            let param_count = builder.parse_func_declarator(&func.declarator.node);
-            builder.parse_statement(&func.statement.node);
+            let param_count = builder.parse_func_declarator(&func.declarator.node)?;
+            builder.parse_statement(&func.statement.node)?;
             builder.push(IROp::Return(IRValue::Immediate(0)));
 
             // FIXME: bad bad bad, just have a seperate global counter
             builder.file_builder.count = builder.count;
-            IRTopLevel {
+            Ok(IRTopLevel {
                 name,
                 ops: builder.ops,
                 parameters: param_count,
@@ -388,11 +751,14 @@ mod c_compiler {
                 return_type: Some(builder.return_type),
                 stack_frame_size: builder.count, // NOTE: this is a 'worst case' value,
                                                  // and should be recalculated in a later pass
-            }
+            })
         }
 
-        fn parse_top_level_declaration(&mut self, decl: &Declaration) -> IRTopLevel {
-            let info = DeclarationInfo::from_decl(&decl.specifiers);
+        fn parse_top_level_declaration(
+            &mut self,
+            decl: &Declaration,
+        ) -> Result<IRTopLevel, IRGenerationError> {
+            let info = DeclarationInfo::from_decl(&decl.specifiers)?;
             let mut builder = TopLevelBuilder {
                 ops: vec![],
                 count: self.count,
@@ -405,7 +771,24 @@ mod c_compiler {
                 return_type: info.c_type,
             };
 
-            builder.parse_declarations(decl);
+            builder.parse_declarations(decl)?;
+            let name = &decl
+                .declarators
+                .iter()
+                .map(|x| {
+                    format!(
+                        "'{}'",
+                        builder.parse_declarator_name(&x.node.declarator.node)
+                    )
+                })
+                .collect::<Vec<String>>()
+                .join(", ");
+            let name = if name.is_empty() {
+                "empty region"
+            } else {
+                name
+            };
+
             builder
                 .file_builder
                 .scope
@@ -414,15 +797,15 @@ mod c_compiler {
 
             // FIXME: bad bad bad, just have a seperate global counter
             builder.file_builder.count = builder.count;
-            IRTopLevel {
-                name: String::new(),
+            Ok(IRTopLevel {
+                name: name.to_owned(),
                 ops: builder.ops,
                 parameters: 0,
                 is_initializer: true,
                 return_type: Some(builder.return_type),
                 stack_frame_size: builder.count, // NOTE: this is a 'worst case' value,
                                                  // and should be recalculated in a later pass
-            }
+            })
         }
     }
 
@@ -573,24 +956,23 @@ mod c_compiler {
     }
 
     pub fn sort_functions_pass(funcs: Vec<IRTopLevel>) -> Vec<IRTopLevel> {
-        let mut out = vec![None];
+        let mut out = vec![];
+        let main_found = false;
         for func in funcs {
             if func.name == "main" {
-                assert!(out[0].is_none(), "Only one main function exists");
-                out[0] = Some(func);
+                assert!(main_found == false, "Only one main function may exist");
+                out.insert(0, func);
             } else {
-                out.push(Some(func));
+                out.push(func);
             }
         }
-        out.into_iter()
-            .map(|x| x.expect("At least one main function should exist"))
-            .collect()
+        out
     }
 
     impl CType {
-        fn from_specifiers(types: &[&Node<TypeSpecifier>]) -> Self {
+        fn from_specifiers(types: &[&Node<TypeSpecifier>]) -> Result<Self, IRGenerationError> {
             let types = types.iter().map(|x| x.node.clone()).collect::<Vec<_>>();
-            match types[..] {
+            Ok(match types[..] {
                 [] => panic!("No type specifiers?"),
                 [TypeSpecifier::Int | TypeSpecifier::Signed]
                 | [TypeSpecifier::Signed, TypeSpecifier::Int] => Self::SignedInt,
@@ -600,11 +982,13 @@ mod c_compiler {
                     Self::SignedLong
                 }
                 [TypeSpecifier::Void] => Self::Void,
-                _ => panic!("Unknown type: {types:?}"),
-            }
+                _ => return Err(IRGenerationErrorType::UnknownType(types).into()),
+            })
         }
 
-fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
+        fn from_qualifiers(
+            specifiers: &[Node<SpecifierQualifier>],
+        ) -> Result<Self, IRGenerationError> {
             let mut c_types = vec![];
             for specifier in specifiers {
                 match &specifier.node {
@@ -622,14 +1006,16 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
             CType::from_specifiers(&c_types)
         }
 
-
-        fn from_declarator(declarator: &Declarator, base_type: &CType) -> Self {
+        fn from_declarator(
+            declarator: &Declarator,
+            base_type: &CType,
+        ) -> Result<Self, IRGenerationError> {
             let mut out = base_type.clone();
-            // TODO: follow
+            let mut param_list = None;
             match &declarator.kind.node {
                 DeclaratorKind::Identifier(_) | DeclaratorKind::Abstract => (),
                 DeclaratorKind::Declarator(nested_decl) => {
-                    out = Self::from_declarator(&nested_decl.node, &out);
+                    out = Self::from_declarator(&nested_decl.node, &out)?;
                 }
             }
 
@@ -637,7 +1023,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                 match &modifier.node {
                     DerivedDeclarator::Pointer(qualifiers) => {
                         assert_eq!(qualifiers.len(), 0, "Pointer qualifiers not yet supported");
-                        out = CType::Pointer(Box::new(out));
+                        out = Self::Pointer(Box::new(out));
                     }
                     DerivedDeclarator::Array(array_decl) => {
                         assert_eq!(
@@ -648,28 +1034,72 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                         let size = match &array_decl.node.size {
                             ArraySize::VariableExpression(expr) => {
                                 match &expr.node {
+                                    // TODO: implement a "constant mode" or something, that
+                                    // attempts to evaluate a tree of expressions?
+                                    // the compiler will need to be able to run some of the IR at
+                                    // compile time anyways, so perhaps it just parses the tree in
+                                    // a mode that only allows "known constant" things, and then
+                                    // evaluates all the IR it produces using the function that
+                                    // evaluates IR at compile time? idk.
                                     Expression::Constant(val) => match &val.node {
-                                        Constant::Float(_) => panic!("Non integer array length"),
-                                        Constant::Integer(int) => integer_constant_to_usize(&int),
+                                        Constant::Float(_) => {
+                                            return Err(
+                                                IRGenerationErrorType::NonIntegerArrayLength.into(),
+                                            )
+                                        }
+                                        Constant::Integer(int) => integer_constant_to_usize(int),
                                         Constant::Character(str) => char_constant_to_usize(str),
                                     },
-                                    _ => panic!("Non immediate constant array length (VLAs are scary, and i can't handle constant expressions yet)"),
+                                    _ => {
+                                        return Err(
+                                            IRGenerationErrorType::TODONonConstantArrayLength
+                                                .into(),
+                                        )
+                                    }
                                 }
-
                             }
-                            ArraySize::StaticExpression(..) => panic!("I don't even know what a 'static expression' array size means, sorry"),
-                            ArraySize::VariableUnknown | ArraySize::Unknown => todo!("Array size must be manually specified")
+                            ArraySize::StaticExpression(..) => panic!(
+                                "I don't even know what a 'static expression' array size means"
+                            ),
+                            ArraySize::VariableUnknown | ArraySize::Unknown => {
+                                return Err(IRGenerationErrorType::TODOUnknownArrayLength.into())
+                            }
                         };
-                        out = CType::Array(Box::new(out), size);
+                        out = Self::Array(Box::new(out), size);
                         panic!("Arrays not yet implemented");
                     }
-                    DerivedDeclarator::Function(_) | DerivedDeclarator::KRFunction(_) => {
-                        panic!("func declarator in not the func declarator parser??")
+                    DerivedDeclarator::Function(func_decl) => {
+                        if matches!(func_decl.node.ellipsis, Ellipsis::Some) {
+                            return Err(IRGenerationErrorType::TODOEllipsis.into());
+                        };
+                        assert!(param_list.is_none());
+                        param_list = Some(vec![]);
+                        for param in &func_decl.node.parameters {
+                            let info = DeclarationInfo::from_decl(&param.node.specifiers)?;
+                            let ctype = if let Some(decl) = &param.node.declarator {
+                                Self::from_declarator(&decl.node, &info.c_type)?
+                            } else {
+                                info.c_type
+                            };
+                            if let Some(ref mut list) = param_list {
+                                list.push(ctype);
+                            };
+                        }
                     }
-                    DerivedDeclarator::Block(_) => panic!("GNU block types are not supported"),
+                    DerivedDeclarator::KRFunction(_) => {
+                        return Err(IRGenerationErrorType::KRFunctionDefinition.into())
+                    }
+                    DerivedDeclarator::Block(_) => {
+                        return Err(IRGenerationErrorType::TODOBlockTypes.into())
+                    }
                 }
             }
-            return out;
+
+            if let Some(params) = param_list {
+                Ok(CType::Function(params, Box::new(out)))
+            } else {
+                Ok(out)
+            }
         }
     }
 
@@ -687,7 +1117,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
     }
 
     impl DeclarationInfo {
-        fn from_decl(specifiers: &[Node<DeclarationSpecifier>]) -> Self {
+        fn from_decl(specifiers: &[Node<DeclarationSpecifier>]) -> Result<Self, IRGenerationError> {
             let mut c_types = vec![];
             let mut duration: StorageDuration = StorageDuration::Default;
             // this allows for loads of invalid code, like
@@ -720,44 +1150,83 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                 };
             }
 
-            Self {
+            Ok(Self {
                 duration,
-                c_type: CType::from_specifiers(&c_types),
-            }
-        } 
+                c_type: CType::from_specifiers(&c_types).map_err(|err| {
+                    if specifiers.is_empty() {
+                        err
+                    } else {
+                        let (start, end) = (
+                            specifiers.first().unwrap().span,
+                            specifiers.last().unwrap().span,
+                        );
+                        let span = lang_c::span::Span {
+                            start: start.start,
+                            end: end.end,
+                        };
+                        apply_span(err, span)
+                    }
+                })?,
+            })
+        }
     }
 
     impl TopLevelBuilder<'_> {
-        fn parse_func_declarator(&mut self, decl: &Declarator) -> usize {
+        fn parse_func_declarator(&mut self, decl: &Declarator) -> Result<usize, IRGenerationError> {
+            // FIXME: this name is found twice (also in parse_function). that's dumb.
+            let name = self.parse_declarator_name(&decl);
+
+            let mut params = vec![];
             let mut count = 0;
             for node in &decl.derived {
                 match &node.node {
                     DerivedDeclarator::Function(func_decl) => {
-                        // we don't care about func_decl.node.ellipsis
+                        if matches!(func_decl.node.ellipsis, Ellipsis::Some) {
+                            return Err(IRGenerationErrorType::TODOEllipsis.into());
+                        };
                         for param in &func_decl.node.parameters {
-                            // TODO: deal with types in decls
-                            let info = DeclarationInfo::from_decl(&param.node.specifiers);
+                            let info = DeclarationInfo::from_decl(&param.node.specifiers)?;
 
                             if let Some(decl) = param.node.declarator.clone() {
                                 let name = self.parse_declarator_name(&decl.node);
+                                let ctype = CType::from_declarator(&decl.node, &info.c_type)?;
+                                params.push(ctype.clone());
                                 let loc = IRValue::Stack(count + 1);
                                 count += 1;
-                                self.scope.var_map.insert(name, (loc, info.c_type));
+                                self.scope.var_map.insert(name, (Some(loc), ctype));
                             }
                         }
                     }
-                    DerivedDeclarator::KRFunction(_) => todo!("KR functions"),
+                    DerivedDeclarator::KRFunction(_) => {
+                        return Err(IRGenerationErrorType::KRFunctionDefinition.into())
+                    }
                     _ => panic!("non func declarator in the func declarator parser??"),
                 }
             }
-            return count;
+            self.scope.var_map.insert(
+                name.clone(),
+                (
+                    None,
+                    CType::Function(params.clone(), Box::new(self.return_type.clone())),
+                ),
+            );
+            self.file_builder.scope.var_map.insert(
+                name,
+                (
+                    None,
+                    CType::Function(params, Box::new(self.return_type.clone())),
+                ),
+            );
+            return Ok(count);
         }
 
         fn parse_declarator_name(&self, decl: &Declarator) -> String {
             match &decl.kind.node {
                 DeclaratorKind::Identifier(node) => node.node.name.clone(),
                 DeclaratorKind::Declarator(node) => self.parse_declarator_name(&node.node),
-                _ => todo!("non trivial identifier functions"),
+                DeclaratorKind::Abstract => {
+                    todo!("figure out what to do for the 'name' when a function is abstract")
+                }
             }
         }
 
@@ -765,12 +1234,13 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
             self.ops.push(op);
         }
 
-        fn parse_statement(&mut self, stmt: &Statement) {
+        fn parse_statement(&mut self, stmt: &Statement) -> Result<(), IRGenerationError> {
             match stmt {
                 Statement::Return(maybe_expr) => {
                     if let Some(expr) = maybe_expr {
-                        let (value, ctype) = self.parse_expression(&expr.node);
-                        let out = self.convert_to((value, ctype), self.return_type.clone());
+                        let (value, ctype) = self.parse_expression(&expr.node)?;
+                        let final_type = self.return_type.clone();
+                        let out = self.convert_to((value, ctype), &final_type)?;
                         self.push(IROp::Return(out));
                     } else {
                         // return type check not needed, as this is only reachable via UB
@@ -780,29 +1250,45 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                 Statement::Compound(blocks) => {
                     let old_scope = self.scope.clone();
                     for block_item in blocks {
-                        self.parse_block_item(&block_item.node);
+                        self.parse_block_item(&block_item.node)
+                            .map_err(|err| apply_span(err, block_item.span))?;
                     }
                     self.scope = old_scope;
                 }
                 Statement::Expression(Some(expr)) => {
-                    self.parse_expression(&expr.node);
+                    self.parse_expression(&expr.node)?;
                 }
                 Statement::Expression(None) => (),
-                Statement::If(stmt) => self.parse_if(&stmt.node),
-                Statement::While(stmt) => self.parse_while_stmt(&stmt.node),
-                Statement::DoWhile(stmt) => self.parse_do_while_stmt(&stmt.node),
-                Statement::For(stmt) => self.parse_for_statement(&stmt.node),
-                Statement::Break => self.parse_break(),
-                Statement::Continue => self.parse_continue(),
-                Statement::Labeled(stmt) => self.parse_label_stmt(&stmt.node),
+                Statement::If(stmt) => self
+                    .parse_if(&stmt.node)
+                    .map_err(|err| apply_span(err, stmt.span))?,
+                Statement::While(stmt) => self
+                    .parse_while_stmt(&stmt.node)
+                    .map_err(|err| apply_span(err, stmt.span))?,
+                Statement::DoWhile(stmt) => self
+                    .parse_do_while_stmt(&stmt.node)
+                    .map_err(|err| apply_span(err, stmt.span))?,
+                Statement::For(stmt) => self
+                    .parse_for_statement(&stmt.node)
+                    .map_err(|err| apply_span(err, stmt.span))?,
+                Statement::Break => self.parse_break()?,
+                Statement::Continue => self.parse_continue()?,
+                Statement::Labeled(stmt) => self
+                    .parse_label_stmt(&stmt.node)
+                    .map_err(|err| apply_span(err, stmt.span))?,
                 Statement::Goto(stmt) => self.parse_goto_stmt(&stmt.node),
-                Statement::Switch(stmt) => self.parse_switch(&stmt.node),
-                Statement::Asm(stmt) => self.parse_asm(&stmt.node),
-            }
+                Statement::Switch(stmt) => self
+                    .parse_switch(&stmt.node)
+                    .map_err(|err| apply_span(err, stmt.span))?,
+                Statement::Asm(stmt) => self
+                    .parse_asm(&stmt.node)
+                    .map_err(|err| apply_span(err, stmt.span))?,
+            };
+            Ok(())
         }
 
-        fn parse_switch(&mut self, switch: &SwitchStatement) {
-            let condition = self.parse_expression(&switch.expression.node);
+        fn parse_switch(&mut self, switch: &SwitchStatement) -> Result<(), IRGenerationError> {
+            let condition = self.parse_expression(&switch.expression.node)?;
 
             let prev_seen = self.break_last_seen;
             self.break_last_seen = BreakTypes::SwitchCase;
@@ -817,7 +1303,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
             // which we'll stick onto the end after the branching logic
             let mut ops = vec![];
             mem::swap(&mut self.ops, &mut ops);
-            self.parse_statement(&switch.statement.node);
+            self.parse_statement(&switch.statement.node)?;
             mem::swap(&mut self.ops, &mut ops);
 
             mem::swap(&mut self.switch_case_info, &mut old_switch_case_info);
@@ -827,7 +1313,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
 
             let tmp = self.generate_pseudo();
             for (i, expr) in info.cases.iter().enumerate() {
-                let case_value = self.parse_expression(&expr.node);
+                let case_value = self.parse_expression(&expr.node)?;
                 self.push(IROp::Two(
                     BinOp::Equal,
                     case_value.0,
@@ -852,16 +1338,20 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
 
             self.scope = old_scope;
             self.break_last_seen = prev_seen;
+            Ok(())
         }
 
         fn parse_goto_stmt(&mut self, ident: &Identifier) {
             self.push(IROp::AlwaysBranch(ident.name.clone() + ".goto"));
         }
 
-        fn parse_label_stmt(&mut self, stmt: &LabeledStatement) {
+        fn parse_label_stmt(&mut self, stmt: &LabeledStatement) -> Result<(), IRGenerationError> {
             match &stmt.label.node {
                 Label::Identifier(lbl) => self.push(IROp::Label(lbl.node.name.clone() + ".goto")),
                 Label::Case(expr) => {
+                    if self.switch_case_info.is_none() {
+                        Err(IRGenerationErrorType::CaseNotInSwitch)?
+                    }
                     let id = self.switch_case_info.as_ref().unwrap().id;
                     let count = self.switch_case_info.as_ref().unwrap().cases.len();
                     let lbl = self.generate_switch_case_label(id, count).1;
@@ -873,6 +1363,9 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                     }
                 }
                 Label::Default => {
+                    if self.switch_case_info.is_none() {
+                        Err(IRGenerationErrorType::DefaultNotInSwitch)?
+                    }
                     let id = self.switch_case_info.as_ref().unwrap().id;
                     let lbl = self.generate_switch_case_default_label(id).1;
                     self.push(lbl);
@@ -880,10 +1373,11 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                 }
                 Label::CaseRange(..) => todo!("GNU extension: case range"),
             }
-            self.parse_statement(&stmt.statement.node);
+            self.parse_statement(&stmt.statement.node)?;
+            Ok(())
         }
 
-        fn parse_asm(&mut self, asm: &AsmStatement) {
+        fn parse_asm(&mut self, asm: &AsmStatement) -> Result<(), IRGenerationError> {
             // TODO: ban newline char? it won't really work right
             match asm {
                 AsmStatement::GnuBasic(asm) => {
@@ -892,7 +1386,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                 }
                 AsmStatement::GnuExtended(asm) => {
                     for input in &asm.inputs {
-                        self.parse_asm_operand(&input.node, true);
+                        self.parse_asm_operand(&input.node, true)?;
                     }
                     // note it's supposed to be a "template", but it is
                     // difficult to do sensible befunge templating that still supports
@@ -901,41 +1395,47 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                     let lines = cleanup_parsed_asm(&asm.template.node);
                     self.push(IROp::InlineBefunge(lines));
                     for output in &asm.outputs {
-                        self.parse_asm_operand(&output.node, false);
+                        self.parse_asm_operand(&output.node, false)?;
                     }
 
                     for clobbers in &asm.clobbers {
                         println!("WARNING: asm clobbers are ignored {clobbers:?}");
                     }
                 }
-            }
+            };
+            Ok(())
         }
 
-        fn parse_asm_operand(&mut self, op: &GnuAsmOperand, input: bool) {
+        fn parse_asm_operand(
+            &mut self,
+            op: &GnuAsmOperand,
+            input: bool,
+        ) -> Result<(), IRGenerationError> {
             if let Some(output_name) = &op.symbolic_name {
-                let (c_value, ctype) = self.parse_expression(&op.variable_name.node);
-                let asm_value = Self::parse_asm_symbolic(&output_name.node.name);
+                let (c_value, ctype) = self.parse_expression(&op.variable_name.node)?;
+                let asm_value = Self::parse_asm_symbolic(&output_name.node.name)?;
                 if input {
                     self.push(IROp::One(UnaryOp::Copy, c_value, asm_value));
                 } else {
                     self.push(IROp::One(UnaryOp::Copy, asm_value, c_value));
                 }
-            }
+            };
+            Ok(())
         }
 
-        fn parse_asm_symbolic(str: &str) -> IRValue {
+        fn parse_asm_symbolic(str: &str) -> Result<IRValue, IRGenerationErrorType> {
             if let Some(rest) = str.strip_prefix('r') {
-                IRValue::Register(rest.parse().unwrap())
+                Ok(IRValue::Register(rest.parse().unwrap()))
             } else if str == "bstack" {
-                IRValue::BefungeStack
+                Ok(IRValue::BefungeStack)
             } else {
-                panic!("Invalid symbolic value");
+                Err(IRGenerationErrorType::InvalidASMSymbol(str.to_string()).into())
             }
         }
 
-        fn parse_break(&mut self) {
+        fn parse_break(&mut self) -> Result<(), IRGenerationError> {
             match self.break_last_seen {
-                BreakTypes::None => panic!("nothing to break!"),
+                BreakTypes::None => Err(IRGenerationErrorType::InvalidBreak)?,
                 BreakTypes::Loop => {
                     let lbl = self.generate_loop_break_label().0;
                     self.push(IROp::AlwaysBranch(lbl));
@@ -945,15 +1445,20 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                     let lbl = self.generate_switch_case_end_label(id).0;
                     self.push(IROp::AlwaysBranch(lbl));
                 }
-            }
+            };
+            Ok(())
         }
 
-        fn parse_continue(&mut self) {
+        fn parse_continue(&mut self) -> Result<(), IRGenerationError> {
+            if self.loop_id.is_none() {
+                Err(IRGenerationErrorType::InvalidContinue)?
+            };
             let (loop_cont_lbl_str, _) = self.generate_loop_continue_label();
             self.push(IROp::AlwaysBranch(loop_cont_lbl_str));
+            Ok(())
         }
 
-        fn parse_while_stmt(&mut self, stmt: &WhileStatement) {
+        fn parse_while_stmt(&mut self, stmt: &WhileStatement) -> Result<(), IRGenerationError> {
             let prev_scope = self.scope.clone();
             let prev_seen = self.break_last_seen;
             self.break_last_seen = BreakTypes::Loop;
@@ -963,17 +1468,21 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
             let (loop_end_lbl_str, loop_end_lbl) = self.generate_loop_break_label();
 
             self.push(loop_lbl);
-            let (cond, _cond_type) = self.parse_expression(&stmt.expression.node);
+            let (cond, _cond_type) = self.parse_expression(&stmt.expression.node)?;
             self.push(IROp::CondBranch(BranchType::Zero, loop_end_lbl_str, cond));
-            self.parse_statement(&stmt.statement.node);
+            self.parse_statement(&stmt.statement.node)?;
             self.push(IROp::AlwaysBranch(loop_lbl_str));
             self.push(loop_end_lbl);
             self.loop_id = prev_id;
             self.break_last_seen = prev_seen;
             self.scope = prev_scope;
+            Ok(())
         }
 
-        fn parse_do_while_stmt(&mut self, stmt: &DoWhileStatement) {
+        fn parse_do_while_stmt(
+            &mut self,
+            stmt: &DoWhileStatement,
+        ) -> Result<(), IRGenerationError> {
             let prev_scope = self.scope.clone();
             let prev_seen = self.break_last_seen;
             self.break_last_seen = BreakTypes::Loop;
@@ -983,16 +1492,17 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
             let (_, loop_end_lbl) = self.generate_loop_break_label();
 
             self.push(loop_lbl);
-            self.parse_statement(&stmt.statement.node);
-            let (cond, _cond_type) = self.parse_expression(&stmt.expression.node);
+            self.parse_statement(&stmt.statement.node)?;
+            let (cond, _cond_type) = self.parse_expression(&stmt.expression.node)?;
             self.push(IROp::CondBranch(BranchType::NonZero, loop_lbl_str, cond));
             self.push(loop_end_lbl);
             self.loop_id = prev_id;
             self.break_last_seen = prev_seen;
             self.scope = prev_scope;
+            Ok(())
         }
 
-        fn parse_for_statement(&mut self, stmt: &ForStatement) {
+        fn parse_for_statement(&mut self, stmt: &ForStatement) -> Result<(), IRGenerationError> {
             let old_scope = self.scope.clone();
             let prev_seen = self.break_last_seen;
             self.break_last_seen = BreakTypes::Loop;
@@ -1002,68 +1512,87 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
             let (break_lbl_str, break_lbl) = self.generate_loop_break_label();
             let (_, cont_lbl) = self.generate_loop_continue_label();
 
-            self.parse_for_initializer(&stmt.initializer.node);
+            self.parse_for_initializer(&stmt.initializer.node)?;
             self.push(start_lbl);
             if let Some(cond) = &stmt.condition {
-                let (cond, _cond_type) = self.parse_expression(&cond.node);
+                let (cond, _cond_type) = self.parse_expression(&cond.node)?;
                 self.push(IROp::CondBranch(BranchType::Zero, break_lbl_str, cond));
             }
-            self.parse_statement(&stmt.statement.node);
+            self.parse_statement(&stmt.statement.node)?;
             self.push(cont_lbl);
             if let Some(step) = &stmt.step {
-                self.parse_expression(&step.node);
+                self.parse_expression(&step.node)?;
             }
             self.push(IROp::AlwaysBranch(start_lbl_str));
             self.push(break_lbl);
             self.loop_id = prev_id;
             self.break_last_seen = prev_seen;
             self.scope = old_scope;
+            Ok(())
         }
 
-        fn parse_for_initializer(&mut self, init: &ForInitializer) {
+        fn parse_for_initializer(
+            &mut self,
+            init: &ForInitializer,
+        ) -> Result<(), IRGenerationError> {
             match init {
                 ForInitializer::Empty => (),
                 ForInitializer::Expression(expr) => {
-                    self.parse_expression(&expr.node);
+                    self.parse_expression(&expr.node)?;
                 }
-                ForInitializer::Declaration(decls) => self.parse_declarations(&decls.node),
+                ForInitializer::Declaration(decls) => self
+                    .parse_declarations(&decls.node)
+                    .map_err(|err| apply_span(err, decls.span))?,
                 ForInitializer::StaticAssert(_) => todo!("static assert in for init"),
-            }
+            };
+            Ok(())
         }
 
-        fn parse_if(&mut self, if_stmt: &IfStatement) {
-            let (cond, _cond_type) = self.parse_expression(&if_stmt.condition.node);
+        fn parse_if(&mut self, if_stmt: &IfStatement) -> Result<(), IRGenerationError> {
+            let (cond, _cond_type) = self.parse_expression(&if_stmt.condition.node)?;
             let (else_str, else_label) = self.generate_label("else");
             let (end_str, end_label) = self.generate_label("else");
             self.push(IROp::CondBranch(BranchType::Zero, else_str, cond));
-            self.parse_statement(&if_stmt.then_statement.node);
+            self.parse_statement(&if_stmt.then_statement.node)?;
             if if_stmt.else_statement.is_some() {
                 self.push(IROp::AlwaysBranch(end_str));
             };
             self.push(else_label);
             if let Some(else_stmt) = &if_stmt.else_statement {
-                self.parse_statement(&else_stmt.node);
+                self.parse_statement(&else_stmt.node)?;
                 self.push(end_label);
-            }
+            };
+            Ok(())
         }
 
-        fn parse_block_item(&mut self, block: &BlockItem) {
+        fn parse_block_item(&mut self, block: &BlockItem) -> Result<(), IRGenerationError> {
             match block {
                 BlockItem::Statement(stmt) => {
-                    self.parse_statement(&stmt.node);
+                    self.parse_statement(&stmt.node)
+                        .map_err(|err| apply_span(err, stmt.span))?;
                 }
-                BlockItem::Declaration(decls) => self.parse_declarations(&decls.node),
+                BlockItem::Declaration(decls) => self
+                    .parse_declarations(&decls.node)
+                    .map_err(|err| apply_span(err, decls.span))?,
                 BlockItem::StaticAssert(_) => todo!("STATIC ASSERT BLOCK: {:?}", block),
             };
+            Ok(())
         }
 
-        fn parse_declarations(&mut self, decls: &Declaration) {
-            let info = DeclarationInfo::from_decl(&decls.specifiers);
+        fn parse_declarations(&mut self, decls: &Declaration) -> Result<(), IRGenerationError> {
+            let info = DeclarationInfo::from_decl(&decls.specifiers)?;
             // FIXME: this is horrific.
             // TODO: use type info
             for decl in &decls.declarators {
                 let name = self.parse_declarator_name(&decl.node.declarator.node);
-                let ctype = CType::from_declarator(&decl.node.declarator.node, &info.c_type);
+                let ctype = CType::from_declarator(&decl.node.declarator.node, &info.c_type)
+                    .map_err(|err| apply_span(err, decl.node.declarator.span))?;
+
+                if matches!(ctype, CType::Function(..)) {
+                    self.scope.var_map.insert(name, (None, ctype));
+                    continue;
+                };
+
                 let loc = if self.is_const {
                     match info.duration {
                         StorageDuration::Static => IRValue::StaticPsuedo {
@@ -1082,13 +1611,30 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                         // Grab from scope outside function (note init is not allowed here)
                         StorageDuration::Extern => {
                             if self.file_builder.scope.var_map.contains_key(&name) {
-                                self.file_builder
-                                    .scope
-                                    .var_map
-                                    .get(&name)
-                                    .unwrap()
-                                    .0
-                                    .clone()
+                                let var = self.file_builder.scope.var_map.get(&name).unwrap();
+                                match var {
+                                    (None, CType::Function(..)) => {
+                                        return Err(apply_span(
+                                            IRGenerationErrorType::FunctionUsedAsVariable.into(),
+                                            decl.node.declarator.span,
+                                        ))
+                                    }
+                                    (None, _) => unreachable!(),
+                                    (Some(loc), stored_ctype) => {
+                                        if *stored_ctype != ctype {
+                                            return Err(apply_span(
+                                                IRGenerationErrorType::NonMatchingDeclarations(
+                                                    ctype,
+                                                    stored_ctype.clone(),
+                                                )
+                                                .into(),
+                                                decl.node.declarator.span,
+                                            ));
+                                        }
+
+                                        loc.clone()
+                                    }
+                                }
                             } else {
                                 // NOTE: this relies on a c quirk: if you reference a variable
                                 // via `extern` before it has been declared, then it cannot be
@@ -1102,7 +1648,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                                 self.file_builder
                                     .scope
                                     .var_map
-                                    .insert(name.clone(), (j.clone(), ctype.clone()));
+                                    .insert(name.clone(), (Some(j.clone()), ctype.clone()));
                                 j
                             }
                         }
@@ -1113,7 +1659,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                 };
                 self.scope
                     .var_map
-                    .insert(name, (loc.clone(), ctype.clone()));
+                    .insert(name, (Some(loc.clone()), ctype.clone()));
 
                 if !self.is_const && matches!(info.duration, StorageDuration::Static) {
                     let mut builder = TopLevelBuilder {
@@ -1128,8 +1674,10 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                         return_type: ctype.clone(),
                     };
                     let init = if let Some(init) = &decl.node.initializer {
-                        let (rhs, rhs_type) = builder.parse_initializer(&init.node);
-                        builder.convert_to((rhs, rhs_type), ctype)
+                        let (rhs, rhs_type) = builder
+                            .parse_initializer(&init.node)
+                            .map_err(|err| apply_span(err, decl.span))?;
+                        builder.convert_to((rhs, rhs_type), &ctype)?
                     } else {
                         IRValue::Immediate(0)
                     };
@@ -1149,52 +1697,80 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                     self.file_builder.funcs.push(init);
                 } else {
                     let init = if let Some(init) = &decl.node.initializer {
-                        let (rhs, rhs_type) = self.parse_initializer(&init.node);
-                        self.convert_to((rhs, rhs_type), ctype)
+                        let (rhs, rhs_type) = self
+                            .parse_initializer(&init.node)
+                            .map_err(|err| apply_span(err, decl.span))?;
+                        self.convert_to((rhs, rhs_type), &ctype)?
                     } else if self.is_const {
                         IRValue::Immediate(0)
                     } else {
-                        return;
+                        return Ok(());
                     };
 
                     self.push(IROp::One(UnaryOp::Copy, init, loc));
                 }
             }
+            Ok(())
         }
 
-        fn parse_type_name(&self, type_name: &TypeName) -> CType {
+        fn parse_type_name(&self, type_name: &TypeName) -> Result<CType, IRGenerationError> {
             // NOTE: type_name.declarator.kind is always Abstract
-            let ctype = CType::from_qualifiers(&type_name.specifiers);
+            let ctype = CType::from_qualifiers(&type_name.specifiers)?;
             if let Some(declarator) = &type_name.declarator {
-            return CType::from_declarator(&declarator.node, &ctype)
+                return CType::from_declarator(&declarator.node, &ctype)
+                    .map_err(|err| apply_span(err, declarator.span));
             }
-            ctype
+            Ok(ctype)
         }
 
-        fn parse_initializer(&mut self, init: &Initializer) -> (IRValue, CType) {
+        fn parse_initializer(
+            &mut self,
+            init: &Initializer,
+        ) -> Result<(IRValue, CType), IRGenerationError> {
             match init {
                 Initializer::Expression(expr) => self.parse_expression(&expr.node),
                 Initializer::List(_) => todo!("lists in initializers"),
             }
         }
 
-        fn parse_expression(&mut self, expr: &Expression) -> (IRValue, CType) {
-            match expr {
-                Expression::Constant(constant) => self.parse_constant(&constant.node),
-                Expression::UnaryOperator(unary_expr) => {
-                    self.parse_unary_expression(&unary_expr.node)
-                }
-                Expression::BinaryOperator(binary_expr) => {
-                    self.parse_binary_expression(&binary_expr.node)
-                }
+        fn parse_expression(
+            &mut self,
+            expr: &Expression,
+        ) -> Result<(IRValue, CType), IRGenerationError> {
+            Ok(match expr {
+                Expression::Constant(constant) => self
+                    .parse_constant(&constant.node)
+                    .map_err(|err| apply_span(err, constant.span))?,
+                Expression::UnaryOperator(unary_expr) => self
+                    .parse_unary_expression(&unary_expr.node)
+                    .map_err(|err| apply_span(err, unary_expr.span))?,
+                Expression::BinaryOperator(binary_expr) => self
+                    .parse_binary_expression(&binary_expr.node)
+                    .map_err(|err| apply_span(err, binary_expr.span))?,
                 Expression::Identifier(ident) => match self.scope.var_map.get(&ident.node.name) {
-                    None => panic!("ident {ident:?} should exist. scope: {:?}", self.scope),
-                    Some(val) => val.clone(),
+                    None => {
+                        return Err(apply_span(
+                            IRGenerationErrorType::UnknownIdentifier.into(),
+                            ident.span,
+                        ))
+                    }
+                    Some((Some(loc), ctype)) => (loc.clone(), ctype.clone()),
+                    Some((None, CType::Function(_, _))) => {
+                        return Err(apply_span(
+                            IRGenerationErrorType::FunctionUsedAsVariable.into(),
+                            ident.span,
+                        ))
+                    }
+                    Some((None, _)) => unreachable!(),
                 },
-                Expression::Call(call_expr) => self.parse_call(&call_expr.node),
+                Expression::Call(call_expr) => self
+                    .parse_call(&call_expr.node)
+                    .map_err(|err| apply_span(err, call_expr.span))?,
 
                 // Type stuff
-                Expression::Cast(cast_expr) => self.parse_cast(&cast_expr.node),
+                Expression::Cast(cast_expr) => self
+                    .parse_cast(&cast_expr.node)
+                    .map_err(|err| apply_span(err, cast_expr.span))?,
                 Expression::SizeOfTy(_) => todo!("SizeOfTy {expr:?}"),
                 Expression::SizeOfVal(_) => todo!("SizeOfVal {expr:?}"),
                 Expression::AlignOf(_) => todo!("AlignOf {expr:?}"),
@@ -1207,77 +1783,105 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                 Expression::StringLiteral(_) => todo!("StringLiteral {expr:?}"),
                 Expression::GenericSelection(_) => todo!("GenericSelection {expr:?}"),
                 Expression::CompoundLiteral(_) => todo!("CompoundLiteral {expr:?}"),
-                Expression::Conditional(cond) => self.parse_ternary(&cond.node),
+                Expression::Conditional(cond) => self
+                    .parse_ternary(&cond.node)
+                    .map_err(|err| apply_span(err, cond.span))?,
                 Expression::Comma(_) => todo!("Comma {expr:?}"),
                 Expression::VaArg(_) => todo!("VaArg {expr:?}"),
 
                 // Extension
                 Expression::Statement(_) => todo!("Statement {expr:?}"),
-            }
+            })
         }
 
-        fn parse_cast(&mut self, cast: &CastExpression) -> (IRValue, CType) {
-            let (expr, expr_type) = self.parse_expression(&cast.expression.node);
-            let out_type = self.parse_type_name(&cast.type_name.node);
+        fn parse_cast(
+            &mut self,
+            cast: &CastExpression,
+        ) -> Result<(IRValue, CType), IRGenerationError> {
+            let (expr, expr_type) = self.parse_expression(&cast.expression.node)?;
+            let out_type = self
+                .parse_type_name(&cast.type_name.node)
+                .map_err(|err| apply_span(err, cast.type_name.span))?;
             let out = self.generate_pseudo();
+
             self.push(IROp::Cast(out_type.clone(), (expr, expr_type), out.clone()));
-            (out, out_type)
+            Ok((out, out_type))
         }
 
-        fn parse_ternary(&mut self, node: &ConditionalExpression) -> (IRValue, CType) {
+        fn parse_ternary(
+            &mut self,
+            node: &ConditionalExpression,
+        ) -> Result<(IRValue, CType), IRGenerationError> {
             let out = self.generate_pseudo();
             let (else_str, else_lbl) = self.generate_label("else");
             let (end_str, end_lbl) = self.generate_label("end");
 
-            let (cond, _cond_type) = self.parse_expression(&node.condition.node);
+            let (cond, _cond_type) = self.parse_expression(&node.condition.node)?;
             self.push(IROp::CondBranch(BranchType::Zero, else_str, cond));
-            let (temp1, temp1_type) = self.parse_expression(&node.then_expression.node);
+            let (temp1, temp1_type) = self.parse_expression(&node.then_expression.node)?;
             self.push(IROp::One(UnaryOp::Copy, temp1, out.clone()));
             self.push(IROp::AlwaysBranch(end_str));
             self.push(else_lbl);
-            let (temp2, temp2_type) = self.parse_expression(&node.else_expression.node);
+            let (temp2, temp2_type) = self.parse_expression(&node.else_expression.node)?;
             self.push(IROp::One(UnaryOp::Copy, temp2, out.clone()));
             self.push(end_lbl);
 
             assert_eq!(temp2_type, temp1_type);
-            (out, temp2_type)
+            Ok((out, temp2_type))
         }
 
-        fn parse_call(&mut self, expr: &CallExpression) -> (IRValue, CType) {
-            // TODO: check args are all the correct types
+        fn parse_call(
+            &mut self,
+            expr: &CallExpression,
+        ) -> Result<(IRValue, CType), IRGenerationError> {
             let args = expr
                 .arguments
                 .iter()
-                .map(|expr| self.parse_expression(&expr.node).0)
-                .collect::<Vec<IRValue>>();
+                .map(|expr| self.parse_expression(&expr.node))
+                .collect::<Result<Vec<(IRValue, CType)>, _>>()?;
 
-            let mut ctype = None;
             match &expr.callee.node {
                 Expression::Identifier(ident) => {
                     let name = ident.node.name.clone();
-                    // TODO: remove jank iterating :( (who up hashing they map!!!)
-                    // FIXME: DOESN'T SUPPORT RECURSION!
-                    for func in &self.file_builder.funcs {
-                        if func.name == name {
-                            assert!(
-                                func.return_type.is_some(),
-                                "Function is missing return type?"
-                            );
-                            ctype = func.return_type.clone();
+                    match self.scope.var_map.get(&name).cloned() {
+                        None => Err(IRGenerationErrorType::UnknownIdentifier)?,
+                        Some((Some(_), CType::Function(..))) => unreachable!(),
+                        Some((None, CType::Function(expected_args, return_type))) => {
+                            let return_type = *return_type;
+                            if expected_args.len() != args.len()
+                                && !(matches!(expected_args[..], [CType::Void]) && args.len() == 0)
+                            {
+                                return Err(IRGenerationErrorType::IncorrectNumberOfArguments {
+                                    expected: expected_args.len(),
+                                    recieved: args.len(),
+                                }
+                                .into());
+                            }
+
+                            for i in 0..args.len() {
+                                self.convert_to(args[i].clone(), &expected_args[i])?;
+                            }
+
+                            self.push(IROp::Call(
+                                ident.node.name.clone(),
+                                args.iter().map(|x| x.0.clone()).collect(),
+                            ));
+                            let out = self.generate_pseudo();
+                            self.push(IROp::One(UnaryOp::Copy, IRValue::Register(0), out.clone()));
+                            Ok((out, return_type))
                         }
+                        _ => Err(IRGenerationErrorType::CallNonFunction)?,
                     }
-                    assert!(ctype.is_some(), "Called function not found");
-                    self.push(IROp::Call(ident.node.name.clone(), args));
                 }
-                _ => todo!("non trival ident calls"),
-            };
-            let out = self.generate_pseudo();
-            self.push(IROp::One(UnaryOp::Copy, IRValue::Register(0), out.clone()));
-            (out, ctype.unwrap())
+                _ => Err(IRGenerationErrorType::CallNonFunction)?,
+            }
         }
 
-        fn parse_unary_expression(&mut self, expr: &UnaryOperatorExpression) -> (IRValue, CType) {
-            let (val, val_type) = self.parse_expression(&expr.operand.node);
+        fn parse_unary_expression(
+            &mut self,
+            expr: &UnaryOperatorExpression,
+        ) -> Result<(IRValue, CType), IRGenerationError> {
+            let (val, val_type) = self.parse_expression(&expr.operand.node)?;
             let out = self.generate_pseudo();
 
             match expr.operator.node {
@@ -1285,17 +1889,15 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                     // FIXME: check if is lvalue!!
                     // ie &25 is invalid
                     self.push(IROp::One(UnaryOp::AddressOf, val, out.clone()));
-                    return (out, CType::Pointer(Box::new(val_type)));
+                    return Ok((out, CType::Pointer(Box::new(val_type))));
                 }
-                UnaryOperator::Indirection => {
-                    match val_type {
-                        CType::Pointer(pointee_type) => {
-                            self.push(IROp::One(UnaryOp::Dereference, val, out.clone()));
-                            return (out, *pointee_type);
-                        }
-                        _ => panic!("Cannot dereference non-pointers")
+                UnaryOperator::Indirection => match val_type {
+                    CType::Pointer(pointee_type) => {
+                        self.push(IROp::One(UnaryOp::Dereference, val, out.clone()));
+                        return Ok((out, *pointee_type));
                     }
-                }
+                    _ => Err(IRGenerationErrorType::DereferenceNonPointer)?,
+                },
                 _ => (),
             };
 
@@ -1307,7 +1909,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                 UnaryOperator::Negate => {
                     self.push(IROp::One(UnaryOp::BooleanNegate, val, out.clone()));
                     // ! is special, always returns Int
-                    return (out, CType::SignedInt);
+                    return Ok((out, CType::SignedInt));
                 }
                 UnaryOperator::Plus => self.push(IROp::One(UnaryOp::Copy, val, out.clone())), // silly
 
@@ -1319,7 +1921,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                         IRValue::Immediate(1),
                         val.clone(),
                     ));
-                    return (val, val_type);
+                    return Ok((val, val_type));
                 }
                 // --x, decrement and evaluate to x-1
                 UnaryOperator::PreDecrement => {
@@ -1329,7 +1931,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                         IRValue::Immediate(1),
                         val.clone(),
                     ));
-                    return (val, val_type);
+                    return Ok((val, val_type));
                 }
 
                 // x++, increment and evaluate to x
@@ -1357,14 +1959,17 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                 UnaryOperator::Address | UnaryOperator::Indirection => unreachable!(),
             };
 
-            (out, val_type)
+            Ok((out, val_type))
         }
 
-        fn parse_binary_expression(&mut self, expr: &BinaryOperatorExpression) -> (IRValue, CType) {
+        fn parse_binary_expression(
+            &mut self,
+            expr: &BinaryOperatorExpression,
+        ) -> Result<(IRValue, CType), IRGenerationError> {
             let (skip_label_str, skip_label) = self.generate_label("logical_skip");
             let (end_label_str, end_label) = self.generate_label("logical_end");
 
-            let (mut lhs, lhs_type) = self.parse_expression(&expr.lhs.node);
+            let (mut lhs, lhs_type) = self.parse_expression(&expr.lhs.node)?;
 
             if matches!(expr.operator.node, BinaryOperator::LogicalAnd) {
                 self.push(IROp::CondBranch(
@@ -1381,7 +1986,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                 ));
             }
 
-            let (mut rhs, rhs_type) = self.parse_expression(&expr.rhs.node);
+            let (mut rhs, rhs_type) = self.parse_expression(&expr.rhs.node)?;
 
             if matches!(expr.operator.node, BinaryOperator::LogicalAnd) {
                 self.push(IROp::CondBranch(
@@ -1408,7 +2013,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                 self.ops
                     .push(IROp::One(UnaryOp::Copy, IRValue::Immediate(0), out.clone()));
                 self.push(end_label);
-                return (out, CType::SignedInt);
+                return Ok((out, CType::SignedInt));
             };
 
             if matches!(expr.operator.node, BinaryOperator::LogicalOr) {
@@ -1421,7 +2026,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                 self.ops
                     .push(IROp::One(UnaryOp::Copy, IRValue::Immediate(1), out.clone()));
                 self.push(end_label);
-                return (out, CType::SignedInt);
+                return Ok((out, CType::SignedInt));
             };
 
             let out = self.generate_pseudo();
@@ -1438,7 +2043,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                 | BinaryOperator::AssignBitwiseOr
                 | BinaryOperator::Assign => {
                     // on assignment, rhs is casted to lhs
-                    rhs = self.convert_to((rhs, rhs_type), lhs_type.clone());
+                    rhs = self.convert_to((rhs, rhs_type), &lhs_type)?;
                     lhs_type
                 }
 
@@ -1458,13 +2063,13 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
                 | BinaryOperator::BitwiseAnd
                 | BinaryOperator::BitwiseXor
                 | BinaryOperator::BitwiseOr => {
-                    let common_type = CType::get_common(&lhs_type, &rhs_type);
-                    lhs = self.convert_to((lhs, lhs_type), common_type.clone());
-                    rhs = self.convert_to((rhs, rhs_type), common_type.clone());
+                    let common_type = CType::get_common(&lhs_type, &rhs_type)?;
+                    lhs = self.convert_to((lhs, lhs_type), &common_type)?;
+                    rhs = self.convert_to((rhs, rhs_type), &common_type)?;
                     common_type
                 }
 
-                BinaryOperator::Index => todo!(),
+                BinaryOperator::Index => todo!("indexing"),
                 // dealt with higher up
                 BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr => unreachable!(),
             };
@@ -1517,7 +2122,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
 
                 BinaryOperator::Assign => {
                     self.push(IROp::One(UnaryOp::Copy, rhs.clone(), lhs));
-                    return (rhs, out_type);
+                    return Ok((rhs, out_type));
                 }
 
                 // dealt with higher up
@@ -1539,65 +2144,86 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
             ) {
                 self.push(IROp::One(UnaryOp::Copy, out.clone(), lhs2));
             };
-            (out, out_type)
+            Ok((out, out_type))
         }
 
         #[allow(clippy::from_str_radix_10)]
-        fn parse_constant(&self, val: &Constant) -> (IRValue, CType) {
+        fn parse_constant(&self, val: &Constant) -> Result<(IRValue, CType), IRGenerationError> {
             // TODO: add checks for size to stop overflow or smth
             match val {
                 Constant::Integer(int) => {
                     let x = integer_constant_to_usize(int);
                     let ctype = match int.suffix {
                         IntegerSuffix {
+                            imaginary: true, ..
+                        } => Err(IRGenerationErrorType::TODOImaginary),
+                        IntegerSuffix {
                             size: IntegerSize::Int,
                             unsigned: false,
-                            ..
-                        } => CType::SignedInt,
+                            imaginary: false,
+                        } => Ok(CType::SignedInt),
                         IntegerSuffix {
                             size: IntegerSize::Int,
                             unsigned: true,
-                            ..
-                        } => todo!("unsigned int constants"),
+                            imaginary: false,
+                        } => Err(IRGenerationErrorType::UnknownType(vec![
+                            TypeSpecifier::Unsigned,
+                            TypeSpecifier::Int,
+                        ])),
                         IntegerSuffix {
                             size: IntegerSize::Long,
                             unsigned: false,
-                            ..
-                        } => CType::SignedLong,
+                            imaginary: false,
+                        } => Ok(CType::SignedLong),
                         IntegerSuffix {
                             size: IntegerSize::Long,
                             unsigned: true,
-                            ..
-                        } => todo!("unsigned long constants"),
+                            imaginary: false,
+                        } => Err(IRGenerationErrorType::UnknownType(vec![
+                            TypeSpecifier::Unsigned,
+                            TypeSpecifier::Long,
+                        ])),
                         IntegerSuffix {
                             size: IntegerSize::LongLong,
                             unsigned: false,
-                            ..
-                        } => todo!("signed long long constants"),
+                            imaginary: false,
+                        } => Err(IRGenerationErrorType::UnknownType(vec![
+                            TypeSpecifier::Long,
+                            TypeSpecifier::Long,
+                        ])),
                         IntegerSuffix {
                             size: IntegerSize::LongLong,
                             unsigned: true,
-                            ..
-                        } => todo!("unsigned long long constants"),
-                    };
-                    (IRValue::Immediate(x), ctype)
+                            imaginary: false,
+                        } => Err(IRGenerationErrorType::UnknownType(vec![
+                            TypeSpecifier::Unsigned,
+                            TypeSpecifier::Long,
+                            TypeSpecifier::Long,
+                        ])),
+                    }?;
+                    Ok((IRValue::Immediate(x), ctype))
                 }
                 Constant::Character(str) => {
                     let x = char_constant_to_usize(str);
                     // NOTE: This is not a typo, char literals are ints.
-                    (IRValue::Immediate(x), CType::SignedInt)
+                    Ok((IRValue::Immediate(x), CType::SignedInt))
                 }
-                _ => todo!("Non integer constants {:?}", val),
+                Constant::Float(_) => Err(IRGenerationErrorType::TODOFloats.into()),
             }
         }
 
-        fn convert_to(&mut self, input: (IRValue, CType), ctype: CType) -> IRValue {
-            if input.1 == ctype {
-                input.0
+        fn convert_to(
+            &mut self,
+            input: (IRValue, CType),
+            ctype: &CType,
+        ) -> Result<IRValue, IRGenerationError> {
+            if input.1 == *ctype {
+                Ok(input.0)
             } else {
                 let out = self.generate_pseudo();
+                // TODO: check cast is valid
                 self.push(IROp::Cast(ctype.clone(), input, out.clone()));
-                out
+                Ok(out)
             }
         }
 
@@ -1698,7 +2324,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
         }
     }
 
-    fn char_constant_to_usize(str: &String) -> usize {
+    fn char_constant_to_usize(str: &str) -> usize {
         assert_eq!(str.chars().count(), 3, "Char constant must be length 1");
         let mut chars = str.chars();
         assert_eq!(chars.next().unwrap(), '\'');
@@ -1712,7 +2338,7 @@ fn from_qualifiers(specifiers: &[Node<SpecifierQualifier>]) -> Self {
 fn print_ir(ir: &Vec<IRTopLevel>) {
     for func in ir {
         if func.is_initializer {
-            println!("\nINIT REGION");
+            println!("\nINIT REGION {}", func.name);
         } else {
             println!("\nFUNC {:?}", func.name);
         }
@@ -1727,91 +2353,53 @@ fn main() {
     let args = Args::parse();
     let c_source = std::fs::read_to_string(&args.filename).expect("Unable to read input file");
     if args.verbose {
-        println!("-- C SOURCE");
+        println!("-- C SOURCE (pre preprocessor)");
         println!("{c_source}\n");
     }
-    let program = match FileBuilder::parse_c(&args.filename) {
-        Err(lang_c::driver::Error::PreprocessorError(err)) => {
-            panic!("Error occurred during preprocessing: {err:?}")
-        }
-        Err(lang_c::driver::Error::SyntaxError(err)) => {
-            let lang_c::driver::SyntaxError {
-                source,
-                line,
-                column,
-                offset,
-                expected,
-            } = err;
 
-            // sorry.
-            let relevant_line = source.lines().into_iter().collect::<Vec<_>>()[line - 1]
-                .chars()
-                .into_iter()
-                .collect::<Vec<char>>();
-            let real_pos = relevant_line[..column].iter().collect::<String>().width();
-            let line_marker = format!("{line} | ");
-
-            let formatted_line = format!(
-                "{line_marker}{}{}{}",
-                &relevant_line[..column - 1].iter().collect::<String>(),
-                String::from(relevant_line[column - 1]).underline(),
-                &relevant_line[column..].iter().collect::<String>()
-            );
-
-            let marker = (std::iter::repeat(" ")
-                .take(line_marker.width() + real_pos - 1)
-                .collect::<String>()
-                + "^")
-                .bold()
-                .red();
-
-            panic!(
-                r"
-{} During C parsing on line {line}.
-Expected one of {expected:?} at column {column}. 
-{formatted_line}
-{marker}
-",
-                "Error:".red().bold()
-            );
-            // end sorry.
+    // TODO: support multiple user files
+    let program = match FileBuilder::parse_c(&args.filename, &args) {
+        Err(err) => {
+            if !args.silent {
+                println!("{err}");
+            }
+            exit(1);
         }
         Ok(x) => x,
     };
     if args.verbose {
-        println!("\n-- IR, PRE LINKING");
+        println!("\n-- IR, (pre linking)");
         print_ir(&program);
     }
 
-    let mut program = the_linkening(vec![
-        program,
-        /*vec![IRTopLevel {
-            ops: vec![
-                IROp::One(
-                UnaryOp::Copy,
-                IRValue::Immediate(5),
-                IRValue::Stack(1)
-            ),
-            IROp::One(
-                UnaryOp::AddressOf,
-                IRValue::Stack(1),
-                IRValue::Stack(2)
-            ),
-            IROp::One(
-                UnaryOp::Dereference,
-                IRValue::Stack(2),
-                IRValue::Stack(3)
-            )
-            ],
-            name: "main".to_string(),
-            stack_frame_size: 3,
-            is_initializer: false,
-            parameters: 0,
-        }],*/
-    ]);
+    let mut files = vec![program];
+
+    // TODO: add caching so the entire lib isn't compiled every time
+    for entry in WalkDir::new("befunge_libc") {
+        // TODO: handle FS errors at least a little bit
+        let entry = entry.unwrap();
+        if entry.file_type().is_file() {
+            if let Some(ext) = entry.path().extension() {
+                if ext == "c" {
+                    files.push(match FileBuilder::parse_c(entry.path(), &args) {
+                        Err(err) => {
+                            if !args.silent {
+                                println!("{err}");
+                            }
+                            exit(1);
+                        }
+                        Ok(x) => x,
+                    });
+                }
+            }
+        }
+    }
+
+    // TODO: strip out unused functions
+    let mut program = the_linkening(files);
 
     if args.verbose {
-        println!("\n-- IR, PRE PASSES");
+        println!("\n-- IR, (post linking, pre optimizations)");
         print_ir(&program);
     }
 
@@ -1822,7 +2410,7 @@ Expected one of {expected:?} at column {column}.
     let function_map = function_id_mapping_pass(&program);
 
     if args.verbose {
-        println!("\n-- IR, POST PASSES");
+        println!("\n-- IR, (post optimizations)");
         print_ir(&program);
         println!("function mappings: {function_map:?}");
     }
@@ -1830,43 +2418,10 @@ Expected one of {expected:?} at column {column}.
     if args.verbose {
         println!("\n-- befunge begin");
     }
-    let mut cg = CodeGen {
-        builder: OpBuilder::new(false),
-        function_map,
-    };
 
-    let mut out: Vec<String> = vec![];
-    out.extend(PRE_INIT_PRELUDE.lines().map(ToOwned::to_owned));
-    let mut funcs: Vec<String> = vec![];
-    let mut inits: Vec<String> = vec![];
-    for func in program {
-        let init = func.is_initializer;
-        let x = cg.compile_top_level(func);
-        if init {
-            inits.extend(x);
-        } else {
-            funcs.extend(x);
-        }
-    }
-    out.extend(inits);
-    out.extend(POST_INIT_PRELUDE.lines().map(ToOwned::to_owned));
-    let func_finder_pos = (3, out.len() - 2);
-    out.extend(funcs);
+    let out = CodeGen::compile_program(program, function_map, &args);
 
-    // Sneaky stick filename at top
-    out[0] += &(" file: ".to_owned() + &args.filename);
-
-    // Stick preproccesor info at the bottom
-    if args.preprocessor_info {
-        out.extend(vec![
-            "#$watch[0,0]:int = stack".to_owned(),
-            "#$watch[1,0]:int = call stack".to_owned(),
-            "#$watch[2,0]:int = return".to_owned(),
-            format!("#$break[{},{}]", func_finder_pos.0, func_finder_pos.1),
-        ]);
-    }
-
-    if !args.silent && args.outfile.is_none() {
+    if !args.quiet && args.outfile.is_none() {
         for line in out.clone() {
             println!("{line}");
         }
