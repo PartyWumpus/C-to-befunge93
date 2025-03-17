@@ -37,24 +37,21 @@ There's also a static memory space used for globals.
 - Function calling with an arbitrary number of args
 - Returning can go to specific parts of a function
 - Inline jumps and loops
+- Pointers to stack local and static data
+- Clear error messages
 - Global variables
 
 ### Current Limitations
-None of these are full architectural failures (aside from perhaps linking) so should be resolvable.
-- **Only supports ints as types**
-- Bitshifts and bitwise operations are wrong for negative values because I made a mistake
-- No linking of any sort, all has to be in one file
-- No stdlib or anything from libc at all (might fudge some stdio in just for convinience before doing it properly)
+None of these are full architectural failures so will eventually be resolved.
+- Only pointers, signed ints and signed longs are supported.
+- Bitshifts and bitwise operations are wrong for negative values sort of
+- Linking is currently limited to the befunge_libc library
 - No arbitrarily accessable memory for malloc (doable, just need a 4th stack and some more IR)
-- No K&R function support because it seems annoying to implement, and it's irrelevant anyways
 - It's not particularly good
 - Doesn't do a register allocation pass or any other optimizations, which would probably make it a decent bit faster
 
-### Intentional Limitations
-Many invalid C programs will be accepted and will instead just have undefined behaviour. It's easier to develop this way, if a little silly, just make sure to check your C code is actually sanely compilable with gcc or something.
-
 ### ASM support
-This compiler allows for use of the GNU ASM extensions for inline befunge. (either for extra optimized code or for using special operators like `,`, `.` for output and `&`, `~` for input).
+This compiler allows for use of the GNU ASM extensions for inline befunge. (either for extra optimized code or for using special befunge operators like `,`, `.` for output and `&`, `~` for input).
 
 There are two important assumptions to keep in mind when writing inline befunge:
 - The entry point is always the the top left heading right, and the exit point **must** be the top right heading right. All compiler produced branches from the rest of your function and similar will be moved downwards below your inline befunge, feel free to make it as long and as tall as you want.
