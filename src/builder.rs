@@ -5,7 +5,7 @@
 )]
 use std::collections::HashMap;
 
-use crate::{FuncInfo, IRValue};
+use crate::ir::{FuncInfo, IRValue};
 
 #[derive(Debug)]
 pub struct OpBuilder {
