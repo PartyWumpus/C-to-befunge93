@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     builder::OpBuilder,
-    ir::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRValue, UnaryOp},
+    ir::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRType, IRValue, UnaryOp},
     Args,
 };
 
@@ -107,18 +107,24 @@ impl CodeGen {
                     BranchType::NonZero => self.builder.not_zero_branch(val, label.to_string()),
                 },
                 IROp::AlwaysBranch(label) => self.builder.unconditional_branch(label.to_owned()),
-                IROp::One(op, a, out) => {
+                IROp::AddressOf(a, out) => {
+                    self.builder.address_of(a);
+                    //self.builder.constrain_to_range(&IRValue::BefungeStack, IRType::Signed(64));
+                    self.builder.copy(&IRValue::BefungeStack, out);
+                }
+                IROp::One(op, a, out, irtype) => {
                     match op {
                         UnaryOp::Copy => self.builder.copy(a, &IRValue::BefungeStack),
                         UnaryOp::Minus => self.builder.unary_minus(a),
                         UnaryOp::Complement => self.builder.bitwise_complement(a),
                         UnaryOp::BooleanNegate => self.builder.boolean_negate(a),
                         UnaryOp::Dereference => self.builder.dereference(a),
-                        UnaryOp::AddressOf => self.builder.address_of(a),
                     }
+                    self.builder
+                        .constrain_to_range(&IRValue::BefungeStack, *irtype);
                     self.builder.copy(&IRValue::BefungeStack, out);
                 }
-                IROp::Two(op, a, b, out) => {
+                IROp::Two(op, a, b, out, irtype) => {
                     match op {
                         BinOp::Add => self.builder.add(a, b),
                         BinOp::Sub => self.builder.sub(a, b),
@@ -143,6 +149,8 @@ impl CodeGen {
                             self.builder.bitshift_right(a, b);
                         }
                     }
+                    self.builder
+                        .constrain_to_range(&IRValue::BefungeStack, *irtype);
                     self.builder.copy(&IRValue::BefungeStack, out);
                 }
             }

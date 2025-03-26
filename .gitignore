@@ -1,5 +1,10 @@
 /target
-*.b93
-/*.c
 .direnv
-a.out
+
+*.out
+/*.c
+*.b93
+
+
+flamegraph.svg
+perf.data

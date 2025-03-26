@@ -26,12 +26,14 @@ use lang_c::{
 use thiserror::Error;
 
 use crate::{
-    ir::{BinOp, BranchType, IROp, IRTopLevel, IRValue, UnaryOp},
+    ir::{BinOp, BranchType, IROp, IRTopLevel, IRType, IRTypeConversionError, IRValue, UnaryOp},
     Args,
 };
 
 #[derive(Error, Debug)]
 pub enum IRGenerationErrorType {
+    #[error(transparent)]
+    IRTypeConversionError(#[from] IRTypeConversionError),
     #[error(transparent)]
     InvalidCoercion(#[from] InvalidCoercionError),
     #[error("Cannot dereference non-pointers")]
@@ -97,7 +99,16 @@ impl From<IRGenerationErrorType> for IRGenerationError {
 impl From<InvalidCoercionError> for IRGenerationError {
     fn from(value: InvalidCoercionError) -> Self {
         Self {
-            err: IRGenerationErrorType::InvalidCoercion(value),
+            err: value.into(),
+            span: None,
+        }
+    }
+}
+
+impl From<IRTypeConversionError> for IRGenerationError {
+    fn from(value: IRTypeConversionError) -> Self {
+        Self {
+            err: value.into(),
             span: None,
         }
     }
@@ -235,36 +246,6 @@ Expected one of {expected:?} at column {column}.
                     }
                     None => write!(f, "(no span) {err}"),
                 }
-                /*let relevant_line = source.lines().into_iter().collect::<Vec<_>>()[line - 1]
-                                        .chars()
-                                        .into_iter()
-                                        .collect::<Vec<char>>();
-                                    let real_pos = relevant_line[..column].iter().collect::<String>().width();
-                                    let line_marker = format!("{line} | ");
-
-                                    let formatted_line = format!(
-                                        "{line_marker}{}{}{}",
-                                        &relevant_line[..column - 1].iter().collect::<String>(),
-                                        String::from(relevant_line[column - 1]).underline(),
-                                        &relevant_line[column..].iter().collect::<String>()
-                                    );
-
-                                    let marker = (std::iter::repeat(" ")
-                                        .take(line_marker.width() + real_pos - 1)
-                                        .collect::<String>()
-                                        + "^")
-                                        .bold()
-                                        .red();
-
-                                    panic!(
-                                        r"
-                {} Unexpected token on {line}.
-                Expected one of {expected:?} at column {column}.
-                {formatted_line}
-                {marker}
-                ",
-                                        "Error:".red().bold()
-                                    );*/
             }
         }
     }
@@ -274,9 +255,12 @@ Expected one of {expected:?} at column {column}.
 pub enum CType {
     SignedInt,
     SignedLong,
+    UnsignedInt,
+    UnsignedLong,
     Void,
     Pointer(Box<CType>),
     Array(Box<CType>, usize),
+    // TODO: convert vec to Box<[CType]>
     Function(Vec<CType>, Box<CType>),
 }
 
@@ -866,6 +850,7 @@ impl TopLevelBuilder<'_> {
                 case_value.0,
                 condition.0.clone(),
                 tmp.clone(),
+                CType::UnsignedInt.try_into()?,
             ));
             let lbl = self.generate_switch_case_label(id, i).0;
             self.push(IROp::CondBranch(BranchType::NonZero, lbl, tmp.clone()));
@@ -962,9 +947,19 @@ impl TopLevelBuilder<'_> {
             let (c_value, ctype) = self.parse_expression(&op.variable_name.node)?;
             let asm_value = Self::parse_asm_symbolic(&output_name.node.name)?;
             if input {
-                self.push(IROp::One(UnaryOp::Copy, c_value, asm_value));
+                self.push(IROp::One(
+                    UnaryOp::Copy,
+                    c_value,
+                    asm_value,
+                    ctype.try_into()?,
+                ));
             } else {
-                self.push(IROp::One(UnaryOp::Copy, asm_value, c_value));
+                self.push(IROp::One(
+                    UnaryOp::Copy,
+                    asm_value,
+                    c_value,
+                    ctype.try_into()?,
+                ));
             }
         }
         Ok(())
@@ -1222,7 +1217,7 @@ impl TopLevelBuilder<'_> {
                 };
 
                 // NOTE: TYPE HERE WILL BE ctype !
-                builder.push(IROp::One(UnaryOp::Copy, init, loc));
+                builder.push(IROp::One(UnaryOp::Copy, init, loc, ctype.try_into()?));
                 // FIXME: bad bad bad, just have a seperate global counter
                 self.count = builder.count;
                 let init = IRTopLevel {
@@ -1246,7 +1241,7 @@ impl TopLevelBuilder<'_> {
                     return Ok(());
                 };
 
-                self.push(IROp::One(UnaryOp::Copy, init, loc));
+                self.push(IROp::One(UnaryOp::Copy, init, loc, ctype.try_into()?));
             }
         }
         Ok(())
@@ -1340,7 +1335,11 @@ impl TopLevelBuilder<'_> {
             .map_err(|err| apply_span(err, cast.type_name.span))?;
         let out = self.generate_pseudo();
 
-        self.push(IROp::Cast(out_type.clone(), (expr, expr_type), out.clone()));
+        self.push(IROp::Cast(
+            out_type.clone().try_into()?,
+            (expr, expr_type.try_into()?),
+            out.clone(),
+        ));
         Ok((out, out_type))
     }
 
@@ -1355,11 +1354,21 @@ impl TopLevelBuilder<'_> {
         let (cond, _cond_type) = self.parse_expression(&node.condition.node)?;
         self.push(IROp::CondBranch(BranchType::Zero, else_str, cond));
         let (temp1, temp1_type) = self.parse_expression(&node.then_expression.node)?;
-        self.push(IROp::One(UnaryOp::Copy, temp1, out.clone()));
+        self.push(IROp::One(
+            UnaryOp::Copy,
+            temp1,
+            out.clone(),
+            (&temp1_type).try_into()?,
+        ));
         self.push(IROp::AlwaysBranch(end_str));
         self.push(else_lbl);
         let (temp2, temp2_type) = self.parse_expression(&node.else_expression.node)?;
-        self.push(IROp::One(UnaryOp::Copy, temp2, out.clone()));
+        self.push(IROp::One(
+            UnaryOp::Copy,
+            temp2,
+            out.clone(),
+            (&temp2_type).try_into()?,
+        ));
         self.push(end_lbl);
 
         assert_eq!(temp2_type, temp1_type);
@@ -1400,7 +1409,13 @@ impl TopLevelBuilder<'_> {
                             args.iter().map(|x| x.0.clone()).collect(),
                         ));
                         let out = self.generate_pseudo();
-                        self.push(IROp::One(UnaryOp::Copy, IRValue::Register(0), out.clone()));
+                        self.push(IROp::One(
+                            UnaryOp::Copy,
+                            IRValue::Register(0),
+                            out.clone(),
+                            (&return_type).try_into()?,
+                        ));
+
                         Ok((out, return_type))
                     }
                     _ => Err(IRGenerationErrorType::CallNonFunction)?,
@@ -1421,12 +1436,17 @@ impl TopLevelBuilder<'_> {
             UnaryOperator::Address => {
                 // FIXME: check if is lvalue!!
                 // ie &25 is invalid
-                self.push(IROp::One(UnaryOp::AddressOf, val, out.clone()));
+                self.push(IROp::AddressOf(val, out.clone()));
                 return Ok((out, CType::Pointer(Box::new(val_type))));
             }
             UnaryOperator::Indirection => match val_type {
                 CType::Pointer(pointee_type) => {
-                    self.push(IROp::One(UnaryOp::Dereference, val, out.clone()));
+                    self.push(IROp::One(
+                        UnaryOp::Dereference,
+                        val,
+                        out.clone(),
+                        pointee_type.as_ref().try_into()?,
+                    ));
                     return Ok((out, *pointee_type));
                 }
                 _ => Err(IRGenerationErrorType::DereferenceNonPointer)?,
@@ -1436,15 +1456,35 @@ impl TopLevelBuilder<'_> {
 
         match expr.operator.node {
             UnaryOperator::Complement => {
-                self.push(IROp::One(UnaryOp::Complement, val, out.clone()));
+                self.push(IROp::One(
+                    UnaryOp::Complement,
+                    val,
+                    out.clone(),
+                    (&val_type).try_into()?,
+                ));
             }
-            UnaryOperator::Minus => self.push(IROp::One(UnaryOp::Minus, val, out.clone())),
+            UnaryOperator::Minus => self.push(IROp::One(
+                UnaryOp::Minus,
+                val,
+                out.clone(),
+                (&val_type).try_into()?,
+            )),
             UnaryOperator::Negate => {
-                self.push(IROp::One(UnaryOp::BooleanNegate, val, out.clone()));
+                self.push(IROp::One(
+                    UnaryOp::BooleanNegate,
+                    val,
+                    out.clone(),
+                    (&val_type).try_into()?,
+                ));
                 // ! is special, always returns Int
                 return Ok((out, CType::SignedInt));
             }
-            UnaryOperator::Plus => self.push(IROp::One(UnaryOp::Copy, val, out.clone())), // silly
+            UnaryOperator::Plus => self.push(IROp::One(
+                UnaryOp::Copy,
+                val,
+                out.clone(),
+                (&val_type).try_into()?,
+            )), // silly
 
             // ++x, increment and evaluate to x+1
             UnaryOperator::PreIncrement => {
@@ -1453,6 +1493,7 @@ impl TopLevelBuilder<'_> {
                     val.clone(),
                     IRValue::Immediate(1),
                     val.clone(),
+                    (&val_type).try_into()?,
                 ));
                 return Ok((val, val_type));
             }
@@ -1463,28 +1504,41 @@ impl TopLevelBuilder<'_> {
                     val.clone(),
                     IRValue::Immediate(1),
                     val.clone(),
+                    (&val_type).try_into()?,
                 ));
                 return Ok((val, val_type));
             }
 
             // x++, increment and evaluate to x
             UnaryOperator::PostIncrement => {
-                self.push(IROp::One(UnaryOp::Copy, val.clone(), out.clone()));
+                self.push(IROp::One(
+                    UnaryOp::Copy,
+                    val.clone(),
+                    out.clone(),
+                    (&val_type).try_into()?,
+                ));
                 self.push(IROp::Two(
                     BinOp::Add,
                     val.clone(),
                     IRValue::Immediate(1),
                     val,
+                    (&val_type).try_into()?,
                 ));
             }
             // x--
             UnaryOperator::PostDecrement => {
-                self.push(IROp::One(UnaryOp::Copy, val.clone(), out.clone()));
+                self.push(IROp::One(
+                    UnaryOp::Copy,
+                    val.clone(),
+                    out.clone(),
+                    (&val_type).try_into()?,
+                ));
                 self.push(IROp::Two(
                     BinOp::Sub,
                     val.clone(),
                     IRValue::Immediate(1),
                     val,
+                    (&val_type).try_into()?,
                 ));
             }
 
@@ -1538,26 +1592,42 @@ impl TopLevelBuilder<'_> {
 
         if matches!(expr.operator.node, BinaryOperator::LogicalAnd) {
             let out = self.generate_pseudo();
-            self.ops
-                .push(IROp::One(UnaryOp::Copy, IRValue::Immediate(1), out.clone()));
+            self.ops.push(IROp::One(
+                UnaryOp::Copy,
+                IRValue::Immediate(1),
+                out.clone(),
+                CType::SignedInt.try_into()?,
+            ));
 
             self.push(IROp::AlwaysBranch(end_label_str));
             self.push(skip_label);
-            self.ops
-                .push(IROp::One(UnaryOp::Copy, IRValue::Immediate(0), out.clone()));
+            self.ops.push(IROp::One(
+                UnaryOp::Copy,
+                IRValue::Immediate(0),
+                out.clone(),
+                CType::SignedInt.try_into()?,
+            ));
             self.push(end_label);
             return Ok((out, CType::SignedInt));
         }
 
         if matches!(expr.operator.node, BinaryOperator::LogicalOr) {
             let out = self.generate_pseudo();
-            self.ops
-                .push(IROp::One(UnaryOp::Copy, IRValue::Immediate(0), out.clone()));
+            self.ops.push(IROp::One(
+                UnaryOp::Copy,
+                IRValue::Immediate(0),
+                out.clone(),
+                CType::SignedInt.try_into()?,
+            ));
 
             self.push(IROp::AlwaysBranch(end_label_str));
             self.push(skip_label);
-            self.ops
-                .push(IROp::One(UnaryOp::Copy, IRValue::Immediate(1), out.clone()));
+            self.ops.push(IROp::One(
+                UnaryOp::Copy,
+                IRValue::Immediate(1),
+                out.clone(),
+                CType::SignedInt.try_into()?,
+            ));
             self.push(end_label);
             return Ok((out, CType::SignedInt));
         }
@@ -1610,51 +1680,110 @@ impl TopLevelBuilder<'_> {
         let lhs2 = lhs.clone();
         self.push(match expr.operator.node {
             BinaryOperator::Plus | BinaryOperator::AssignPlus => {
-                IROp::Two(BinOp::Add, lhs, rhs, out.clone())
+                IROp::Two(BinOp::Add, lhs, rhs, out.clone(), (&out_type).try_into()?)
             }
             BinaryOperator::Minus | BinaryOperator::AssignMinus => {
-                IROp::Two(BinOp::Sub, lhs, rhs, out.clone())
+                IROp::Two(BinOp::Sub, lhs, rhs, out.clone(), (&out_type).try_into()?)
             }
             BinaryOperator::Multiply | BinaryOperator::AssignMultiply => {
-                IROp::Two(BinOp::Mult, lhs, rhs, out.clone())
+                IROp::Two(BinOp::Mult, lhs, rhs, out.clone(), (&out_type).try_into()?)
             }
             BinaryOperator::Divide | BinaryOperator::AssignDivide => {
-                IROp::Two(BinOp::Div, lhs, rhs, out.clone())
+                IROp::Two(BinOp::Div, lhs, rhs, out.clone(), (&out_type).try_into()?)
             }
             BinaryOperator::Modulo | BinaryOperator::AssignModulo => {
-                IROp::Two(BinOp::Mod, lhs, rhs, out.clone())
+                IROp::Two(BinOp::Mod, lhs, rhs, out.clone(), (&out_type).try_into()?)
             }
 
-            BinaryOperator::Less => IROp::Two(BinOp::LessThan, lhs, rhs, out.clone()),
-            BinaryOperator::Greater => IROp::Two(BinOp::GreaterThan, lhs, rhs, out.clone()),
-            BinaryOperator::LessOrEqual => IROp::Two(BinOp::LessOrEqual, lhs, rhs, out.clone()),
-            BinaryOperator::GreaterOrEqual => {
-                IROp::Two(BinOp::GreaterOrEqual, lhs, rhs, out.clone())
-            }
-            BinaryOperator::Equals => IROp::Two(BinOp::Equal, lhs, rhs, out.clone()),
-            BinaryOperator::NotEquals => IROp::Two(BinOp::NotEqual, lhs, rhs, out.clone()),
+            BinaryOperator::Less => IROp::Two(
+                BinOp::LessThan,
+                lhs,
+                rhs,
+                out.clone(),
+                CType::SignedInt.try_into()?,
+            ),
+            BinaryOperator::Greater => IROp::Two(
+                BinOp::GreaterThan,
+                lhs,
+                rhs,
+                out.clone(),
+                CType::SignedInt.try_into()?,
+            ),
+            BinaryOperator::LessOrEqual => IROp::Two(
+                BinOp::LessOrEqual,
+                lhs,
+                rhs,
+                out.clone(),
+                CType::SignedInt.try_into()?,
+            ),
+            BinaryOperator::GreaterOrEqual => IROp::Two(
+                BinOp::GreaterOrEqual,
+                lhs,
+                rhs,
+                out.clone(),
+                CType::SignedInt.try_into()?,
+            ),
+            BinaryOperator::Equals => IROp::Two(
+                BinOp::Equal,
+                lhs,
+                rhs,
+                out.clone(),
+                CType::SignedInt.try_into()?,
+            ),
+            BinaryOperator::NotEquals => IROp::Two(
+                BinOp::NotEqual,
+                lhs,
+                rhs,
+                out.clone(),
+                CType::SignedInt.try_into()?,
+            ),
 
             BinaryOperator::Index => todo!("index"),
 
             // bitwise ops
-            BinaryOperator::ShiftLeft | BinaryOperator::AssignShiftLeft => {
-                IROp::Two(BinOp::ShiftLeft, lhs, rhs, out.clone())
-            }
-            BinaryOperator::ShiftRight | BinaryOperator::AssignShiftRight => {
-                IROp::Two(BinOp::ShiftRight, lhs, rhs, out.clone())
-            }
-            BinaryOperator::BitwiseAnd | BinaryOperator::AssignBitwiseAnd => {
-                IROp::Two(BinOp::BitwiseAnd, lhs, rhs, out.clone())
-            }
-            BinaryOperator::BitwiseXor | BinaryOperator::AssignBitwiseXor => {
-                IROp::Two(BinOp::BitwiseXor, lhs, rhs, out.clone())
-            }
-            BinaryOperator::BitwiseOr | BinaryOperator::AssignBitwiseOr => {
-                IROp::Two(BinOp::BitwiseOr, lhs, rhs, out.clone())
-            }
+            BinaryOperator::ShiftLeft | BinaryOperator::AssignShiftLeft => IROp::Two(
+                BinOp::ShiftLeft,
+                lhs,
+                rhs,
+                out.clone(),
+                (&out_type).try_into()?,
+            ),
+            BinaryOperator::ShiftRight | BinaryOperator::AssignShiftRight => IROp::Two(
+                BinOp::ShiftRight,
+                lhs,
+                rhs,
+                out.clone(),
+                (&out_type).try_into()?,
+            ),
+            BinaryOperator::BitwiseAnd | BinaryOperator::AssignBitwiseAnd => IROp::Two(
+                BinOp::BitwiseAnd,
+                lhs,
+                rhs,
+                out.clone(),
+                (&out_type).try_into()?,
+            ),
+            BinaryOperator::BitwiseXor | BinaryOperator::AssignBitwiseXor => IROp::Two(
+                BinOp::BitwiseXor,
+                lhs,
+                rhs,
+                out.clone(),
+                (&out_type).try_into()?,
+            ),
+            BinaryOperator::BitwiseOr | BinaryOperator::AssignBitwiseOr => IROp::Two(
+                BinOp::BitwiseOr,
+                lhs,
+                rhs,
+                out.clone(),
+                (&out_type).try_into()?,
+            ),
 
             BinaryOperator::Assign => {
-                self.push(IROp::One(UnaryOp::Copy, rhs.clone(), lhs));
+                self.push(IROp::One(
+                    UnaryOp::Copy,
+                    rhs.clone(),
+                    lhs,
+                    (&out_type).try_into()?,
+                ));
                 return Ok((rhs, out_type));
             }
 
@@ -1675,8 +1804,13 @@ impl TopLevelBuilder<'_> {
                 | BinaryOperator::AssignBitwiseXor
                 | BinaryOperator::AssignBitwiseOr
         ) {
-            self.push(IROp::One(UnaryOp::Copy, out.clone(), lhs2));
-        }
+            self.push(IROp::One(
+                UnaryOp::Copy,
+                out.clone(),
+                lhs2,
+                (&out_type).try_into()?,
+            ));
+        };
         Ok((out, out_type))
     }
 
@@ -1749,13 +1883,17 @@ impl TopLevelBuilder<'_> {
         &mut self,
         input: (IRValue, CType),
         ctype: &CType,
-    ) -> Result<IRValue, IRGenerationError> {
+    ) -> Result<IRValue, IRGenerationErrorType> {
         if input.1 == *ctype {
             Ok(input.0)
         } else {
             let out = self.generate_pseudo();
             // TODO: check cast is valid
-            self.push(IROp::Cast(ctype.clone(), input, out.clone()));
+            self.push(IROp::Cast(
+                (ctype.clone()).try_into()?,
+                (input.0, input.1.try_into()?),
+                out.clone(),
+            ));
             Ok(out)
         }
     }

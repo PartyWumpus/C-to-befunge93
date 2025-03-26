@@ -5,7 +5,7 @@
 )]
 use std::collections::HashMap;
 
-use crate::ir::{FuncInfo, IRValue};
+use crate::ir::{FuncInfo, IRType, IRValue};
 
 #[derive(Debug)]
 pub struct OpBuilder {
@@ -389,6 +389,53 @@ impl OpBuilder {
 
         // Times by the sign from earlier
         self.char('*');
+    }
+
+    pub fn constrain_to_range(&mut self, value: &IRValue, size: IRType) {
+        match size {
+            IRType::Unsigned(size) => {
+                assert!(size <= 64);
+                // TODO
+                /*
+                self.get_val(value);
+                self.load_number(2_usize.pow(size as u32));
+                self.char('\\');
+                self.load_number(2_usize.pow(size as u32));
+                self.char('\\');
+                self.insert_inline_befunge(&[
+                    r#":v  >\%\$   >"#.to_owned(),
+                    r#" >0`|        "#.to_owned(),
+                    r#"    >1+\%+1-^"#.to_owned(),
+                ]);
+                self.current_stack_size -= 2;
+                */
+            }
+            IRType::Signed(size) => {
+                assert!(size <= 64);
+                if size == 64 {
+                    // Don't need to do anything if it's signed 64 bit,
+                    // because everything already is!
+                    return;
+                }
+                // TODO
+                /*
+                self.get_val(value);
+                self.load_number(2_usize.pow(size as u32));
+                self.char('\\');
+                self.load_number(2_usize.pow(size as u32));
+                self.char('\\');
+                self.insert_inline_befunge(&[
+                    r#":v   >1+\%+1->"#.to_owned(),
+                    r#" >0\`|        "#.to_owned(),
+                    r#"     >\%\$   ^"#.to_owned(),
+                ]);
+                self.load_number(2_usize.pow(size as u32 - 1));
+                self.char('-');
+                self.current_stack_size -= 3;
+                */
+            }
+            _ => panic!(),
+        }
     }
 
     pub fn insert_inline_befunge(&mut self, lines: &[String]) {

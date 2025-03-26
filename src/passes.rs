@@ -15,11 +15,15 @@ fn apply_to_all_ir_values(ops: &mut IRTopLevel, func: &mut impl FnMut(&mut IRVal
             IROp::Return(o) => func(o),
             IROp::Call(_, ops) => ops.iter_mut().for_each(|x| func(x)),
             IROp::CondBranch(_, _, a) => func(a),
-            IROp::One(_, a, out) => {
+            IROp::AddressOf(a, out) => {
                 func(a);
                 func(out);
             }
-            IROp::Two(_, a, b, out) => {
+            IROp::One(_, a, out, _) => {
+                func(a);
+                func(out);
+            }
+            IROp::Two(_, a, b, out, _) => {
                 func(a);
                 func(b);
                 func(out);
