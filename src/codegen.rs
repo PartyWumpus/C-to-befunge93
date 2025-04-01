@@ -41,7 +41,7 @@ impl CodeGen {
         function_map: HashMap<String, FuncInfo>,
         args: &Args,
     ) -> Vec<String> {
-        let mut cg = CodeGen {
+        let mut cg = Self {
             builder: OpBuilder::new(false),
             function_map,
         };
@@ -75,7 +75,7 @@ impl CodeGen {
                 "#$watch[2,0]:int = return".to_owned(),
                 format!("#$break[{},{}]", func_finder_pos.0, func_finder_pos.1),
             ]);
-        };
+        }
         out
     }
 
@@ -88,7 +88,7 @@ impl CodeGen {
                     assert!(!func.is_initializer, "Non static call in static context");
                     // TODO: improve error on unknown func call
                     let Some(called_func) = self.function_map.get(called_func_name) else {
-                        panic!("Function '{}' not found", called_func_name);
+                        panic!("Function '{called_func_name}' not found");
                     };
 
                     self.builder
@@ -103,8 +103,8 @@ impl CodeGen {
                 IROp::Label(label) => self.builder.label(label.to_owned()),
                 IROp::InlineBefunge(lines) => self.builder.insert_inline_befunge(lines),
                 IROp::CondBranch(flavour, label, val) => match flavour {
-                    BranchType::Zero => self.builder.zero_branch(&val, label.to_string()),
-                    BranchType::NonZero => self.builder.not_zero_branch(&val, label.to_string()),
+                    BranchType::Zero => self.builder.zero_branch(val, label.to_string()),
+                    BranchType::NonZero => self.builder.not_zero_branch(val, label.to_string()),
                 },
                 IROp::AlwaysBranch(label) => self.builder.unconditional_branch(label.to_owned()),
                 IROp::One(op, a, out) => {

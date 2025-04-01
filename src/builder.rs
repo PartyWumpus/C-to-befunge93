@@ -512,9 +512,7 @@ impl OpBuilder {
             IRValue::Immediate(value) => self.load_number(*value),
             IRValue::Data(position) => self.load_data_val(*position),
             IRValue::BefungeStack => {
-                if self.current_stack_size == 0 {
-                    panic!("Attempt to use a befunge stack value when the stack is empty!")
-                }
+                assert!((self.current_stack_size != 0), "Attempt to use a befunge stack value when the stack is empty!");
             }
             IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
                 panic!("Psuedo registers should be removed by befunge generation time")
@@ -586,7 +584,7 @@ impl OpBuilder {
         match a {
             IRValue::Stack(offset) => {
                 // TODO: optimize this
-                self.load_number(0b001 * 2_usize.pow(61) - *offset);
+                self.load_number(2_usize.pow(61) - *offset);
                 self.load_stack_ptr();
                 self.add(&IRValue::BefungeStack, &IRValue::BefungeStack);
             }
@@ -740,8 +738,8 @@ fn num_to_bf_chars(num: usize) -> Option<String> {
     }
 }
 
-fn get_highest_divisors(n: usize) -> (usize, usize) {
-    let mut a = (n as f64).sqrt() as usize;
+const fn get_highest_divisors(n: usize) -> (usize, usize) {
+    let mut a = n.isqrt();
     while n % a > 0 {
         a -= 1;
     }

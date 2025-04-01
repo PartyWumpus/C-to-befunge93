@@ -2,7 +2,9 @@
     clippy::needless_pass_by_ref_mut,
     clippy::needless_raw_string_hashes,
     clippy::needless_raw_strings,
-    clippy::unused_self
+    clippy::unused_self,
+    clippy::struct_excessive_bools,
+    clippy::too_many_lines
 )]
 
 use c_compiler::FileBuilder;

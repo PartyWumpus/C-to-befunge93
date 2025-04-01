@@ -153,9 +153,8 @@ impl Display for CompilerError {
                     expected,
                 } = err;
 
-                let relevant_line = source.lines().into_iter().collect::<Vec<_>>()[line - 1]
+                let relevant_line = source.lines().collect::<Vec<_>>()[line - 1]
                     .chars()
-                    .into_iter()
                     .collect::<Vec<char>>();
                 let real_pos = relevant_line[..*column].iter().collect::<String>().width();
                 let line_marker = format!(" {line} | ");
@@ -167,9 +166,7 @@ impl Display for CompilerError {
                     &relevant_line[*column..].iter().collect::<String>()
                 );
 
-                let marker = (std::iter::repeat(" ")
-                    .take(line_marker.width() + real_pos - 1)
-                    .collect::<String>()
+                let marker = (" ".repeat(line_marker.width() + real_pos - 1)
                     + "^")
                     .bold()
                     .red();
@@ -216,16 +213,14 @@ Expected one of {expected:?} at column {column}.
 
                         let real_pos = relevant_line[..start].iter().collect::<String>().width();
                         let width = relevant_line[start..end].iter().collect::<String>().width();
-                        let marker = (std::iter::repeat(" ")
-                            .take(line_marker.width() + real_pos)
-                            .collect::<String>()
-                            + &std::iter::repeat("^").take(width).collect::<String>())
+                        let marker = (" ".repeat(line_marker.width() + real_pos)
+                            + &"^".repeat(width))
                             .bold()
                             .red();
 
                         let filename = match filename {
                             Some(name) => format!("- in file {name}"),
-                            None => "".to_owned(),
+                            None => String::new(),
                         };
 
                         write!(
@@ -286,11 +281,11 @@ pub enum CType {
 }
 
 impl CType {
-    fn is_integer(&self) -> bool {
-        matches!(self, CType::SignedInt | CType::SignedLong)
+    const fn is_integer(&self) -> bool {
+        matches!(self, Self::SignedInt | Self::SignedLong)
     }
 
-    fn get_common(type1: &CType, type2: &CType) -> Result<CType, InvalidCoercionError> {
+    fn get_common(type1: &Self, type2: &Self) -> Result<Self, InvalidCoercionError> {
         // If the same, no conversions are needed
         if type1 == type2 {
             return Ok(type1.clone());
@@ -299,23 +294,23 @@ impl CType {
         // TODO: array types!
 
         // If one is a pointer, they must be the same (already checked) or one must be an integer
-        if matches!(type1, CType::Pointer(_)) {
+        if matches!(type1, Self::Pointer(_)) {
             return if type2.is_integer() {
-                Ok(CType::SignedInt)
+                Ok(Self::SignedInt)
             } else {
                 Err(InvalidCoercionError(type1.clone(), type2.clone()))
             };
         }
 
-        if matches!(type2, CType::Pointer(_)) {
+        if matches!(type2, Self::Pointer(_)) {
             return if type1.is_integer() {
-                Ok(CType::SignedInt)
+                Ok(Self::SignedInt)
             } else {
                 Err(InvalidCoercionError(type1.clone(), type2.clone()))
             };
         }
 
-        Ok(CType::SignedLong)
+        Ok(Self::SignedLong)
     }
 }
 
@@ -351,7 +346,7 @@ enum BreakTypes {
 struct SwitchCaseInfo {
     id: usize,
     // FIXME: will also need to express ranges :)
-    cases: Vec<Box<Node<Expression>>>,
+    cases: Vec<Node<Expression>>,
     has_default: bool,
 }
 
@@ -416,7 +411,7 @@ impl FileBuilder {
                             err: err.err,
                             span: err.span,
                             source: parsed.source.clone(),
-                            filename: Some(format!("{:?}", file)),
+                            filename: Some(format!("{file:?}")),
                         })?);
                 }
                 ExternalDeclaration::StaticAssert(_) => todo!("add static asserts"),
@@ -426,7 +421,7 @@ impl FileBuilder {
                             err: err.err,
                             span: err.span,
                             source: parsed.source.clone(),
-                            filename: Some(format!("{:?}", file)),
+                            filename: Some(format!("{file:?}")),
                         }
                     })?;
                     builder.funcs.push(x);
@@ -553,15 +548,15 @@ impl CType {
                 SpecifierQualifier::Extension(_) => println!(
                     "WARNING: GNU declaration specifier extensions are ignored {specifier:?}"
                 ),
-            };
+            }
         }
 
-        CType::from_specifiers(&c_types)
+        Self::from_specifiers(&c_types)
     }
 
     fn from_declarator(
         declarator: &Declarator,
-        base_type: &CType,
+        base_type: &Self,
     ) -> Result<Self, IRGenerationError> {
         let mut out = base_type.clone();
         let mut param_list = None;
@@ -623,7 +618,7 @@ impl CType {
                 DerivedDeclarator::Function(func_decl) => {
                     if matches!(func_decl.node.ellipsis, Ellipsis::Some) {
                         return Err(IRGenerationErrorType::TODOEllipsis.into());
-                    };
+                    }
                     assert!(param_list.is_none());
                     param_list = Some(vec![]);
                     for param in &func_decl.node.parameters {
@@ -635,7 +630,7 @@ impl CType {
                         };
                         if let Some(ref mut list) = param_list {
                             list.push(ctype);
-                        };
+                        }
                     }
                 }
                 DerivedDeclarator::KRFunction(_) => {
@@ -648,7 +643,7 @@ impl CType {
         }
 
         if let Some(params) = param_list {
-            Ok(CType::Function(params, Box::new(out)))
+            Ok(Self::Function(params, Box::new(out)))
         } else {
             Ok(out)
         }
@@ -682,7 +677,7 @@ impl DeclarationInfo {
                     StorageClassSpecifier::Extern => duration = StorageDuration::Extern,
                     StorageClassSpecifier::Static => duration = StorageDuration::Static,
                     _ => {
-                        println!("WARNING: Some storage class specifiers are ignored {specifier:?}")
+                        println!("WARNING: Some storage class specifiers are ignored {specifier:?}");
                     }
                 },
                 DeclarationSpecifier::TypeSpecifier(spec) => c_types.push(spec),
@@ -699,7 +694,7 @@ impl DeclarationInfo {
                 DeclarationSpecifier::Extension(_) => println!(
                     "WARNING: GNU declaration specifier extensions are ignored {specifier:?}"
                 ),
-            };
+            }
         }
 
         Ok(Self {
@@ -726,7 +721,7 @@ impl DeclarationInfo {
 impl TopLevelBuilder<'_> {
     fn parse_func_declarator(&mut self, decl: &Declarator) -> Result<usize, IRGenerationError> {
         // FIXME: this name is found twice (also in parse_function). that's dumb.
-        let name = self.parse_declarator_name(&decl);
+        let name = self.parse_declarator_name(decl);
 
         let mut params = vec![];
         let mut count = 0;
@@ -735,7 +730,7 @@ impl TopLevelBuilder<'_> {
                 DerivedDeclarator::Function(func_decl) => {
                     if matches!(func_decl.node.ellipsis, Ellipsis::Some) {
                         return Err(IRGenerationErrorType::TODOEllipsis.into());
-                    };
+                    }
                     for param in &func_decl.node.parameters {
                         let info = DeclarationInfo::from_decl(&param.node.specifiers)?;
 
@@ -769,7 +764,7 @@ impl TopLevelBuilder<'_> {
                 CType::Function(params, Box::new(self.return_type.clone())),
             ),
         );
-        return Ok(count);
+        Ok(count)
     }
 
     fn parse_declarator_name(&self, decl: &Declarator) -> String {
@@ -797,7 +792,7 @@ impl TopLevelBuilder<'_> {
                 } else {
                     // return type check not needed, as this is only reachable via UB
                     self.push(IROp::Return(IRValue::Immediate(0)));
-                };
+                }
             }
             Statement::Compound(blocks) => {
                 let old_scope = self.scope.clone();
@@ -835,7 +830,7 @@ impl TopLevelBuilder<'_> {
             Statement::Asm(stmt) => self
                 .parse_asm(&stmt.node)
                 .map_err(|err| apply_span(err, stmt.span))?,
-        };
+        }
         Ok(())
     }
 
@@ -902,21 +897,21 @@ impl TopLevelBuilder<'_> {
             Label::Identifier(lbl) => self.push(IROp::Label(lbl.node.name.clone() + ".goto")),
             Label::Case(expr) => {
                 if self.switch_case_info.is_none() {
-                    Err(IRGenerationErrorType::CaseNotInSwitch)?
+                    Err(IRGenerationErrorType::CaseNotInSwitch)?;
                 }
                 let id = self.switch_case_info.as_ref().unwrap().id;
                 let count = self.switch_case_info.as_ref().unwrap().cases.len();
                 let lbl = self.generate_switch_case_label(id, count).1;
                 self.push(lbl);
                 if let Some(ref mut info) = &mut self.switch_case_info {
-                    info.cases.push(expr.clone());
+                    info.cases.push(*expr.clone());
                 } else {
                     panic!("Switch case outside of switch case D:")
                 }
             }
             Label::Default => {
                 if self.switch_case_info.is_none() {
-                    Err(IRGenerationErrorType::DefaultNotInSwitch)?
+                    Err(IRGenerationErrorType::DefaultNotInSwitch)?;
                 }
                 let id = self.switch_case_info.as_ref().unwrap().id;
                 let lbl = self.generate_switch_case_default_label(id).1;
@@ -954,7 +949,7 @@ impl TopLevelBuilder<'_> {
                     println!("WARNING: asm clobbers are ignored {clobbers:?}");
                 }
             }
-        };
+        }
         Ok(())
     }
 
@@ -971,7 +966,7 @@ impl TopLevelBuilder<'_> {
             } else {
                 self.push(IROp::One(UnaryOp::Copy, asm_value, c_value));
             }
-        };
+        }
         Ok(())
     }
 
@@ -981,7 +976,7 @@ impl TopLevelBuilder<'_> {
         } else if str == "bstack" {
             Ok(IRValue::BefungeStack)
         } else {
-            Err(IRGenerationErrorType::InvalidASMSymbol(str.to_string()).into())
+            Err(IRGenerationErrorType::InvalidASMSymbol(str.to_string()))
         }
     }
 
@@ -997,14 +992,14 @@ impl TopLevelBuilder<'_> {
                 let lbl = self.generate_switch_case_end_label(id).0;
                 self.push(IROp::AlwaysBranch(lbl));
             }
-        };
+        }
         Ok(())
     }
 
     fn parse_continue(&mut self) -> Result<(), IRGenerationError> {
         if self.loop_id.is_none() {
-            Err(IRGenerationErrorType::InvalidContinue)?
-        };
+            Err(IRGenerationErrorType::InvalidContinue)?;
+        }
         let (loop_cont_lbl_str, _) = self.generate_loop_continue_label();
         self.push(IROp::AlwaysBranch(loop_cont_lbl_str));
         Ok(())
@@ -1090,7 +1085,7 @@ impl TopLevelBuilder<'_> {
                 .parse_declarations(&decls.node)
                 .map_err(|err| apply_span(err, decls.span))?,
             ForInitializer::StaticAssert(_) => todo!("static assert in for init"),
-        };
+        }
         Ok(())
     }
 
@@ -1102,12 +1097,12 @@ impl TopLevelBuilder<'_> {
         self.parse_statement(&if_stmt.then_statement.node)?;
         if if_stmt.else_statement.is_some() {
             self.push(IROp::AlwaysBranch(end_str));
-        };
+        }
         self.push(else_label);
         if let Some(else_stmt) = &if_stmt.else_statement {
             self.parse_statement(&else_stmt.node)?;
             self.push(end_label);
-        };
+        }
         Ok(())
     }
 
@@ -1121,7 +1116,7 @@ impl TopLevelBuilder<'_> {
                 .parse_declarations(&decls.node)
                 .map_err(|err| apply_span(err, decls.span))?,
             BlockItem::StaticAssert(_) => todo!("STATIC ASSERT BLOCK: {:?}", block),
-        };
+        }
         Ok(())
     }
 
@@ -1137,7 +1132,7 @@ impl TopLevelBuilder<'_> {
             if matches!(ctype, CType::Function(..)) {
                 self.scope.var_map.insert(name, (None, ctype));
                 continue;
-            };
+            }
 
             let loc = if self.is_const {
                 match info.duration {
@@ -1387,7 +1382,7 @@ impl TopLevelBuilder<'_> {
                     Some((None, CType::Function(expected_args, return_type))) => {
                         let return_type = *return_type;
                         if expected_args.len() != args.len()
-                            && !(matches!(expected_args[..], [CType::Void]) && args.len() == 0)
+                            && !(matches!(expected_args[..], [CType::Void]) && args.is_empty())
                         {
                             return Err(IRGenerationErrorType::IncorrectNumberOfArguments {
                                 expected: expected_args.len(),
@@ -1437,7 +1432,7 @@ impl TopLevelBuilder<'_> {
                 _ => Err(IRGenerationErrorType::DereferenceNonPointer)?,
             },
             _ => (),
-        };
+        }
 
         match expr.operator.node {
             UnaryOperator::Complement => {
@@ -1495,7 +1490,7 @@ impl TopLevelBuilder<'_> {
 
             // Memory stuff
             UnaryOperator::Address | UnaryOperator::Indirection => unreachable!(),
-        };
+        }
 
         Ok((out, val_type))
     }
@@ -1552,7 +1547,7 @@ impl TopLevelBuilder<'_> {
                 .push(IROp::One(UnaryOp::Copy, IRValue::Immediate(0), out.clone()));
             self.push(end_label);
             return Ok((out, CType::SignedInt));
-        };
+        }
 
         if matches!(expr.operator.node, BinaryOperator::LogicalOr) {
             let out = self.generate_pseudo();
@@ -1565,7 +1560,7 @@ impl TopLevelBuilder<'_> {
                 .push(IROp::One(UnaryOp::Copy, IRValue::Immediate(1), out.clone()));
             self.push(end_label);
             return Ok((out, CType::SignedInt));
-        };
+        }
 
         let out = self.generate_pseudo();
         let out_type = match expr.operator.node {
@@ -1681,7 +1676,7 @@ impl TopLevelBuilder<'_> {
                 | BinaryOperator::AssignBitwiseOr
         ) {
             self.push(IROp::One(UnaryOp::Copy, out.clone(), lhs2));
-        };
+        }
         Ok((out, out_type))
     }
 
@@ -1817,7 +1812,7 @@ impl TopLevelBuilder<'_> {
         (str.clone(), IROp::Label(str))
     }
 
-    fn new_loop_id(&mut self) {
+    const fn new_loop_id(&mut self) {
         let x = self.count;
         self.loop_id = Some(x);
         self.count += 1;

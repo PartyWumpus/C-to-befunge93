@@ -8,11 +8,12 @@ struct PsuedoMap<'a> {
     data_map: &'a mut HashMap<String, usize>,
 }
 
+#[allow(clippy::match_same_arms, clippy::redundant_closure)]
 fn apply_to_all_ir_values(ops: &mut IRTopLevel, func: &mut impl FnMut(&mut IRValue)) {
     for i in 0..ops.ops.len() {
         match &mut ops.ops[i] {
             IROp::Return(o) => func(o),
-            IROp::Call(_, ops) => ops.into_iter().for_each(|x| func(x)),
+            IROp::Call(_, ops) => ops.iter_mut().for_each(|x| func(x)),
             IROp::CondBranch(_, _, a) => func(a),
             IROp::One(_, a, out) => {
                 func(a);
@@ -28,7 +29,7 @@ fn apply_to_all_ir_values(ops: &mut IRTopLevel, func: &mut impl FnMut(&mut IRVal
                 func(out);
             }
             _ => (),
-        };
+        }
     }
 }
 
@@ -52,20 +53,18 @@ impl PsuedoMap<'_> {
         if let IRValue::Psuedo { name } = val {
             if let Some(id) = self.stack_map.get(name) {
                 return IRValue::Stack(*id);
-            } else {
-                self.stack_count += 1;
-                self.stack_map.insert(name.to_owned(), self.stack_count);
-                return IRValue::Stack(self.stack_count);
             }
+            self.stack_count += 1;
+            self.stack_map.insert(name.to_owned(), self.stack_count);
+            return IRValue::Stack(self.stack_count);
         }
         if let IRValue::StaticPsuedo { name, .. } = val {
             if let Some(id) = self.data_map.get(name) {
                 return IRValue::Data(*id);
-            } else {
-                *self.data_count += 1;
-                self.data_map.insert(name.to_owned(), *self.data_count);
-                return IRValue::Data(*self.data_count);
             }
+            *self.data_count += 1;
+            self.data_map.insert(name.to_owned(), *self.data_count);
+            return IRValue::Data(*self.data_count);
         }
         val.clone()
     }
@@ -92,7 +91,7 @@ pub fn the_linkening(files: Vec<Vec<IRTopLevel>>) -> Vec<IRTopLevel> {
 
 fn append_to_all_psuedos(func: &mut IRTopLevel, new_suffix: &str) {
     apply_to_all_ir_values(func, &mut |value: &mut IRValue| {
-        append_to_ir_value(value, new_suffix)
+        append_to_ir_value(value, new_suffix);
     });
 }
 
@@ -152,7 +151,7 @@ pub fn sort_functions_pass(funcs: Vec<IRTopLevel>) -> Vec<IRTopLevel> {
     let main_found = false;
     for func in funcs {
         if func.name == "main" {
-            assert!(main_found == false, "Only one main function may exist");
+            assert!(!main_found, "Only one main function may exist");
             out.insert(0, func);
         } else {
             out.push(func);

@@ -22,10 +22,10 @@ enum IRType {
 impl From<CType> for IRType {
     fn from(value: CType) -> Self {
         match value {
-            CType::SignedInt => IRType::Signed(16),
-            CType::SignedLong => IRType::Signed(32),
+            CType::SignedInt => Self::Signed(16),
+            CType::SignedLong => Self::Signed(32),
             CType::Void => panic!("void cannot be converted to an ir type"),
-            CType::Pointer(_) => IRType::Signed(64),
+            CType::Pointer(_) => Self::Signed(64),
             CType::Array(..) => todo!("array types"),
             CType::Function(..) => panic!("function types cannot be converted to irtypes"),
         }
