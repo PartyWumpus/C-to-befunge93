@@ -6,6 +6,7 @@
     clippy::struct_excessive_bools,
     clippy::too_many_lines
 )]
+#![warn(clippy::clone_on_ref_pointer)]
 
 use c_compiler::FileBuilder;
 use clap::Parser;

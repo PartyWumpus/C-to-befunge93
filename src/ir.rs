@@ -29,25 +29,23 @@ pub enum IRTypeConversionError {
     FunctionNotValidType,
 }
 
-impl TryFrom<CType> for IRType {
-    type Error = IRTypeConversionError;
-    fn try_from(value: CType) -> Result<Self, Self::Error> {
-        IRType::try_from(&value)
+impl From<CType> for IRType {
+    fn from(value: CType) -> Self {
+        Self::from(&value)
     }
 }
 
-impl TryFrom<&CType> for IRType {
-    type Error = IRTypeConversionError;
-    fn try_from(value: &CType) -> Result<Self, Self::Error> {
+impl From<&CType> for IRType {
+    fn from(value: &CType) -> Self {
         match value {
-            CType::SignedInt => Ok(IRType::Signed(16)),
-            CType::SignedLong => Ok(IRType::Signed(32)),
-            CType::UnsignedInt => Ok(IRType::Unsigned(32)),
-            CType::UnsignedLong => Ok(IRType::Unsigned(32)),
-            CType::Void => Err(IRTypeConversionError::VoidNotValidType),
-            CType::Pointer(_) => Ok(IRType::Signed(64)),
+            CType::SignedInt => Self::Signed(16),
+            CType::SignedLong => Self::Signed(32),
+            CType::UnsignedInt => Self::Unsigned(32),
+            CType::UnsignedLong => Self::Unsigned(32),
+            CType::Void => panic!("void cannot be used as concrete types"),
+            CType::Pointer(_) => Self::Signed(64),
             CType::Array(..) => todo!("array types"),
-            CType::Function(..) => Err(IRTypeConversionError::FunctionNotValidType),
+            CType::Function(..) => panic!("functions cannot be used as concrete types"),
         }
     }
 }

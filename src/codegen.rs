@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     builder::OpBuilder,
-    ir::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRType, IRValue, UnaryOp},
+    ir::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRValue, UnaryOp},
     Args,
 };
 

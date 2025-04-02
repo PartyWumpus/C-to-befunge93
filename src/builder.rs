@@ -415,7 +415,6 @@ impl OpBuilder {
                 if size == 64 {
                     // Don't need to do anything if it's signed 64 bit,
                     // because everything already is!
-                    return;
                 }
                 // TODO
                 /*
@@ -559,7 +558,10 @@ impl OpBuilder {
             IRValue::Immediate(value) => self.load_number(*value),
             IRValue::Data(position) => self.load_data_val(*position),
             IRValue::BefungeStack => {
-                assert!((self.current_stack_size != 0), "Attempt to use a befunge stack value when the stack is empty!");
+                assert!(
+                    (self.current_stack_size != 0),
+                    "Attempt to use a befunge stack value when the stack is empty!"
+                );
             }
             IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
                 panic!("Psuedo registers should be removed by befunge generation time")
