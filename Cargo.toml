@@ -22,3 +22,13 @@ walkdir = "2.5.0"
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 debug = 0
 strip = "debuginfo"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+#cargo = "warn"
+clone_on_ref_ptr = "warn"
+needless_raw_string_hashes = "allow"
+needless_raw_strings = "allow"
+too_many_lines = "allow"
+struct_excessive_bools = "allow"

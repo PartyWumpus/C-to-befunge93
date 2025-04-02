@@ -774,7 +774,7 @@ fn number_to_bf_string(num: usize) -> String {
 fn num_to_bf_chars(num: usize) -> Option<String> {
     // 2^16 - 1
     if num < 65_535 {
-        if let Some(char) = char::from_u32(num as u32) {
+        if let Some(char) = char::from_u32(u32::try_from(num).unwrap()) {
             return Some(char.to_string());
         }
     }

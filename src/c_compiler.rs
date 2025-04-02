@@ -459,7 +459,7 @@ impl FileBuilder {
 }
 
 #[derive(Error, Debug)]
-struct InvalidTypeError(Box<[TypeSpecifier]>);
+pub struct InvalidTypeError(Box<[TypeSpecifier]>);
 impl Display for InvalidTypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Unknown type {:?}", self.0)
@@ -682,6 +682,11 @@ impl DeclarationInfo {
     }
 }
 
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    clippy::unused_self,
+    clippy::only_used_in_recursion
+)]
 impl TopLevelBuilder<'_> {
     fn parse_func_declarator(
         &mut self,
@@ -1808,7 +1813,7 @@ impl TopLevelBuilder<'_> {
         Ok((out, out_type))
     }
 
-    #[allow(clippy::from_str_radix_10)]
+    #[expect(clippy::match_same_arms)]
     fn parse_constant(&self, val: &Node<Constant>) -> Result<(IRValue, CType), IRGenerationError> {
         // TODO: add checks for size to stop overflow or smth
         match &val.node {
@@ -1867,6 +1872,7 @@ impl TopLevelBuilder<'_> {
         }
     }
 
+    #[expect(clippy::unnecessary_wraps)]
     fn convert_to(
         &mut self,
         input: (IRValue, CType),
@@ -1973,7 +1979,7 @@ fn cleanup_parsed_asm(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
-#[allow(clippy::from_str_radix_10)]
+#[expect(clippy::from_str_radix_10)]
 fn integer_constant_to_usize(int: &Integer) -> usize {
     match int.base {
         IntegerBase::Decimal => usize::from_str_radix(&int.number, 10).unwrap(),
