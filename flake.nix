@@ -19,9 +19,9 @@
         overlays = [(import rust-overlay)];
       };
     in
-      with pkgs; rec {
+      with pkgs; {
         formatter = pkgs.alejandra;
-        devShell = mkShell rec {
+        devShell = mkShell {
           packages = [
             (rust-bin.selectLatestNightlyWith (toolchain:
               toolchain.default.override {
