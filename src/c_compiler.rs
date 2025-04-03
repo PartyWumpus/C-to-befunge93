@@ -40,8 +40,6 @@ pub enum IRGenerationErrorType {
     InvalidType(#[from] InvalidTypeError),
     #[error("Cannot dereference non-pointers")]
     DereferenceNonPointer,
-    #[error("Given type suffix is not yet implemented")]
-    TODOTypeSuffix,
     #[error("Unknown identifier")]
     UnknownIdentifier,
     #[error("Non-integer array length")]
@@ -52,22 +50,36 @@ pub enum IRGenerationErrorType {
     TODOUnknownArrayLength,
     #[error("K&R function definitions are not supported.")]
     KRFunctionDefinition,
-    #[error("Ellipsis are not yet supported.")]
-    TODOEllipsis,
     #[error("Function expected {expected} args, but recieved {recieved}")]
     IncorrectNumberOfArguments { expected: usize, recieved: usize },
     #[error("Attempted to call non function")]
     CallNonFunction,
     #[error("Attempted to use function as a variable")]
     FunctionUsedAsVariable,
-    #[error("GNU block types are not supported")]
-    TODOBlockTypes,
+    #[error("Non static expression in static block")]
+    NonStaticInStaticBlock,
     #[error("Invalid ASM symbol '{0}'")]
     InvalidASMSymbol(String),
+
+    // todos
+    #[error("GNU block types are not supported")]
+    TODOBlockTypes,
     #[error("Imaginary numbers are not supported")]
     TODOImaginary,
+    #[error("Given type suffix is not yet implemented")]
+    TODOTypeSuffix,
     #[error("Floats are not yet supported")]
     TODOFloats,
+    #[error("Ellipsis are not yet supported.")]
+    TODOEllipsis,
+    #[error("Case ranges are not yet supported")]
+    TODOCaseRange,
+    #[error("Static asserts are not yet supported")]
+    TODOStaticAssert,
+    #[error("Initializer lists are not yet supported")]
+    TODOInitializerLists,
+
+    // switch case errors
     #[error("Breaks can only appear inside loops or switch case statements")]
     InvalidBreak,
     #[error("Continues can only appear inside loops")]
@@ -355,7 +367,12 @@ impl FileBuilder {
                             filename: Some(format!("{file:?}")),
                         })?);
                 }
-                ExternalDeclaration::StaticAssert(_) => todo!("add static asserts"),
+                ExternalDeclaration::StaticAssert(ass) => Err(CompilerError::IRGenerationError {
+                    err: IRGenerationErrorType::TODOStaticAssert,
+                    span: ass.span,
+                    source: parsed.source.clone(),
+                    filename: Some(format!("{file:?}")),
+                })?,
                 ExternalDeclaration::FunctionDefinition(func) => {
                     let x = builder.parse_function(func).map_err(|err| {
                         CompilerError::IRGenerationError {
@@ -552,9 +569,28 @@ impl CType {
                                 }
                             }
                         }
-                        ArraySize::StaticExpression(..) => {
-                            panic!("I don't even know what a 'static expression' array size means")
+                        ArraySize::StaticExpression(expr) => {
+                            match &expr.node {
+                                // TODO: ditto on that constant mode
+                                Expression::Constant(val) => match &val.node {
+                                    Constant::Float(_) => {
+                                        return Err(IRGenerationError {
+                                            err: IRGenerationErrorType::NonIntegerArrayLength,
+                                            span: val.span,
+                                        })
+                                    }
+                                    Constant::Integer(int) => integer_constant_to_usize(int),
+                                    Constant::Character(str) => char_constant_to_usize(str),
+                                },
+                                _ => {
+                                    return Err(IRGenerationError {
+                                        err: IRGenerationErrorType::NonStaticInStaticBlock,
+                                        span: expr.span,
+                                    })
+                                }
+                            }
                         }
+
                         ArraySize::VariableUnknown | ArraySize::Unknown => {
                             return Err(IRGenerationError {
                                 err: IRGenerationErrorType::TODOUnknownArrayLength,
@@ -563,7 +599,7 @@ impl CType {
                         }
                     };
                     out = Self::Array(Box::new(out), size);
-                    panic!("Arrays not yet implemented");
+                    todo!("Arrays not yet implemented");
                 }
                 DerivedDeclarator::Function(func_decl) => {
                     if matches!(func_decl.node.ellipsis, Ellipsis::Some) {
@@ -870,36 +906,39 @@ impl TopLevelBuilder<'_> {
     fn parse_label_stmt(&mut self, stmt: &Node<LabeledStatement>) -> Result<(), IRGenerationError> {
         match &stmt.node.label.node {
             Label::Identifier(lbl) => self.push(IROp::Label(lbl.node.name.clone() + ".goto")),
-            Label::Case(expr) => {
-                if self.switch_case_info.is_none() {
-                    Err(IRGenerationError {
+            Label::Case(expr) => match &mut self.switch_case_info {
+                None => {
+                    return Err(IRGenerationError {
                         err: IRGenerationErrorType::CaseNotInSwitch,
                         span: expr.span,
-                    })?;
+                    });
                 }
-                let id = self.switch_case_info.as_ref().unwrap().id;
-                let count = self.switch_case_info.as_ref().unwrap().cases.len();
-                let lbl = self.generate_switch_case_label(id, count).1;
-                self.push(lbl);
-                if let Some(ref mut info) = &mut self.switch_case_info {
+                Some(info) => {
+                    let id = info.id;
+                    let count = info.cases.len();
                     info.cases.push(*expr.clone());
-                } else {
-                    panic!("Switch case outside of switch case D:")
+                    let lbl = self.generate_switch_case_label(id, count).1;
+                    self.push(lbl);
                 }
-            }
+            },
             Label::Default => {
                 if self.switch_case_info.is_none() {
-                    Err(IRGenerationError {
+                    return Err(IRGenerationError {
                         err: IRGenerationErrorType::DefaultNotInSwitch,
                         span: stmt.node.label.span,
-                    })?;
+                    });
                 }
                 let id = self.switch_case_info.as_ref().unwrap().id;
                 let lbl = self.generate_switch_case_default_label(id).1;
                 self.push(lbl);
                 self.switch_case_info.as_mut().unwrap().has_default = true;
             }
-            Label::CaseRange(..) => todo!("GNU extension: case range"),
+            Label::CaseRange(expr) => {
+                return Err(IRGenerationError {
+                    err: IRGenerationErrorType::TODOCaseRange,
+                    span: expr.span,
+                })
+            }
         }
         self.parse_statement(&stmt.node.statement)?;
         Ok(())
@@ -1072,7 +1111,10 @@ impl TopLevelBuilder<'_> {
             ForInitializer::Declaration(decls) => {
                 self.parse_declarations(decls)?;
             }
-            ForInitializer::StaticAssert(_) => todo!("static assert in for init"),
+            ForInitializer::StaticAssert(expr) => Err(IRGenerationError {
+                err: IRGenerationErrorType::TODOStaticAssert,
+                span: expr.span,
+            })?,
         }
         Ok(())
     }
@@ -1098,7 +1140,10 @@ impl TopLevelBuilder<'_> {
         match &block.node {
             BlockItem::Statement(stmt) => self.parse_statement(stmt),
             BlockItem::Declaration(decls) => self.parse_declarations(decls),
-            BlockItem::StaticAssert(_) => todo!("STATIC ASSERT BLOCK: {:?}", block),
+            BlockItem::StaticAssert(ass) => Err(IRGenerationError {
+                err: IRGenerationErrorType::TODOStaticAssert,
+                span: ass.span,
+            }),
         }
     }
 
@@ -1133,12 +1178,10 @@ impl TopLevelBuilder<'_> {
                         if self.file_builder.scope.var_map.contains_key(&name) {
                             let var = self.file_builder.scope.var_map.get(&name).unwrap();
                             match var {
-                                (None, CType::Function(..)) => {
-                                    return Err(IRGenerationError {
-                                        err: IRGenerationErrorType::FunctionUsedAsVariable,
-                                        span: decl.node.declarator.span,
-                                    })
-                                }
+                                (None, CType::Function(..)) => Err(IRGenerationError {
+                                    err: IRGenerationErrorType::FunctionUsedAsVariable,
+                                    span: decl.node.declarator.span,
+                                })?,
                                 (None, _) => unreachable!(),
                                 (Some(loc), stored_ctype) => {
                                     if *stored_ctype != ctype {
@@ -1256,7 +1299,10 @@ impl TopLevelBuilder<'_> {
     ) -> Result<(IRValue, CType), IRGenerationError> {
         match &init.node {
             Initializer::Expression(expr) => self.parse_expression(expr),
-            Initializer::List(_) => todo!("lists in initializers"),
+            Initializer::List(_) => Err(IRGenerationError {
+                err: IRGenerationErrorType::TODOInitializerLists,
+                span: init.span,
+            }),
         }
     }
 
