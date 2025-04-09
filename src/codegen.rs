@@ -97,8 +97,9 @@ impl CodeGen {
                 IROp::Return(val) => {
                     self.builder.return_(val, func.stack_frame_size);
                 }
-                IROp::Cast(_ctype, _val, _output) => {
+                IROp::Cast(_ctype, val, output) => {
                     // FIXME: Casts are currently no op, through the power of being incorrect
+                    self.builder.copy(&val.0, output);
                 }
                 IROp::Label(label) => self.builder.label(label.to_owned()),
                 IROp::InlineBefunge(lines) => self.builder.insert_inline_befunge(lines),
