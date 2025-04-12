@@ -13,6 +13,7 @@ mod builder;
 mod c_compiler;
 mod codegen;
 mod ir;
+mod number_generation;
 mod passes;
 
 #[derive(Parser, Debug)]

@@ -5,7 +5,10 @@
 )]
 use std::collections::HashMap;
 
-use crate::ir::{FuncInfo, IRType, IRValue};
+use crate::{
+    ir::{FuncInfo, IRType, IRValue},
+    number_generation::int_to_befunge_str,
+};
 
 #[derive(Debug)]
 pub struct OpBuilder {
@@ -88,16 +91,7 @@ impl OpBuilder {
 
     /// Puts num on bstack
     pub fn load_number(&mut self, num: usize) {
-        let x = match num {
-            0..10 => num.to_string(),
-            10..19 => (num - 9).to_string() + "9+",
-            19 => "55*1-".to_owned(),
-            // This is the newline char
-            20 => "45*".to_owned(),
-            // This is the " char
-            34 => "98+2*".to_owned(),
-            x => number_to_bf_string(x),
-        };
+        let x = int_to_befunge_str(num as u64);
         self.str(&x);
         self.current_stack_size += 1;
     }
@@ -725,72 +719,4 @@ impl OpBuilder {
         self.str("\\`!");
         self.current_stack_size -= 1;
     }
-}
-
-// NOTE: to reader, this is able to be much simpler than Mikescher's BefunRep
-// as I am allowed to use any valid character up to 65_535, where as they
-// only use ascii, which is likely compatible with more interpreters
-
-// This is not optimal, but it should do a reasonably good job at finding
-// a reasonably short expression (max about 10 chars)
-fn number_to_bf_string(num: usize) -> String {
-    let mut options = vec![];
-    if let Some(res) = num_to_bf_chars(num) {
-        let mult = str::repeat("*", res.chars().count() - 1);
-        options.push("\"".to_owned() + &res + "\"" + &mult);
-    }
-
-    // make n + i, and then take away i
-    for i in 0..10 {
-        if let Some(res) = num_to_bf_chars(num + i) {
-            let mult = str::repeat("*", res.chars().count() - 1);
-            options.push("\"".to_owned() + &res + "\"" + &mult + &i.to_string() + "-");
-        }
-    }
-
-    // make n - i, and then add i
-    for i in 0..10 {
-        if let Some(res) = num_to_bf_chars(num - i) {
-            let mult = str::repeat("*", res.chars().count() - 1);
-            options.push("\"".to_owned() + &res + "\"" + &mult + &i.to_string() + "+");
-        }
-    }
-
-    // find shortest by char length (not .len())
-    let mut options = options.iter();
-    let mut shortest = options.next().map_or_else(|| panic!("Failed to represent {num} in befunge. This is unlikely, if not impossible. (Checked the first 20,000,000 values with zero failures)"), |x| x);
-    let mut shortest_length = shortest.chars().count();
-
-    for option in options {
-        let length = option.chars().count();
-        if length < shortest_length {
-            shortest_length = length;
-            shortest = option;
-        }
-    }
-    shortest.to_string()
-}
-
-fn num_to_bf_chars(num: usize) -> Option<String> {
-    // 2^16 - 1
-    if num < 65_535 {
-        if let Some(char) = char::from_u32(u32::try_from(num).unwrap()) {
-            return Some(char.to_string());
-        }
-    }
-    let (a, b) = get_highest_divisors(num);
-    // If prime or newline or carrage return or speech mark, it's an invalid repr
-    if a == 1 || a == 10 || a == 13 || a == 34 || b == 1 || b == 10 || b == 13 || b == 34 {
-        None
-    } else {
-        Some(num_to_bf_chars(a)? + &num_to_bf_chars(b)?)
-    }
-}
-
-const fn get_highest_divisors(n: usize) -> (usize, usize) {
-    let mut a = n.isqrt();
-    while n % a > 0 {
-        a -= 1;
-    }
-    (a, n / a)
 }
