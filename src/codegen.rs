@@ -114,16 +114,22 @@ impl CodeGen {
                     self.builder.copy(&IRValue::BefungeStack, out);
                 }
                 IROp::One(op, a, out, irtype) => {
-                    match op {
-                        UnaryOp::Copy => self.builder.copy(a, &IRValue::BefungeStack),
-                        UnaryOp::Minus => self.builder.unary_minus(a),
-                        UnaryOp::Complement => self.builder.bitwise_complement(a),
-                        UnaryOp::BooleanNegate => self.builder.boolean_negate(a),
-                        UnaryOp::Dereference => self.builder.dereference(a),
+                    if matches!(op, UnaryOp::Store) {
+                        self.builder.constrain_to_range(a, *irtype);
+                        self.builder.store(&IRValue::BefungeStack, out);
+                    } else {
+                        match op {
+                            UnaryOp::Store => unreachable!(),
+                            UnaryOp::Copy => self.builder.copy(a, &IRValue::BefungeStack),
+                            UnaryOp::Minus => self.builder.unary_minus(a),
+                            UnaryOp::Complement => self.builder.bitwise_complement(a),
+                            UnaryOp::BooleanNegate => self.builder.boolean_negate(a),
+                            UnaryOp::Dereference => self.builder.dereference(a),
+                        }
+                        self.builder
+                            .constrain_to_range(&IRValue::BefungeStack, *irtype);
+                        self.builder.copy(&IRValue::BefungeStack, out);
                     }
-                    self.builder
-                        .constrain_to_range(&IRValue::BefungeStack, *irtype);
-                    self.builder.copy(&IRValue::BefungeStack, out);
                 }
                 IROp::Two(op, a, b, out, irtype) => {
                     match op {

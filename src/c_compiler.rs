@@ -220,6 +220,11 @@ Expected one of {expected:?} at column {column}.
     }
 }
 
+enum ExpressionOutput {
+    Plain((IRValue, CType)),
+    Dereferenced((IRValue, CType)),
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub enum CType {
     SignedInt,
@@ -493,6 +498,13 @@ impl CType {
             [TypeSpecifier::Long]
             | [TypeSpecifier::Long, TypeSpecifier::Int]
             | [TypeSpecifier::Signed, TypeSpecifier::Long, TypeSpecifier::Int] => Self::SignedLong,
+            [TypeSpecifier::Int | TypeSpecifier::Unsigned]
+            | [TypeSpecifier::Unsigned, TypeSpecifier::Int] => Self::UnsignedInt,
+            [TypeSpecifier::Unsigned, TypeSpecifier::Long]
+            | [TypeSpecifier::Unsigned, TypeSpecifier::Long, TypeSpecifier::Int] => {
+                Self::UnsignedLong
+            }
+
             [TypeSpecifier::Void] => Self::Void,
             _ => return Err(InvalidTypeError(types.into())),
         })
@@ -1310,10 +1322,32 @@ impl TopLevelBuilder<'_> {
         &mut self,
         expr: &Node<Expression>,
     ) -> Result<(IRValue, CType), IRGenerationError> {
+        match self.parse_expression_inner(expr)? {
+            ExpressionOutput::Plain((val, ctype)) => Ok((val, ctype)),
+            ExpressionOutput::Dereferenced((ptr, ctype)) => {
+                let out = self.generate_pseudo();
+                self.push(IROp::One(
+                    UnaryOp::Dereference,
+                    ptr,
+                    out.clone(),
+                    ctype.clone().into(),
+                ));
+                Ok((out, ctype))
+            }
+        }
+    }
+
+    fn parse_expression_inner(
+        &mut self,
+        expr: &Node<Expression>,
+    ) -> Result<ExpressionOutput, IRGenerationError> {
+        use ExpressionOutput as Out;
         Ok(match &expr.node {
-            Expression::Constant(constant) => self.parse_constant(constant)?,
+            Expression::Constant(constant) => Out::Plain(self.parse_constant(constant)?),
             Expression::UnaryOperator(unary_expr) => self.parse_unary_expression(unary_expr)?,
-            Expression::BinaryOperator(binary_expr) => self.parse_binary_expression(binary_expr)?,
+            Expression::BinaryOperator(binary_expr) => {
+                Out::Plain(self.parse_binary_expression(binary_expr)?)
+            }
             Expression::Identifier(ident) => match self.scope.var_map.get(&ident.node.name) {
                 None => {
                     return Err(IRGenerationError {
@@ -1321,7 +1355,7 @@ impl TopLevelBuilder<'_> {
                         span: ident.span,
                     })
                 }
-                Some((Some(loc), ctype)) => (loc.clone(), ctype.clone()),
+                Some((Some(loc), ctype)) => Out::Plain((loc.clone(), ctype.clone())),
                 Some((None, CType::Function(_, _))) => {
                     return Err(IRGenerationError {
                         err: IRGenerationErrorType::FunctionUsedAsVariable,
@@ -1330,10 +1364,10 @@ impl TopLevelBuilder<'_> {
                 }
                 Some((None, _)) => unreachable!(),
             },
-            Expression::Call(call_expr) => self.parse_call(call_expr)?,
+            Expression::Call(call_expr) => Out::Plain(self.parse_call(call_expr)?),
 
             // Type stuff
-            Expression::Cast(cast_expr) => self.parse_cast(cast_expr)?,
+            Expression::Cast(cast_expr) => Out::Plain(self.parse_cast(cast_expr)?),
             Expression::SizeOfTy(_) => todo!("SizeOfTy {expr:?}"),
             Expression::SizeOfVal(_) => todo!("SizeOfVal {expr:?}"),
             Expression::AlignOf(_) => todo!("AlignOf {expr:?}"),
@@ -1346,7 +1380,7 @@ impl TopLevelBuilder<'_> {
             Expression::StringLiteral(_) => todo!("StringLiteral {expr:?}"),
             Expression::GenericSelection(_) => todo!("GenericSelection {expr:?}"),
             Expression::CompoundLiteral(_) => todo!("CompoundLiteral {expr:?}"),
-            Expression::Conditional(cond) => self.parse_ternary(cond)?,
+            Expression::Conditional(cond) => Out::Plain(self.parse_ternary(cond)?),
             Expression::Comma(_) => todo!("Comma {expr:?}"),
             Expression::VaArg(_) => todo!("VaArg {expr:?}"),
 
@@ -1475,34 +1509,35 @@ impl TopLevelBuilder<'_> {
     fn parse_unary_expression(
         &mut self,
         expr: &Node<UnaryOperatorExpression>,
-    ) -> Result<(IRValue, CType), IRGenerationError> {
-        let (val, val_type) = self.parse_expression(&expr.node.operand)?;
-        let out = self.generate_pseudo();
-
+    ) -> Result<ExpressionOutput, IRGenerationError> {
+        use ExpressionOutput as Out;
         match expr.node.operator.node {
-            UnaryOperator::Address => {
-                // FIXME: check if is lvalue!!
-                // ie &25 is invalid
-                self.push(IROp::AddressOf(val, out.clone()));
-                return Ok((out, CType::Pointer(Box::new(val_type))));
-            }
-            UnaryOperator::Indirection => match val_type {
-                CType::Pointer(pointee_type) => {
-                    self.push(IROp::One(
-                        UnaryOp::Dereference,
-                        val,
-                        out.clone(),
-                        pointee_type.as_ref().into(),
-                    ));
-                    return Ok((out, *pointee_type));
+            UnaryOperator::Address => match self.parse_expression_inner(&expr.node.operand)? {
+                Out::Plain((val, ctype)) => {
+                    let out = self.generate_pseudo();
+                    self.push(IROp::AddressOf(val, out.clone()));
+                    return Ok(Out::Plain((out, CType::Pointer(Box::new(ctype)))));
                 }
-                _ => Err(IRGenerationError {
-                    err: IRGenerationErrorType::DereferenceNonPointer,
-                    span: expr.node.operator.span,
-                })?,
+                Out::Dereferenced(x) => return Ok(Out::Plain(x)),
             },
+            UnaryOperator::Indirection => {
+                let (val, val_type) = self.parse_expression(&expr.node.operand)?;
+                match val_type {
+                    CType::Pointer(pointee_type) => {
+                        // will be dereferenced laterTM
+                        return Ok(Out::Dereferenced((val, *pointee_type)));
+                    }
+                    _ => Err(IRGenerationError {
+                        err: IRGenerationErrorType::DereferenceNonPointer,
+                        span: expr.node.operator.span,
+                    })?,
+                }
+            }
             _ => (),
         }
+
+        let (val, val_type) = self.parse_expression(&expr.node.operand)?;
+        let out = self.generate_pseudo();
 
         match expr.node.operator.node {
             UnaryOperator::Complement => {
@@ -1527,7 +1562,7 @@ impl TopLevelBuilder<'_> {
                     (&val_type).into(),
                 ));
                 // ! is special, always returns Int
-                return Ok((out, CType::SignedInt));
+                return Ok(Out::Plain((out, CType::SignedInt)));
             }
             UnaryOperator::Plus => self.push(IROp::One(
                 UnaryOp::Copy,
@@ -1545,7 +1580,7 @@ impl TopLevelBuilder<'_> {
                     val.clone(),
                     (&val_type).into(),
                 ));
-                return Ok((val, val_type));
+                return Ok(Out::Plain((val, val_type)));
             }
             // --x, decrement and evaluate to x-1
             UnaryOperator::PreDecrement => {
@@ -1556,7 +1591,7 @@ impl TopLevelBuilder<'_> {
                     val.clone(),
                     (&val_type).into(),
                 ));
-                return Ok((val, val_type));
+                return Ok(Out::Plain((val, val_type)));
             }
 
             // x++, increment and evaluate to x
@@ -1596,51 +1631,29 @@ impl TopLevelBuilder<'_> {
             UnaryOperator::Address | UnaryOperator::Indirection => unreachable!(),
         }
 
-        Ok((out, val_type))
+        Ok(Out::Plain((out, val_type)))
     }
 
     fn parse_binary_expression(
         &mut self,
         expr: &Node<BinaryOperatorExpression>,
     ) -> Result<(IRValue, CType), IRGenerationError> {
-        let (skip_label_str, skip_label) = self.generate_label("logical_skip");
-        let (end_label_str, end_label) = self.generate_label("logical_end");
-
-        let (mut lhs, lhs_type) = self.parse_expression(&expr.node.lhs)?;
-
         if matches!(expr.node.operator.node, BinaryOperator::LogicalAnd) {
+            let (skip_label_str, skip_label) = self.generate_label("logical_skip");
+            let (end_label_str, end_label) = self.generate_label("logical_end");
+
+            let (mut lhs, lhs_type) = self.parse_expression(&expr.node.lhs)?;
             self.push(IROp::CondBranch(
                 BranchType::Zero,
                 skip_label_str.clone(),
-                lhs.clone(),
+                lhs,
             ));
-        }
-        if matches!(expr.node.operator.node, BinaryOperator::LogicalOr) {
-            self.push(IROp::CondBranch(
-                BranchType::NonZero,
-                skip_label_str.clone(),
-                lhs.clone(),
-            ));
-        }
-
-        let (mut rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
-
-        if matches!(expr.node.operator.node, BinaryOperator::LogicalAnd) {
+            let (rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
             self.push(IROp::CondBranch(
                 BranchType::Zero,
                 skip_label_str.clone(),
-                rhs.clone(),
+                rhs,
             ));
-        }
-        if matches!(expr.node.operator.node, BinaryOperator::LogicalOr) {
-            self.push(IROp::CondBranch(
-                BranchType::NonZero,
-                skip_label_str,
-                rhs.clone(),
-            ));
-        }
-
-        if matches!(expr.node.operator.node, BinaryOperator::LogicalAnd) {
             let out = self.generate_pseudo();
             self.ops.push(IROp::One(
                 UnaryOp::Copy,
@@ -1660,8 +1673,18 @@ impl TopLevelBuilder<'_> {
             self.push(end_label);
             return Ok((out, CType::SignedInt));
         }
-
         if matches!(expr.node.operator.node, BinaryOperator::LogicalOr) {
+            let (skip_label_str, skip_label) = self.generate_label("logical_skip");
+            let (end_label_str, end_label) = self.generate_label("logical_end");
+
+            let (mut lhs, lhs_type) = self.parse_expression(&expr.node.lhs)?;
+            self.push(IROp::CondBranch(
+                BranchType::NonZero,
+                skip_label_str.clone(),
+                lhs,
+            ));
+            let (rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
+            self.push(IROp::CondBranch(BranchType::NonZero, skip_label_str, rhs));
             let out = self.generate_pseudo();
             self.ops.push(IROp::One(
                 UnaryOp::Copy,
@@ -1683,7 +1706,8 @@ impl TopLevelBuilder<'_> {
         }
 
         let out = self.generate_pseudo();
-        let out_type = match expr.node.operator.node {
+        let mut assigning_to_pointer = false;
+        let (lhs, rhs, out_type) = match expr.node.operator.node {
             BinaryOperator::AssignPlus
             | BinaryOperator::AssignMinus
             | BinaryOperator::AssignMultiply
@@ -1695,14 +1719,22 @@ impl TopLevelBuilder<'_> {
             | BinaryOperator::AssignBitwiseXor
             | BinaryOperator::AssignBitwiseOr
             | BinaryOperator::Assign => {
-                // on assignment, rhs is casted to lhs
+                // on assignment, rhs is cast to typeof(lhs)
+                let (lhs, lhs_type) = match self.parse_expression_inner(&expr.node.lhs)? {
+                    ExpressionOutput::Plain((val, ctype)) => (val, ctype),
+                    ExpressionOutput::Dereferenced((val, ctype)) => {
+                        assigning_to_pointer = true;
+                        (val, ctype)
+                    }
+                };
+                let (mut rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
                 rhs = self.convert_to((rhs, rhs_type), &lhs_type).map_err(|err| {
                     IRGenerationError {
                         err,
                         span: expr.span,
                     }
                 })?;
-                lhs_type
+                (lhs, rhs, lhs_type)
             }
 
             BinaryOperator::Less
@@ -1721,6 +1753,9 @@ impl TopLevelBuilder<'_> {
             | BinaryOperator::BitwiseAnd
             | BinaryOperator::BitwiseXor
             | BinaryOperator::BitwiseOr => {
+                let (mut lhs, lhs_type) = self.parse_expression(&expr.node.lhs)?;
+                let (mut rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
+
                 let common_type =
                     CType::get_common(&lhs_type, &rhs_type).map_err(|err| IRGenerationError {
                         err: err.into(),
@@ -1738,7 +1773,7 @@ impl TopLevelBuilder<'_> {
                         err,
                         span: expr.span,
                     })?;
-                common_type
+                (lhs, rhs, common_type)
             }
 
             BinaryOperator::Index => todo!("indexing"),
@@ -1823,13 +1858,7 @@ impl TopLevelBuilder<'_> {
             }
 
             BinaryOperator::Assign => {
-                self.push(IROp::One(
-                    UnaryOp::Copy,
-                    rhs.clone(),
-                    lhs,
-                    (&out_type).into(),
-                ));
-                return Ok((rhs, out_type));
+                IROp::One(UnaryOp::Copy, rhs, out.clone(), (&out_type).into())
             }
 
             // dealt with higher up
@@ -1838,7 +1867,8 @@ impl TopLevelBuilder<'_> {
 
         if matches!(
             expr.node.operator.node,
-            BinaryOperator::AssignPlus
+            BinaryOperator::Assign
+                | BinaryOperator::AssignPlus
                 | BinaryOperator::AssignMinus
                 | BinaryOperator::AssignMultiply
                 | BinaryOperator::AssignDivide
@@ -1849,12 +1879,21 @@ impl TopLevelBuilder<'_> {
                 | BinaryOperator::AssignBitwiseXor
                 | BinaryOperator::AssignBitwiseOr
         ) {
-            self.push(IROp::One(
-                UnaryOp::Copy,
-                out.clone(),
-                lhs2,
-                (&out_type).into(),
-            ));
+            if assigning_to_pointer {
+                self.push(IROp::One(
+                    UnaryOp::Store,
+                    out.clone(),
+                    lhs2,
+                    (&out_type).into(),
+                ));
+            } else {
+                self.push(IROp::One(
+                    UnaryOp::Copy,
+                    out.clone(),
+                    lhs2,
+                    (&out_type).into(),
+                ));
+            }
         }
         Ok((out, out_type))
     }

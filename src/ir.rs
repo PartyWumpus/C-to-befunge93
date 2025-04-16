@@ -76,6 +76,7 @@ pub enum UnaryOp {
     Minus,
     Complement,
     Copy,
+    Store,
     BooleanNegate,
     Dereference,
 }

@@ -386,6 +386,7 @@ impl OpBuilder {
     }
 
     pub fn constrain_to_range(&mut self, value: &IRValue, size: IRType) {
+        self.get_val(value);
         match size {
             IRType::Unsigned(size) => {
                 assert!(size <= 64);
@@ -662,6 +663,26 @@ impl OpBuilder {
 
         self.char('g');
         self.current_stack_size -= 1;
+    }
+
+    /// follows pointer
+    pub fn store(&mut self, val: &IRValue, loc: &IRValue) {
+        self.get_val(val);
+
+        self.get_val(loc);
+        self.char(':');
+        self.current_stack_size += 1;
+
+        self.load_number(2_usize.pow(61));
+        self.modulo(&IRValue::BefungeStack, &IRValue::BefungeStack);
+
+        self.char('\\');
+
+        self.load_number(2_usize.pow(61));
+        self.divide(&IRValue::BefungeStack, &IRValue::BefungeStack);
+
+        self.char('p');
+        self.current_stack_size -= 3;
     }
 
     pub fn add(&mut self, a: &IRValue, b: &IRValue) {
