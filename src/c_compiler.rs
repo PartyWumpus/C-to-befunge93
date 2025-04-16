@@ -1878,7 +1878,7 @@ impl TopLevelBuilder<'_> {
                         size: IntegerSize::Int,
                         unsigned: true,
                         imaginary: false,
-                    } => Err(IRGenerationErrorType::TODOTypeSuffix),
+                    } => Ok(CType::UnsignedInt),
                     IntegerSuffix {
                         size: IntegerSize::Long,
                         unsigned: false,
@@ -1888,7 +1888,7 @@ impl TopLevelBuilder<'_> {
                         size: IntegerSize::Long,
                         unsigned: true,
                         imaginary: false,
-                    } => Err(IRGenerationErrorType::TODOTypeSuffix),
+                    } => Ok(CType::UnsignedLong),
                     IntegerSuffix {
                         size: IntegerSize::LongLong,
                         unsigned: false,
