@@ -53,7 +53,7 @@ fn factors_to_befunge_str_rec(res: &Factors, chars: &mut Vec<char>, ops: &mut Ve
                 ops.push('+');
             }
             -9..=-1 => {
-                ops.push(i.offset.to_string().chars().next().unwrap());
+                ops.push((-i.offset).to_string().chars().next().unwrap());
                 ops.push('-');
             }
             _ => unreachable!(),
