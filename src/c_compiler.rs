@@ -27,7 +27,7 @@ use thiserror::Error;
 
 use crate::{
     ir::{BinOp, BranchType, IROp, IRTopLevel, IRTypeConversionError, IRValue, UnaryOp},
-    Args,
+    ARGS,
 };
 
 #[derive(Error, Debug)]
@@ -333,10 +333,7 @@ struct ScopeInfo {
 }
 
 impl FileBuilder {
-    pub fn parse_c<P: AsRef<Path> + Debug>(
-        file: P,
-        args: &Args,
-    ) -> Result<Vec<IRTopLevel>, CompilerError> {
+    pub fn parse_c<P: AsRef<Path> + Debug>(file: P) -> Result<Vec<IRTopLevel>, CompilerError> {
         let mut builder = Self {
             count: 0,
             scope: ScopeInfo::default(),
@@ -354,7 +351,7 @@ impl FileBuilder {
         };
         let parsed = parse(&config, &file)?;
 
-        if args.verbose {
+        if ARGS.verbose {
             println!("-- C SOURCE (post preprocessor)");
             println!("{}\n", parsed.source);
         }

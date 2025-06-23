@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     builder::OpBuilder,
     ir::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRValue, UnaryOp},
-    Args,
+    ARGS,
 };
 
 static PRE_INIT_PRELUDE: &str = r##"v!R#######
@@ -39,7 +39,6 @@ impl CodeGen {
     pub fn compile_program(
         program: Vec<IRTopLevel>,
         function_map: HashMap<String, FuncInfo>,
-        args: &Args,
     ) -> Vec<String> {
         let mut cg = Self {
             builder: OpBuilder::new(false),
@@ -65,10 +64,10 @@ impl CodeGen {
         out.extend(funcs);
 
         // Sneaky stick filename at top
-        out[0] += &(" file: ".to_owned() + &args.filename);
+        out[0] += &(" file: ".to_owned() + &ARGS.filename);
 
         // Stick preproccesor info at the bottom
-        if args.preprocessor_info {
+        if ARGS.preprocessor_info {
             out.extend(vec![
                 "#$watch[0,0]:int = stack".to_owned(),
                 "#$watch[1,0]:int = call stack".to_owned(),

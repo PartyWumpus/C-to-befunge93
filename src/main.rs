@@ -7,6 +7,7 @@ use passes::{
     the_linkening,
 };
 use std::process;
+use std::sync::LazyLock;
 use walkdir::WalkDir;
 
 mod builder;
@@ -15,6 +16,8 @@ mod codegen;
 mod ir;
 mod number_generation;
 mod passes;
+
+static ARGS: LazyLock<Args> = LazyLock::new(|| Args::parse());
 
 #[derive(Parser, Debug)]
 #[command(about="A C compiler that outputs befunge93 instead of assembly.", long_about = None)]
@@ -44,24 +47,23 @@ struct Args {
 }
 
 fn main() {
-    let args = Args::parse();
-    let c_source = std::fs::read_to_string(&args.filename).expect("Unable to read input file");
-    if args.verbose {
+    let c_source = std::fs::read_to_string(&ARGS.filename).expect("Unable to read input file");
+    if ARGS.verbose {
         println!("-- C SOURCE (pre preprocessor)");
         println!("{c_source}\n");
     }
 
     // TODO: support multiple user files
-    let program = match FileBuilder::parse_c(&args.filename, &args) {
+    let program = match FileBuilder::parse_c(&ARGS.filename) {
         Err(err) => {
-            if !args.silent {
+            if !ARGS.silent {
                 println!("{err}");
             }
             process::exit(1);
         }
         Ok(x) => x,
     };
-    if args.verbose {
+    if ARGS.verbose {
         println!("\n-- IR, (pre linking)");
         print_ir(&program);
     }
@@ -75,9 +77,9 @@ fn main() {
         if entry.file_type().is_file() {
             if let Some(ext) = entry.path().extension() {
                 if ext == "c" {
-                    files.push(match FileBuilder::parse_c(entry.path(), &args) {
+                    files.push(match FileBuilder::parse_c(entry.path()) {
                         Err(err) => {
-                            if !args.silent {
+                            if !ARGS.silent {
                                 println!("{err}");
                             }
                             process::exit(1);
@@ -92,7 +94,7 @@ fn main() {
     // TODO: strip out unused functions
     let mut program = the_linkening(files);
 
-    if args.verbose {
+    if ARGS.verbose {
         println!("\n-- IR, (post linking, pre optimizations)");
         print_ir(&program);
     }
@@ -103,25 +105,25 @@ fn main() {
     stack_size_reducer_pass(&mut program);
     let function_map = function_id_mapping_pass(&program);
 
-    if args.verbose {
+    if ARGS.verbose {
         println!("\n-- IR, (post optimizations)");
         print_ir(&program);
         println!("function mappings: {function_map:?}");
     }
 
-    if args.verbose {
+    if ARGS.verbose {
         println!("\n-- befunge begin");
     }
 
-    let out = CodeGen::compile_program(program, function_map, &args);
+    let out = CodeGen::compile_program(program, function_map);
 
-    if !args.quiet && args.outfile.is_none() {
+    if !ARGS.quiet && ARGS.outfile.is_none() {
         for line in out.clone() {
             println!("{line}");
         }
     }
 
-    if let Some(filename) = args.outfile {
+    if let Some(filename) = &ARGS.outfile {
         write_each(filename, out).unwrap();
     }
 }
