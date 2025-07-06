@@ -53,11 +53,11 @@ fn main() {
         println!("{c_source}\n");
     }
 
-    // TODO: support multiple user files
+    // TODO: support multiple user files?
     let program = match FileBuilder::parse_c(&ARGS.filename) {
         Err(err) => {
             if !ARGS.silent {
-                println!("{err}");
+                err.print();
             }
             process::exit(1);
         }
@@ -80,7 +80,7 @@ fn main() {
                     files.push(match FileBuilder::parse_c(entry.path()) {
                         Err(err) => {
                             if !ARGS.silent {
-                                println!("{err}");
+                                err.print();
                             }
                             process::exit(1);
                         }

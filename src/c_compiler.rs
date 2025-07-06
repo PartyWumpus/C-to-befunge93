@@ -1,6 +1,11 @@
-use colored::Colorize;
-use line_numbers::LinePositions;
-use unicode_width::UnicodeWidthStr;
+use codespan_reporting::{
+    diagnostic::{self, Diagnostic},
+    files::SimpleFile,
+    term::{
+        self,
+        termcolor::{ColorChoice, StandardStream},
+    },
+};
 
 use std::{
     collections::HashMap,
@@ -107,115 +112,91 @@ impl Display for IRGenerationError {
     }
 }
 
-#[derive(Error, Debug)]
 pub enum CompilerError {
     IRGenerationError {
-        #[source]
         err: IRGenerationErrorType,
         span: lang_c::span::Span,
         source: String,
-        filename: Option<String>,
+        filename: String,
     },
-    #[error(transparent)]
-    ParseError(#[from] lang_c::driver::Error),
+    ParseError {
+        err: lang_c::driver::Error,
+        filename: String,
+    },
 }
 
-// sorry.
-impl Display for CompilerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ParseError(lang_c::driver::Error::PreprocessorError(err)) => {
-                write!(
-                    f,
-                    "{} occurred during preprocessing:\n{err}",
-                    "Error:".red().bold()
-                )
-            }
-            Self::ParseError(lang_c::driver::Error::SyntaxError(err)) => {
-                let lang_c::driver::SyntaxError {
-                    source,
-                    line,
-                    column,
-                    offset: _offset,
-                    expected,
-                } = err;
+impl CompilerError {
+    pub fn print(&self) -> () {
+        let writer = StandardStream::stderr(ColorChoice::Always);
+        let config = codespan_reporting::term::Config::default();
 
-                let relevant_line = source.lines().collect::<Vec<_>>()[line - 1]
-                    .chars()
-                    .collect::<Vec<char>>();
-                let real_pos = relevant_line[..*column].iter().collect::<String>().width();
-                let line_marker = format!(" {line} | ");
-
-                let formatted_line = format!(
-                    "{line_marker}{}{}{}",
-                    &relevant_line[..column - 1].iter().collect::<String>(),
-                    String::from(relevant_line[column - 1]).underline(),
-                    &relevant_line[*column..].iter().collect::<String>()
-                );
-
-                let marker = (" ".repeat(line_marker.width() + real_pos - 1) + "^")
-                    .bold()
-                    .red();
-
-                write!(
-                    f,
-                    r"
-{} Unexpected token.
-Expected one of {expected:?} at column {column}. 
-{formatted_line}
-{marker}",
-                    "Error:".red().bold()
-                )
-            }
-
+        let (filename, source) = match self {
             Self::IRGenerationError {
-                err,
-                span,
-                source,
+                filename, source, ..
+            } => (filename, source),
+            Self::ParseError {
                 filename,
+                err: lang_c::driver::Error::SyntaxError(err),
+            } => (filename, &err.source),
+            Self::ParseError {
+                filename,
+                err: lang_c::driver::Error::PreprocessorError(_),
+            } => (filename, &"".to_owned()),
+        };
+
+        let file = SimpleFile::new(filename, source);
+        let diag = self.report();
+
+        term::emit(&mut writer.lock(), &config, &file, &diag).expect("if io fails i cant do anything anyways");
+    }
+
+    fn report(&self) -> Diagnostic<()> {
+        match self {
+            Self::ParseError {
+                err: lang_c::driver::Error::SyntaxError(err),
+                ..
             } => {
-                let lines = source.lines().collect::<Vec<_>>();
-                let line_positions = LinePositions::from(source.as_str());
-                let (start_line_num, start) = line_positions.from_offset(span.start);
-                let (end_line_num, end) = line_positions.from_offset(span.end);
-
-                assert_eq!(start_line_num, end_line_num); // TODO:
-                let relevant_line = lines[start_line_num.as_usize()]
-                    .chars()
-                    .collect::<Vec<char>>();
-                let line_marker = format!(" {} | ", start_line_num.display());
-
-                let formatted_line = format!(
-                    "{line_marker}{}{}{}",
-                    &relevant_line[..start].iter().collect::<String>(),
-                    &relevant_line[start..end]
-                        .iter()
-                        .collect::<String>()
-                        .underline(),
-                    &relevant_line[end..].iter().collect::<String>()
-                );
-
-                let real_pos = relevant_line[..start].iter().collect::<String>().width();
-                let width = relevant_line[start..end].iter().collect::<String>().width();
-                let marker = (" ".repeat(line_marker.width() + real_pos) + &"^".repeat(width))
-                    .bold()
-                    .red();
-
-                let filename = match filename {
-                    Some(name) => format!("- in file {name}"),
-                    None => String::new(),
+                // check if missing char is (probably) a missing semicolon
+                let mut end_of_line = false;
+                let mut i = 0;
+                if err.expected.contains(";") {
+                    loop {
+                        i += 1;
+                        if i == err.offset {
+                            break;
+                        };
+                        let char = err.source.as_bytes()[err.offset - i];
+                        if char == b'\n' {
+                            end_of_line = true;
+                            break;
+                        } else if char != b' ' {
+                            end_of_line = false;
+                            break;
+                        }
+                    }
                 };
 
-                write!(
-                    f,
-                    r"
-{filename}
-{} {err}.
-{formatted_line}
-{marker}",
-                    "Error:".red().bold()
-                )
+                if end_of_line {
+                    Diagnostic::error()
+                        .with_message("Missing semicolon at end of line")
+                        .with_label(diagnostic::Label::primary((), err.offset-i..err.offset-i).with_message("insert `;` here"))
+                        .with_label(diagnostic::Label::secondary((), err.offset..err.offset).with_message("Unexpected token"))
+                } else {
+                    Diagnostic::error()
+                        .with_message("Unexpected token")
+                        .with_label(diagnostic::Label::primary((), err.offset..err.offset))
+                        .with_note(format!("Expected one of {:?}", err.expected))
+                }
             }
+            Self::ParseError {
+                err: lang_c::driver::Error::PreprocessorError(err),
+                ..
+            } => Diagnostic::error()
+                .with_message("Preprocessor error")
+                .with_note(err),
+            Self::IRGenerationError { err, span, .. } => Diagnostic::error()
+                .with_message(err)
+                .with_label(diagnostic::Label::primary((), span.start..span.end)),
         }
     }
 }
@@ -349,7 +330,10 @@ impl FileBuilder {
                 "-E".into(),
             ],
         };
-        let parsed = parse(&config, &file)?;
+        let parsed = parse(&config, &file).map_err(|err| CompilerError::ParseError {
+            err: err,
+            filename: format!("{file:?}"),
+        })?;
 
         if ARGS.verbose {
             println!("-- C SOURCE (post preprocessor)");
@@ -366,14 +350,14 @@ impl FileBuilder {
                             err: err.err,
                             span: err.span,
                             source: parsed.source.clone(),
-                            filename: Some(format!("{file:?}")),
+                            filename: format!("{file:?}"),
                         })?);
                 }
                 ExternalDeclaration::StaticAssert(ass) => Err(CompilerError::IRGenerationError {
                     err: IRGenerationErrorType::TODOStaticAssert,
                     span: ass.span,
                     source: parsed.source.clone(),
-                    filename: Some(format!("{file:?}")),
+                    filename: format!("{file:?}"),
                 })?,
                 ExternalDeclaration::FunctionDefinition(func) => {
                     let x = builder.parse_function(func).map_err(|err| {
@@ -381,7 +365,7 @@ impl FileBuilder {
                             err: err.err,
                             span: err.span,
                             source: parsed.source.clone(),
-                            filename: Some(format!("{file:?}")),
+                            filename: format!("{file:?}"),
                         }
                     })?;
                     builder.funcs.push(x);
