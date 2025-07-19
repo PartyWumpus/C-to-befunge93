@@ -16,7 +16,7 @@ v#########  below are the bit stacks, for bitshifts and bitwise operations
 v#########  the last 64 bits are just zeros for cheaper bitshifts
 v bit stack A
 v bit stack B
->"!"00p 010g2-2pv
+>"!"00p 010g3-2pv
 v               <
 >0>:0\9p:0\8p1+v
   ^_v#-+"@A":  <
@@ -94,7 +94,7 @@ impl CodeGen {
                         .call(self.function_map[&func.name], *called_func, vals);
                 }
                 IROp::Return(val) => {
-                    self.builder.return_(val, func.stack_frame_size);
+                    self.builder.return_(val);
                 }
                 IROp::Cast(_ctype, val, output) => {
                     // FIXME: Casts are currently no op, through the power of being incorrect
@@ -158,6 +158,9 @@ impl CodeGen {
                     self.builder
                         .constrain_to_range(&IRValue::BefungeStack, *irtype);
                     self.builder.copy(&IRValue::BefungeStack, out);
+                }
+                IROp::CopyToOffset(source, location, offset) => {
+                    self.builder.copy_with_offset(source, location, *offset);
                 }
             }
             self.builder.add_space();

@@ -1,3 +1,4 @@
+use clap::builder;
 use codespan_reporting::{
     diagnostic::{self, Diagnostic},
     files::SimpleFile,
@@ -7,11 +8,13 @@ use codespan_reporting::{
     },
 };
 
+use core::panic;
 use std::{
     collections::HashMap,
     fmt::{Debug, Display},
     mem,
     path::Path,
+    ptr,
 };
 
 use lang_c::{
@@ -26,7 +29,7 @@ use lang_c::{
         UnaryOperatorExpression, WhileStatement,
     },
     driver::{parse, Flavor},
-    span::Node,
+    span::{Node, Span},
 };
 use thiserror::Error;
 
@@ -147,7 +150,8 @@ impl CompilerError {
         let file = SimpleFile::new(filename, source);
         let diag = self.report();
 
-        term::emit(&mut writer.lock(), &config, &file, &diag).expect("if io fails i cant do anything anyways");
+        term::emit(&mut writer.lock(), &config, &file, &diag)
+            .expect("if io fails i cant do anything anyways");
     }
 
     fn report(&self) -> Diagnostic<()> {
@@ -179,8 +183,14 @@ impl CompilerError {
                 if end_of_line {
                     Diagnostic::error()
                         .with_message("Missing semicolon at end of line")
-                        .with_label(diagnostic::Label::primary((), err.offset-i..err.offset-i).with_message("insert `;` here"))
-                        .with_label(diagnostic::Label::secondary((), err.offset..err.offset).with_message("Unexpected token"))
+                        .with_label(
+                            diagnostic::Label::primary((), err.offset - i..err.offset - i)
+                                .with_message("insert `;` here"),
+                        )
+                        .with_label(
+                            diagnostic::Label::secondary((), err.offset..err.offset)
+                                .with_message("Unexpected token"),
+                        )
                 } else {
                     Diagnostic::error()
                         .with_message("Unexpected token")
@@ -222,6 +232,27 @@ pub enum CType {
 impl CType {
     const fn is_integer(&self) -> bool {
         matches!(self, Self::SignedInt | Self::SignedLong)
+    }
+
+    fn zero_init(&self) -> Vec<IRValue> {
+        match self {
+            CType::Pointer(..)
+            | CType::SignedInt
+            | CType::SignedLong
+            | CType::UnsignedInt
+            | CType::UnsignedLong => {
+                vec![IRValue::Immediate(0)]
+            }
+            CType::Array(inner_type, length) => {
+                let mut out = vec![];
+                for _ in 0..*length {
+                    out.extend(inner_type.zero_init())
+                }
+                out
+            }
+            CType::Void => panic!("i am not sure what this would mean"),
+            CType::Function(..) => panic!("i am not zero initializing your function sorry"),
+        }
     }
 
     fn get_common(type1: &Self, type2: &Self) -> Result<Self, InvalidCoercionError> {
@@ -311,6 +342,11 @@ pub struct FileBuilder {
 struct ScopeInfo {
     // IRValue is only None when CType is Function
     var_map: HashMap<String, (Option<IRValue>, CType)>,
+}
+
+enum InitializerInfo {
+    Single((IRValue, CType), Span),
+    Compound(Vec<InitializerInfo>, Span),
 }
 
 impl FileBuilder {
@@ -592,7 +628,6 @@ impl CType {
                         }
                     };
                     out = Self::Array(Box::new(out), size);
-                    todo!("Arrays not yet implemented");
                 }
                 DerivedDeclarator::Function(func_decl) => {
                     if matches!(func_decl.node.ellipsis, Ellipsis::Some) {
@@ -861,7 +896,7 @@ impl TopLevelBuilder<'_> {
         let info = old_switch_case_info.unwrap();
         let id = info.id;
 
-        let tmp = self.generate_pseudo();
+        let tmp = self.generate_pseudo(CType::UnsignedInt.sizeof());
         for (i, expr) in info.cases.iter().enumerate() {
             let case_value = self.parse_expression(expr)?;
             self.push(IROp::Two(
@@ -1140,6 +1175,37 @@ impl TopLevelBuilder<'_> {
         }
     }
 
+    fn flatten_and_type_check_initializer_info(
+        &mut self,
+        init_info: InitializerInfo,
+        target_type: &CType,
+    ) -> Result<Vec<IRValue>, IRGenerationError> {
+        Ok(match (target_type, init_info) {
+            (_, InitializerInfo::Single((rhs, rhs_type), span)) => {
+                vec![self
+                    .convert_to((rhs, rhs_type), &target_type)
+                    .map_err(|err| IRGenerationError { err, span: span })?]
+            }
+            (CType::Array(inner_type, size), InitializerInfo::Compound(init_list, span)) => {
+                if init_list.len() > *size {
+                    panic!("{:?}", span);
+                };
+                let mut out: Vec<IRValue> = vec![];
+                let mut length = 0;
+                for init_info in init_list {
+                    let x = self.flatten_and_type_check_initializer_info(init_info, inner_type)?;
+                    out.extend(x);
+                    length += 1;
+                }
+                while length < *size {
+                    out.extend(inner_type.zero_init());
+                }
+                out
+            }
+            _ => panic!(),
+        })
+    }
+
     fn parse_declarations(&mut self, decls: &Node<Declaration>) -> Result<(), IRGenerationError> {
         let info = DeclarationInfo::from_decl(&decls.node.specifiers)?;
         // FIXME: this is horrific.
@@ -1158,10 +1224,12 @@ impl TopLevelBuilder<'_> {
                     StorageDuration::Static => IRValue::StaticPsuedo {
                         name: name.clone(),
                         linkable: false,
+                        size: ctype.sizeof(),
                     },
                     StorageDuration::Default | StorageDuration::Extern => IRValue::StaticPsuedo {
                         name: name.clone(),
                         linkable: true,
+                        size: ctype.sizeof(),
                     },
                 }
             } else {
@@ -1199,6 +1267,7 @@ impl TopLevelBuilder<'_> {
                             let j = IRValue::StaticPsuedo {
                                 name: name.clone(),
                                 linkable: true,
+                                size: ctype.sizeof(),
                             };
                             self.file_builder
                                 .scope
@@ -1208,8 +1277,12 @@ impl TopLevelBuilder<'_> {
                         }
                     }
                     // Initialize
-                    StorageDuration::Static => self.generate_unique_static_pseudo(name.clone()),
-                    StorageDuration::Default => self.generate_named_pseudo(name.clone()),
+                    StorageDuration::Static => {
+                        self.generate_unique_static_pseudo(name.clone(), ctype.sizeof())
+                    }
+                    StorageDuration::Default => {
+                        self.generate_named_pseudo(name.clone(), ctype.sizeof())
+                    }
                 }
             };
             self.scope
@@ -1228,19 +1301,17 @@ impl TopLevelBuilder<'_> {
                     file_builder: self.file_builder,
                     return_type: ctype.clone(),
                 };
-                let init = if let Some(init) = &decl.node.initializer {
-                    let (rhs, rhs_type) = builder.parse_initializer(init)?;
-                    builder.convert_to((rhs, rhs_type), &ctype).map_err(|err| {
-                        IRGenerationError {
-                            err,
-                            span: decl.span,
-                        }
-                    })?
+                let inits = if let Some(init) = &decl.node.initializer {
+                    let init_info = builder.parse_initializer(init)?;
+                    builder.flatten_and_type_check_initializer_info(init_info, &ctype)?
                 } else {
-                    IRValue::Immediate(0)
+                    vec![IRValue::Immediate(0)]
                 };
 
-                builder.push(IROp::One(UnaryOp::Copy, init, loc, ctype.into()));
+                for (i, init) in inits.into_iter().enumerate() {
+                    builder.push(IROp::CopyToOffset(init, loc.clone(), i));
+                }
+
                 // FIXME: bad bad bad, just have a seperate global counter
                 self.count = builder.count;
                 let init = IRTopLevel {
@@ -1253,20 +1324,18 @@ impl TopLevelBuilder<'_> {
                 };
                 self.file_builder.funcs.push(init);
             } else {
-                let init = if let Some(init) = &decl.node.initializer {
-                    let (rhs, rhs_type) = self.parse_initializer(init)?;
-                    self.convert_to((rhs, rhs_type), &ctype)
-                        .map_err(|err| IRGenerationError {
-                            err,
-                            span: decl.span,
-                        })?
+                let inits = if let Some(init) = &decl.node.initializer {
+                    let init_info = self.parse_initializer(init)?;
+                    self.flatten_and_type_check_initializer_info(init_info, &ctype)?
                 } else if self.is_const {
-                    IRValue::Immediate(0)
+                    vec![IRValue::Immediate(0)]
                 } else {
                     return Ok(());
                 };
 
-                self.push(IROp::One(UnaryOp::Copy, init, loc, ctype.into()));
+                for (i, init) in inits.into_iter().enumerate() {
+                    self.push(IROp::CopyToOffset(init, loc.clone(), i));
+                }
             }
         }
         Ok(())
@@ -1289,13 +1358,23 @@ impl TopLevelBuilder<'_> {
     fn parse_initializer(
         &mut self,
         init: &Node<Initializer>,
-    ) -> Result<(IRValue, CType), IRGenerationError> {
+    ) -> Result<InitializerInfo, IRGenerationError> {
         match &init.node {
-            Initializer::Expression(expr) => self.parse_expression(expr),
-            Initializer::List(_) => Err(IRGenerationError {
-                err: IRGenerationErrorType::TODOInitializerLists,
-                span: init.span,
-            }),
+            Initializer::Expression(expr) => Ok(InitializerInfo::Single(
+                self.parse_expression(expr)?,
+                expr.span,
+            )),
+            Initializer::List(expr_list) => {
+                let mut res = vec![];
+                for expr in expr_list {
+                    assert!(
+                        expr.node.designation.len() == 0,
+                        "Init list designation no allowed"
+                    );
+                    res.push(self.parse_initializer(&expr.node.initializer)?);
+                }
+                Ok(InitializerInfo::Compound(res, init.span))
+            }
         }
     }
 
@@ -1306,7 +1385,7 @@ impl TopLevelBuilder<'_> {
         match self.parse_expression_inner(expr)? {
             ExpressionOutput::Plain((val, ctype)) => Ok((val, ctype)),
             ExpressionOutput::Dereferenced((ptr, ctype)) => {
-                let out = self.generate_pseudo();
+                let out = self.generate_pseudo(ctype.sizeof());
                 self.push(IROp::One(
                     UnaryOp::Dereference,
                     ptr,
@@ -1376,7 +1455,7 @@ impl TopLevelBuilder<'_> {
     ) -> Result<(IRValue, CType), IRGenerationError> {
         let (expr, expr_type) = self.parse_expression(&cast.node.expression)?;
         let out_type = self.parse_type_name(&cast.node.type_name)?;
-        let out = self.generate_pseudo();
+        let out = self.generate_pseudo(out_type.sizeof());
 
         self.push(IROp::Cast(
             out_type.clone().into(),
@@ -1390,13 +1469,13 @@ impl TopLevelBuilder<'_> {
         &mut self,
         expr: &Node<ConditionalExpression>,
     ) -> Result<(IRValue, CType), IRGenerationError> {
-        let out = self.generate_pseudo();
         let (else_str, else_lbl) = self.generate_label("else");
         let (end_str, end_lbl) = self.generate_label("end");
 
         let (cond, _cond_type) = self.parse_expression(&expr.node.condition)?;
         self.push(IROp::CondBranch(BranchType::Zero, else_str, cond));
         let (temp1, temp1_type) = self.parse_expression(&expr.node.then_expression)?;
+        let out = self.generate_pseudo(temp1_type.sizeof());
         self.push(IROp::One(
             UnaryOp::Copy,
             temp1,
@@ -1464,7 +1543,7 @@ impl TopLevelBuilder<'_> {
                             ident.node.name.clone(),
                             args.iter().map(|x| x.0.clone()).collect(),
                         ));
-                        let out = self.generate_pseudo();
+                        let out = self.generate_pseudo(return_type.sizeof());
                         self.push(IROp::One(
                             UnaryOp::Copy,
                             IRValue::Register(0),
@@ -1495,9 +1574,10 @@ impl TopLevelBuilder<'_> {
         match expr.node.operator.node {
             UnaryOperator::Address => match self.parse_expression_inner(&expr.node.operand)? {
                 Out::Plain((val, ctype)) => {
-                    let out = self.generate_pseudo();
+                    let ptrtype = CType::Pointer(Box::new(ctype));
+                    let out = self.generate_pseudo(ptrtype.sizeof());
                     self.push(IROp::AddressOf(val, out.clone()));
-                    return Ok(Out::Plain((out, CType::Pointer(Box::new(ctype)))));
+                    return Ok(Out::Plain((out, ptrtype)));
                 }
                 Out::Dereferenced(x) => return Ok(Out::Plain(x)),
             },
@@ -1518,7 +1598,7 @@ impl TopLevelBuilder<'_> {
         }
 
         let (val, val_type) = self.parse_expression(&expr.node.operand)?;
-        let out = self.generate_pseudo();
+        let out = self.generate_pseudo(val_type.sizeof());
 
         match expr.node.operator.node {
             UnaryOperator::Complement => {
@@ -1635,7 +1715,7 @@ impl TopLevelBuilder<'_> {
                 skip_label_str.clone(),
                 rhs,
             ));
-            let out = self.generate_pseudo();
+            let out = self.generate_pseudo(CType::SignedInt.sizeof());
             self.ops.push(IROp::One(
                 UnaryOp::Copy,
                 IRValue::Immediate(1),
@@ -1666,7 +1746,7 @@ impl TopLevelBuilder<'_> {
             ));
             let (rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
             self.push(IROp::CondBranch(BranchType::NonZero, skip_label_str, rhs));
-            let out = self.generate_pseudo();
+            let out = self.generate_pseudo(CType::SignedInt.sizeof());
             self.ops.push(IROp::One(
                 UnaryOp::Copy,
                 IRValue::Immediate(0),
@@ -1686,7 +1766,6 @@ impl TopLevelBuilder<'_> {
             return Ok((out, CType::SignedInt));
         }
 
-        let out = self.generate_pseudo();
         let mut assigning_to_pointer = false;
         let (lhs, rhs, out_type) = match expr.node.operator.node {
             BinaryOperator::AssignPlus
@@ -1761,6 +1840,8 @@ impl TopLevelBuilder<'_> {
             // dealt with higher up
             BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr => unreachable!(),
         };
+
+        let out = self.generate_pseudo(out_type.sizeof());
 
         let lhs2 = lhs.clone();
         self.push(match expr.node.operator.node {
@@ -1947,7 +2028,7 @@ impl TopLevelBuilder<'_> {
         if input.1 == *ctype {
             Ok(input.0)
         } else {
-            let out = self.generate_pseudo();
+            let out = self.generate_pseudo(ctype.sizeof());
             // TODO: check cast is valid
             self.push(IROp::Cast(
                 (ctype.clone()).into(),
@@ -1958,25 +2039,28 @@ impl TopLevelBuilder<'_> {
         }
     }
 
-    fn generate_pseudo(&mut self) -> IRValue {
+    fn generate_pseudo(&mut self, size: usize) -> IRValue {
         self.count += 1;
         IRValue::Psuedo {
             name: "tmp.".to_owned() + &self.count.to_string(),
+            size,
         }
     }
 
-    fn generate_named_pseudo(&mut self, name: String) -> IRValue {
+    fn generate_named_pseudo(&mut self, name: String, size: usize) -> IRValue {
         self.count += 1;
         IRValue::Psuedo {
             name: name + "." + &self.count.to_string(),
+            size,
         }
     }
 
-    fn generate_unique_static_pseudo(&mut self, name: String) -> IRValue {
+    fn generate_unique_static_pseudo(&mut self, name: String, size: usize) -> IRValue {
         self.count += 1;
         IRValue::StaticPsuedo {
             name: name + "." + &self.count.to_string(),
             linkable: false,
+            size,
         }
     }
 

@@ -8,8 +8,15 @@ pub enum IRValue {
     Immediate(usize),
     Register(usize), // limited to only like 70ish tho
     Data(usize),
-    Psuedo { name: String },
-    StaticPsuedo { name: String, linkable: bool },
+    Psuedo {
+        name: String,
+        size: usize,
+    },
+    StaticPsuedo {
+        name: String,
+        linkable: bool,
+        size: usize,
+    },
     // Must be careful when using
     BefungeStack,
 }
@@ -19,6 +26,7 @@ pub enum IRType {
     Signed(u8),
     Unsigned(u8),
     Float,
+    Sized(usize),
 }
 
 #[derive(Error, Debug)]
@@ -44,7 +52,22 @@ impl From<&CType> for IRType {
             CType::UnsignedLong => Self::Unsigned(32),
             CType::Void => panic!("void cannot be used as concrete types"),
             CType::Pointer(_) => Self::Signed(64),
-            CType::Array(..) => todo!("array types"),
+            CType::Array(..) => Self::Sized(value.sizeof()),
+            CType::Function(..) => panic!("functions cannot be used as concrete types"),
+        }
+    }
+}
+
+impl CType {
+    pub fn sizeof(&self) -> usize {
+        match self {
+            CType::SignedInt
+            | CType::SignedLong
+            | CType::UnsignedInt
+            | CType::UnsignedLong
+            | CType::Pointer(..) => 1,
+            CType::Array(inner_type, size) => inner_type.sizeof() * size,
+            CType::Void => panic!("void is not sized"),
             CType::Function(..) => panic!("functions cannot be used as concrete types"),
         }
     }
@@ -63,6 +86,7 @@ pub enum IROp {
     One(UnaryOp, IRValue, IRValue, IRType),
     Two(BinOp, IRValue, IRValue, IRValue, IRType),
     Cast(IRType, (IRValue, IRType), IRValue),
+    CopyToOffset(IRValue, IRValue, usize),
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -32,6 +32,10 @@ fn apply_to_all_ir_values(ops: &mut IRTopLevel, func: &mut impl FnMut(&mut IRVal
                 func(a);
                 func(out);
             }
+            IROp::CopyToOffset(a, out, _) => {
+                func(a);
+                func(out);
+            }
             _ => (),
         }
     }
@@ -54,23 +58,27 @@ fn pseudo_removal(
 
 impl PsuedoMap<'_> {
     fn get(&mut self, val: &IRValue) -> IRValue {
-        if let IRValue::Psuedo { name } = val {
-            if let Some(id) = self.stack_map.get(name) {
-                return IRValue::Stack(*id);
+        match val {
+            IRValue::Psuedo { name, size } => {
+                if let Some(id) = self.stack_map.get(name) {
+                    return IRValue::Stack(*id);
+                }
+                self.stack_map.insert(name.to_owned(), self.stack_count + 1);
+                let out = IRValue::Stack(self.stack_count + 1);
+                self.stack_count += size;
+                out
             }
-            self.stack_count += 1;
-            self.stack_map.insert(name.to_owned(), self.stack_count);
-            return IRValue::Stack(self.stack_count);
-        }
-        if let IRValue::StaticPsuedo { name, .. } = val {
-            if let Some(id) = self.data_map.get(name) {
-                return IRValue::Data(*id);
+            IRValue::StaticPsuedo { name, size, .. } => {
+                if let Some(id) = self.data_map.get(name) {
+                    return IRValue::Data(*id);
+                }
+                self.data_map.insert(name.to_owned(), *self.data_count + 1);
+                let out = IRValue::Data(*self.data_count + 1);
+                *self.data_count += size;
+                out
             }
-            *self.data_count += 1;
-            self.data_map.insert(name.to_owned(), *self.data_count);
-            return IRValue::Data(*self.data_count);
+            _ => val.clone(),
         }
-        val.clone()
     }
 }
 
@@ -104,8 +112,9 @@ fn append_to_ir_value(value: &mut IRValue, new_suffix: &str) {
         IRValue::StaticPsuedo {
             name,
             linkable: false,
+            ..
         }
-        | IRValue::Psuedo { name } => {
+        | IRValue::Psuedo { name, .. } => {
             *name = name.clone() + new_suffix;
         }
         _ => (),
@@ -123,7 +132,17 @@ fn stack_size_recalculator(func: &mut IRTopLevel) -> usize {
         }
     };
     apply_to_all_ir_values(func, &mut check);
-    std::cmp::max(counter, func.parameters)
+    let out = std::cmp::max(counter, func.parameters) + 1;
+    // cheeky debug
+    /*
+    let mut new_ops = vec![];
+    for i in 0..out {
+        new_ops.push(IROp::CopyToOffset(IRValue::Immediate(i), IRValue::Stack(1), i));
+    }
+    new_ops.extend(func.ops.iter().cloned());
+    func.ops = new_ops;
+    */
+    out
 }
 
 pub fn stack_size_reducer_pass(funcs: &mut Vec<IRTopLevel>) {

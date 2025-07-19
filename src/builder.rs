@@ -86,7 +86,7 @@ impl OpBuilder {
     /// Set return value to top of bstack
     fn set_return_val(&mut self) {
         self.str("20p");
-        self.current_stack_size += 1;
+        self.current_stack_size -= 1;
     }
 
     /// Puts num on bstack
@@ -118,14 +118,14 @@ impl OpBuilder {
     fn load_stack_val(&mut self, offset: usize) {
         self.load_stack_ptr();
         self.load_number(offset);
-        self.str("-1g");
+        self.str("+1g");
         self.current_stack_size -= 1;
     }
 
     fn set_stack_val(&mut self, offset: usize) {
         self.load_stack_ptr();
         self.load_number(offset);
-        self.str("-1p");
+        self.str("+1p");
         self.current_stack_size -= 3;
     }
 
@@ -196,12 +196,14 @@ impl OpBuilder {
         self.current_stack_size = 0;
     }
 
-    pub fn return_(&mut self, val: &IRValue, stack_frame_size: usize) {
+    pub fn return_(&mut self, val: &IRValue) {
         self.get_val(val);
         self.set_return_val();
-        self.decrement_stack_ptr(stack_frame_size);
-
         self.load_call_stack_ptr();
+
+        self.str(r"1-:2g");
+        self.set_stack_ptr();
+
         self.str(r"1-:2g\1-:2g\");
         self.set_call_stack_ptr();
 
@@ -216,6 +218,9 @@ impl OpBuilder {
     }
 
     pub fn call(&mut self, caller: FuncInfo, calle: FuncInfo, params: &[IRValue]) {
+        self.load_stack_ptr();
+        self.set_return_val();
+
         for val in params {
             if matches!(val, IRValue::BefungeStack) {
                 panic!("function param cannot be assumed to be on the bstack")
@@ -223,7 +228,7 @@ impl OpBuilder {
             self.get_val(val);
         }
 
-        self.increment_stack_ptr(calle.stack_frame_size);
+        self.increment_stack_ptr(caller.stack_frame_size);
         for i in (0..params.len()).rev() {
             self.put_val(&IRValue::Stack(i + 1));
         }
@@ -243,9 +248,14 @@ impl OpBuilder {
         self.load_call_stack_ptr();
         self.str("1+2p");
 
+        // Put saved stack ptr value onto the call stack
+        self.load_return_val();
+        self.load_call_stack_ptr();
+        self.str("2+2p");
+
         // Increment call stack ptr
         self.load_call_stack_ptr();
-        self.str("2+");
+        self.str("3+");
         self.set_call_stack_ptr();
 
         self.call_exit();
@@ -428,6 +438,7 @@ impl OpBuilder {
                 self.current_stack_size -= 3;
                 */
             }
+            IRType::Sized(..) => (),
             _ => panic!(),
         }
     }
@@ -598,9 +609,24 @@ impl OpBuilder {
             self.get_val(b);
         }
     }
+
     pub fn copy(&mut self, a: &IRValue, b: &IRValue) {
         self.get_val(a);
         self.put_val(b);
+    }
+
+    pub fn copy_with_offset(&mut self, a: &IRValue, b: &IRValue, offset: usize) {
+        self.get_val(a);
+        match b {
+            IRValue::Stack(position) => self.set_stack_val(*position + offset),
+            IRValue::Data(position) => self.set_data_val(*position + offset),
+            IRValue::Register(..) => panic!("Cannot copy with offset into a register"),
+            IRValue::BefungeStack => panic!("Cannot copy with offset into the befunge stack"),
+            IRValue::Immediate(_) => panic!("Immediate value as output location"),
+            IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
+                panic!("Psuedo registers should be removed by befunge generation time")
+            }
+        }
     }
 
     // 0 - x
@@ -628,7 +654,7 @@ impl OpBuilder {
         match a {
             IRValue::Stack(offset) => {
                 // TODO: optimize this
-                self.load_number(2_usize.pow(61) - *offset);
+                self.load_number(2_usize.pow(61) + *offset);
                 self.load_stack_ptr();
                 self.add(&IRValue::BefungeStack, &IRValue::BefungeStack);
             }

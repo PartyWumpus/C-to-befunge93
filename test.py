@@ -22,7 +22,7 @@ scores = [0,0,0]
 
 NUM_CORES = 7
 
-chapter_regex = ".*chapter_(1|2|3|4|5|6|7|8|9|10)/.*"
+chapter_regex = ".*chapter_(1|2|3|4|5|6|7|8|9|10|14)/.*"
 
 # find valid tests
 with open(f"./writing-a-c-compiler-tests/expected_results.json") as f:
@@ -38,10 +38,6 @@ for root, dirs, files in os.walk("./writing-a-c-compiler-tests/tests/"):
 
 valid_tests = dict(sorted(valid_tests.items()))
 invalid_tests.sort()
-
-if len(sys.argv) > 1:
-    print(valid_tests[sys.argv[1]])
-    exit(0)
 
 # compile compiler
 subprocess.run(["cargo", "build", "--release"], capture_output=True)
@@ -65,47 +61,48 @@ def status_to_code(status: Status):
             return "\033[1;32m"
 
 # run tests
-async def test_invalid(test: str) -> tuple[str, Status]:
+async def test_invalid(test: str) -> tuple[str, Status, bytes]:
     with tempfile.NamedTemporaryFile() as tf:
         proc = await asyncio.create_subprocess_shell(f"{compiler} {test} -q -o {tf.name}", stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE)
-        await proc.communicate()
+        stderr=asyncio.subprocess.STDOUT)
+        stdout, _ = await proc.communicate()
+
         if proc.returncode != 0: # compiler failed, which is what we want
             successes.append(test)
-            return (f"PASS {test}", Status.GREEN)
+            return (f"PASS {test}", Status.GREEN, stdout)
         else:
             accepted_invalid_code.append(test)
-            return (f"INVALID ACCEPTED {test}", Status.YELLOW)
+            return (f"INVALID ACCEPTED {test}", Status.YELLOW, stdout)
 
-async def test_valid(test: str) -> tuple[str, Status]:
+async def test_valid(test: str) -> tuple[str, Status, bytes]:
     with tempfile.NamedTemporaryFile() as tf:
         proc = await asyncio.create_subprocess_shell(f"{compiler} {test} -q -o {tf.name}", stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE)
-        await proc.communicate()
+        stderr=asyncio.subprocess.STDOUT)
+        stdout, _ = await proc.communicate()
         if proc.returncode != 0: # compiler failed
             compile_fails.append(test)
-            return (f"FAIL COMPILATION {test}", Status.RED)
+            return (f"FAIL COMPILATION {test}", Status.RED, stdout)
 
         proc = await asyncio.create_subprocess_shell(f"{befunge_interpeter} {tf.name}",stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE)
+        stderr=asyncio.subprocess.STDOUT)
         try:
 
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), 5)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), 5)
         except asyncio.TimeoutError:
             proc.kill()
             interpreter_crashes.append(test)
-            return (f"INTERPRETER TIMEOUT {test}", Status.YELLOW)
+            return (f"INTERPRETER TIMEOUT {test}", Status.YELLOW, bytes())
 
         if proc.returncode != 0: # interpeter crashed
             interpreter_crashes.append(test)
-            return (f"INTERPRETER CRASH {test}", Status.YELLOW)
+            return (f"INTERPRETER CRASH {test}", Status.YELLOW, stdout)
 
         if (int(stdout.splitlines()[-1]) % 256 != valid_tests[test]):
             incorrect_execution.append(test)
-            return (f"FAIL EXECUTION (got: {stdout.splitlines()[-1]} expected: {valid_tests[test]}) {test}", Status.RED)
+            return (f"FAIL EXECUTION (got: {stdout.splitlines()[-1]} expected: {valid_tests[test]}) {test}", Status.RED, stdout)
 
         successes.append(test)
-        return (f"PASS {test}", Status.GREEN)
+        return (f"PASS {test}", Status.GREEN, stdout)
 
 def move_cursor_up(n: int):
     print("\033[F"*n)
@@ -157,6 +154,18 @@ async def run_tests():
             print(err)
     sys.stdout.flush()
 
+async def run_single_test(test: str):
+    if test in valid_tests:
+        res = await test_valid(test)
+        print(res[0])
+        print("stdout:", res[2].decode())
+
+    if test in invalid_tests:
+        print((await test_invalid(test))[2].decode())
+
+if len(sys.argv) > 1:
+    asyncio.run(run_single_test(sys.argv[1]))
+    exit(0)
 
 asyncio.run(run_tests())
 print("\033[0m")
