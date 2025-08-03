@@ -13,6 +13,9 @@ I've been testing this with [BefunExec](https://github.com/Mikescher/BefunExec) 
 - 64 bit signed values on the stack
 - 64 bit values allowed in the funge space
 
+## Important usage note
+Requires being run in this repo, because the preproccessor step (for now) requires the befunge_libc/ folder to exist.
+
 ## Notes about the implementation
 
 The top left 10x10 corner is a sort of zero page as it can be indexed with only 3 characters (ie 05g for getting the value at 0, 5), and is used as the registers (more specifically, `00` is the stack pointer, `10` is the call stack pointer, `20` is the return value, and the rest are general purpose, so register ID 1 is `30`, register 8 is `01`)
@@ -49,6 +52,7 @@ None of these are full architectural failures so will eventually be resolved.
 - No arbitrarily accessable memory for malloc (doable, just need a 4th stack and some more IR)
 - It's not particularly good
 - Doesn't do a register allocation pass or any other optimizations, which would probably make it a decent bit faster
+- Uses gcc for preprocessing (ie #includes), so requires gcc installed to work (step one to making a c compiler, use another c compiler...)
 
 ### ASM support
 This compiler allows for use of the GNU ASM extensions for inline befunge. (either for extra optimized code or for using special befunge operators like `,`, `.` for output and `&`, `~` for input).

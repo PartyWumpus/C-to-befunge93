@@ -12,8 +12,11 @@ use core::panic;
 use std::{
     collections::HashMap,
     fmt::{Debug, Display},
+    fs::File,
+    io::{self, Write},
     mem,
     path::Path,
+    process::{Command, Stdio},
     ptr,
 };
 
@@ -28,7 +31,7 @@ use lang_c::{
         Statement, StorageClassSpecifier, SwitchStatement, TypeName, TypeSpecifier, UnaryOperator,
         UnaryOperatorExpression, WhileStatement,
     },
-    driver::{parse, Flavor},
+    driver::{parse, parse_preprocessed, Flavor},
     span::{Node, Span},
 };
 use thiserror::Error;
@@ -349,8 +352,43 @@ enum InitializerInfo {
     Compound(Vec<InitializerInfo>, Span),
 }
 
+fn preprocess(config: &lang_c::driver::Config, source: &[u8]) -> io::Result<String> {
+    let mut cmd = Command::new(&config.cpp_command);
+    cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+
+    for item in &config.cpp_options {
+        cmd.arg(item);
+    }
+
+    let mut cmd = cmd.spawn().expect("Failed to spawn child process");
+
+    let mut stdin = cmd.stdin.take().expect("Failed to open stdin");
+    let source = source.to_vec(); // pointless clone :(
+    std::thread::spawn(move || {
+        stdin.write_all(&source).expect("Failed to write to stdin");
+    });
+
+    let output = cmd.wait_with_output().expect("Failed to read stdout");
+
+    if output.status.success() {
+        match String::from_utf8(output.stdout) {
+            Ok(s) => Ok(s),
+            Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+        }
+    } else {
+        match String::from_utf8(output.stderr) {
+            Ok(s) => Err(io::Error::new(io::ErrorKind::Other, s)),
+            Err(_) => Err(io::Error::new(
+                io::ErrorKind::Other,
+                "cpp error contains invalid utf-8",
+            )),
+        }
+    }
+}
+
 impl FileBuilder {
-    pub fn parse_c<P: AsRef<Path> + Debug>(file: P) -> Result<Vec<IRTopLevel>, CompilerError> {
+    pub fn parse_c(source: &[u8], filename: &str) -> Result<Vec<IRTopLevel>, CompilerError> {
         let mut builder = Self {
             count: 0,
             scope: ScopeInfo::default(),
@@ -360,21 +398,31 @@ impl FileBuilder {
             flavor: Flavor::GnuC11,
             cpp_command: "gcc".into(),
             cpp_options: vec![
+                // don't include normal libc
                 "-nostdinc".into(),
+                // include custom libc
                 "-I".into(),
                 "befunge_libc".into(),
+                // only preprocess
                 "-E".into(),
+                // read c file from stdin
+                "-xc".into(),
+                "-".into(),
             ],
         };
-        let parsed = parse(&config, &file).map_err(|err| CompilerError::ParseError {
-            err: err,
-            filename: format!("{file:?}"),
-        })?;
+        let preproccessed = preprocess(&config, source).unwrap();
 
         if ARGS.verbose {
             println!("-- C SOURCE (post preprocessor)");
-            println!("{}\n", parsed.source);
+            println!("{}\n", preproccessed);
         }
+
+        let parsed = parse_preprocessed(&config, preproccessed).map_err(|err| {
+            CompilerError::ParseError {
+                err: lang_c::driver::Error::SyntaxError(err),
+                filename: filename.to_string(),
+            }
+        })?;
 
         for obj in &parsed.unit.0 {
             match &obj.node {
@@ -386,14 +434,14 @@ impl FileBuilder {
                             err: err.err,
                             span: err.span,
                             source: parsed.source.clone(),
-                            filename: format!("{file:?}"),
+                            filename: filename.into(),
                         })?);
                 }
                 ExternalDeclaration::StaticAssert(ass) => Err(CompilerError::IRGenerationError {
                     err: IRGenerationErrorType::TODOStaticAssert,
                     span: ass.span,
                     source: parsed.source.clone(),
-                    filename: format!("{file:?}"),
+                    filename: filename.into(),
                 })?,
                 ExternalDeclaration::FunctionDefinition(func) => {
                     let x = builder.parse_function(func).map_err(|err| {
@@ -401,7 +449,7 @@ impl FileBuilder {
                             err: err.err,
                             span: err.span,
                             source: parsed.source.clone(),
-                            filename: format!("{file:?}"),
+                            filename: filename.into(),
                         }
                     })?;
                     builder.funcs.push(x);

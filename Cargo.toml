@@ -11,6 +11,7 @@ edition = "2021"
 [dependencies]
 clap = { version = "4.5.21", features = ["derive"] }
 codespan-reporting = "0.12.0"
+include_dir = "0.7.4"
 lang-c = "0.15.1"
 prime_factorization = "1.0.5"
 thiserror = "2.0.12"

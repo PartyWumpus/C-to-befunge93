@@ -1,6 +1,7 @@
 use c_compiler::FileBuilder;
 use clap::Parser;
 use codegen::CodeGen;
+use include_dir::{include_dir, Dir};
 use ir::print_ir;
 use passes::{
     function_id_mapping_pass, pseudo_removal_pass, sort_functions_pass, stack_size_reducer_pass,
@@ -18,6 +19,7 @@ mod number_generation;
 mod passes;
 
 static ARGS: LazyLock<Args> = LazyLock::new(|| Args::parse());
+static BEFUNGE_LIBC: Dir = include_dir!("./befunge_libc");
 
 #[derive(Parser, Debug)]
 #[command(about="A C compiler that outputs befunge93 instead of assembly.", long_about = None)]
@@ -54,7 +56,7 @@ fn main() {
     }
 
     // TODO: support multiple user files?
-    let program = match FileBuilder::parse_c(&ARGS.filename) {
+    let program = match FileBuilder::parse_c(c_source.as_bytes(), &ARGS.filename) {
         Err(err) => {
             if !ARGS.silent {
                 err.print();
@@ -71,13 +73,11 @@ fn main() {
     let mut files = vec![program];
 
     // TODO: add caching so the entire lib isn't compiled every time
-    for entry in WalkDir::new("befunge_libc") {
-        // TODO: handle FS errors at least a little bit
-        let entry = entry.unwrap();
-        if entry.file_type().is_file() {
-            if let Some(ext) = entry.path().extension() {
-                if ext == "c" {
-                    files.push(match FileBuilder::parse_c(entry.path()) {
+    for entry in BEFUNGE_LIBC.files() {
+        if let Some(ext) = entry.path().extension() {
+            if ext == "c" {
+                files.push(
+                    match FileBuilder::parse_c(entry.contents(), entry.path().to_str().unwrap()) {
                         Err(err) => {
                             if !ARGS.silent {
                                 err.print();
@@ -85,8 +85,8 @@ fn main() {
                             process::exit(1);
                         }
                         Ok(x) => x,
-                    });
-                }
+                    },
+                );
             }
         }
     }
