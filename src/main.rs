@@ -9,7 +9,6 @@ use passes::{
 };
 use std::process;
 use std::sync::LazyLock;
-use walkdir::WalkDir;
 
 mod builder;
 mod c_compiler;
@@ -18,7 +17,7 @@ mod ir;
 mod number_generation;
 mod passes;
 
-static ARGS: LazyLock<Args> = LazyLock::new(|| Args::parse());
+static ARGS: LazyLock<Args> = LazyLock::new(Args::parse);
 static BEFUNGE_LIBC: Dir = include_dir!("./befunge_libc");
 
 #[derive(Parser, Debug)]

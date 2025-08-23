@@ -747,8 +747,8 @@ impl OpBuilder {
         self.current_stack_size -= 1;
     }
     pub fn is_less_than(&mut self, a: &IRValue, b: &IRValue) {
-        self.get_two_ordered(a, b);
-        self.str("\\`");
+        self.get_two_ordered(b, a); // swapped load order
+        self.str("`");
         self.current_stack_size -= 1;
     }
     pub fn is_less_or_equal(&mut self, a: &IRValue, b: &IRValue) {
@@ -762,8 +762,16 @@ impl OpBuilder {
         self.current_stack_size -= 1;
     }
     pub fn is_greater_or_equal(&mut self, a: &IRValue, b: &IRValue) {
-        self.get_two_ordered(a, b);
-        self.str("\\`!");
+        self.get_two_ordered(b, a); // swapped load order
+        self.str("`!");
         self.current_stack_size -= 1;
+    }
+    pub fn add_ptr(&mut self, ptr: &IRValue, b: &IRValue, size: usize) {
+        self.get_two_ordered(ptr, b);
+        //self.address_of(ptr);
+        //self.get_val(b);
+        self.load_number(size);
+        self.str("*+");
+        self.current_stack_size -= 2;
     }
 }

@@ -22,7 +22,7 @@ scores = [0,0,0]
 
 NUM_CORES = 7
 
-chapter_regex = ".*chapter_(1|2|3|4|5|6|7|8|9|10|14)/.*"
+chapter_regex = ".*chapter_(1|2|3|4|5|6|7|8|9|10|14|15)/.*"
 
 # find valid tests
 with open(f"./writing-a-c-compiler-tests/expected_results.json") as f:

@@ -8,11 +8,11 @@ use codespan_reporting::{
     },
 };
 
-use core::panic;
 use std::{
     collections::HashMap,
     fmt::{Debug, Display},
     fs::File,
+    io::IntoInnerError,
     io::{self, Write},
     mem,
     path::Path,
@@ -27,9 +27,9 @@ use lang_c::{
         DeclarationSpecifier, Declarator, DeclaratorKind, DerivedDeclarator, DoWhileStatement,
         Ellipsis, Expression, ExternalDeclaration, ForInitializer, ForStatement,
         FunctionDefinition, GnuAsmOperand, Identifier, IfStatement, Initializer, Integer,
-        IntegerBase, IntegerSize, IntegerSuffix, Label, LabeledStatement, SpecifierQualifier,
-        Statement, StorageClassSpecifier, SwitchStatement, TypeName, TypeSpecifier, UnaryOperator,
-        UnaryOperatorExpression, WhileStatement,
+        IntegerBase, IntegerSize, IntegerSuffix, Label, LabeledStatement, SizeOfTy,
+        SpecifierQualifier, Statement, StorageClassSpecifier, SwitchStatement, TypeName,
+        TypeSpecifier, UnaryOperator, UnaryOperatorExpression, WhileStatement,
     },
     driver::{parse, parse_preprocessed, Flavor},
     span::{Node, Span},
@@ -71,6 +71,8 @@ pub enum IRGenerationErrorType {
     NonStaticInStaticBlock,
     #[error("Invalid ASM symbol '{0}'")]
     InvalidASMSymbol(String),
+    #[error("Excess elements in array initializer")]
+    ExcessElementsInInitializer,
 
     // todos
     #[error("GNU block types are not supported")]
@@ -87,8 +89,6 @@ pub enum IRGenerationErrorType {
     TODOCaseRange,
     #[error("Static asserts are not yet supported")]
     TODOStaticAssert,
-    #[error("Initializer lists are not yet supported")]
-    TODOInitializerLists,
 
     // switch case errors
     #[error("Breaks can only appear inside loops or switch case statements")]
@@ -233,11 +233,23 @@ pub enum CType {
 }
 
 impl CType {
-    const fn is_integer(&self) -> bool {
+    pub const fn is_integer(&self) -> bool {
         matches!(self, Self::SignedInt | Self::SignedLong)
     }
 
-    fn zero_init(&self) -> Vec<IRValue> {
+    pub const fn is_pointer(&self) -> bool {
+        matches!(self, Self::Pointer(..) | Self::Array(..))
+    }
+
+    pub fn ptr_inner(&self) -> Option<Box<CType>> {
+        match self {
+            CType::Pointer(inner) => Some(inner.clone()),
+            CType::Array(inner, _) => Some(inner.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn zero_init(&self) -> Vec<IRValue> {
         match self {
             CType::Pointer(..)
             | CType::SignedInt
@@ -258,7 +270,7 @@ impl CType {
         }
     }
 
-    fn get_common(type1: &Self, type2: &Self) -> Result<Self, InvalidCoercionError> {
+    pub fn get_common(type1: &Self, type2: &Self) -> Result<Self, InvalidCoercionError> {
         // If the same, no conversions are needed
         if type1 == type2 {
             return Ok(type1.clone());
@@ -269,7 +281,7 @@ impl CType {
         // If one is a pointer, they must be the same (already checked) or one must be an integer
         if matches!(type1, Self::Pointer(_)) {
             return if type2.is_integer() {
-                Ok(Self::SignedInt)
+                Ok(type1.clone())
             } else {
                 Err(InvalidCoercionError(type1.clone(), type2.clone()))
             };
@@ -277,7 +289,7 @@ impl CType {
 
         if matches!(type2, Self::Pointer(_)) {
             return if type1.is_integer() {
-                Ok(Self::SignedInt)
+                Ok(type2.clone())
             } else {
                 Err(InvalidCoercionError(type1.clone(), type2.clone()))
             };
@@ -563,8 +575,9 @@ impl CType {
             [TypeSpecifier::Long]
             | [TypeSpecifier::Long, TypeSpecifier::Int]
             | [TypeSpecifier::Signed, TypeSpecifier::Long, TypeSpecifier::Int] => Self::SignedLong,
-            [TypeSpecifier::Int | TypeSpecifier::Unsigned]
-            | [TypeSpecifier::Unsigned, TypeSpecifier::Int] => Self::UnsignedInt,
+            [TypeSpecifier::Unsigned] | [TypeSpecifier::Unsigned, TypeSpecifier::Int] => {
+                Self::UnsignedInt
+            }
             [TypeSpecifier::Unsigned, TypeSpecifier::Long]
             | [TypeSpecifier::Unsigned, TypeSpecifier::Long, TypeSpecifier::Int] => {
                 Self::UnsignedLong
@@ -1236,16 +1249,21 @@ impl TopLevelBuilder<'_> {
             }
             (CType::Array(inner_type, size), InitializerInfo::Compound(init_list, span)) => {
                 if init_list.len() > *size {
-                    panic!("{:?}", span);
+                    return Err(IRGenerationError{
+                        err: IRGenerationErrorType::ExcessElementsInInitializer,
+                        span: Span { start: match init_list[*size] {
+                            InitializerInfo::Single(_, span) => span.start,
+                            InitializerInfo::Compound(_, span) => span.start
+                        }, end: span.end
+                        }
+                    })
                 };
                 let mut out: Vec<IRValue> = vec![];
-                let mut length = 0;
                 for init_info in init_list {
                     let x = self.flatten_and_type_check_initializer_info(init_info, inner_type)?;
                     out.extend(x);
-                    length += 1;
                 }
-                while length < *size {
+                while out.len() < *size {
                     out.extend(inner_type.zero_init());
                 }
                 out
@@ -1416,7 +1434,7 @@ impl TopLevelBuilder<'_> {
                 let mut res = vec![];
                 for expr in expr_list {
                     assert!(
-                        expr.node.designation.len() == 0,
+                        expr.node.designation.is_empty(),
                         "Init list designation no allowed"
                     );
                     res.push(self.parse_initializer(&expr.node.initializer)?);
@@ -1453,9 +1471,7 @@ impl TopLevelBuilder<'_> {
         Ok(match &expr.node {
             Expression::Constant(constant) => Out::Plain(self.parse_constant(constant)?),
             Expression::UnaryOperator(unary_expr) => self.parse_unary_expression(unary_expr)?,
-            Expression::BinaryOperator(binary_expr) => {
-                Out::Plain(self.parse_binary_expression(binary_expr)?)
-            }
+            Expression::BinaryOperator(binary_expr) => self.parse_binary_expression(binary_expr)?,
             Expression::Identifier(ident) => match self.scope.var_map.get(&ident.node.name) {
                 None => {
                     return Err(IRGenerationError {
@@ -1636,6 +1652,13 @@ impl TopLevelBuilder<'_> {
                         // will be dereferenced laterTM
                         return Ok(Out::Dereferenced((val, *pointee_type)));
                     }
+                    CType::Array(pointee_type, _) => {
+                        // array decay
+                        let out = self.generate_pseudo(CType::UnsignedInt.sizeof());
+                        self.push(IROp::AddressOf(val, out.clone()));
+                        // will be dereferenced laterTM
+                        return Ok(Out::Dereferenced((out, *pointee_type)));
+                    }
                     _ => Err(IRGenerationError {
                         err: IRGenerationErrorType::DereferenceNonPointer,
                         span: expr.node.operator.span,
@@ -1646,6 +1669,7 @@ impl TopLevelBuilder<'_> {
         }
 
         let (val, val_type) = self.parse_expression(&expr.node.operand)?;
+        let (val, val_type) = self.attempt_array_decay((val, val_type));
         let out = self.generate_pseudo(val_type.sizeof());
 
         match expr.node.operator.node {
@@ -1746,18 +1770,21 @@ impl TopLevelBuilder<'_> {
     fn parse_binary_expression(
         &mut self,
         expr: &Node<BinaryOperatorExpression>,
-    ) -> Result<(IRValue, CType), IRGenerationError> {
-        if matches!(expr.node.operator.node, BinaryOperator::LogicalAnd) {
+    ) -> Result<ExpressionOutput, IRGenerationError> {
+        use BinaryOperator as CBinOp;
+        if matches!(expr.node.operator.node, CBinOp::LogicalAnd) {
             let (skip_label_str, skip_label) = self.generate_label("logical_skip");
             let (end_label_str, end_label) = self.generate_label("logical_end");
 
-            let (mut lhs, lhs_type) = self.parse_expression(&expr.node.lhs)?;
+            let (lhs, lhs_type) = self.parse_expression(&expr.node.lhs)?;
+            let (lhs, _lhs_type) = self.attempt_array_decay((lhs, lhs_type));
             self.push(IROp::CondBranch(
                 BranchType::Zero,
                 skip_label_str.clone(),
                 lhs,
             ));
             let (rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
+            let (rhs, _rhs_type) = self.attempt_array_decay((rhs, rhs_type));
             self.push(IROp::CondBranch(
                 BranchType::Zero,
                 skip_label_str.clone(),
@@ -1780,19 +1807,21 @@ impl TopLevelBuilder<'_> {
                 CType::SignedInt.into(),
             ));
             self.push(end_label);
-            return Ok((out, CType::SignedInt));
+            return Ok(ExpressionOutput::Plain((out, CType::SignedInt)));
         }
-        if matches!(expr.node.operator.node, BinaryOperator::LogicalOr) {
+        if matches!(expr.node.operator.node, CBinOp::LogicalOr) {
             let (skip_label_str, skip_label) = self.generate_label("logical_skip");
             let (end_label_str, end_label) = self.generate_label("logical_end");
 
-            let (mut lhs, lhs_type) = self.parse_expression(&expr.node.lhs)?;
+            let (lhs, lhs_type) = self.parse_expression(&expr.node.lhs)?;
+            let (lhs, _lhs_type) = self.attempt_array_decay((lhs, lhs_type));
             self.push(IROp::CondBranch(
                 BranchType::NonZero,
                 skip_label_str.clone(),
                 lhs,
             ));
             let (rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
+            let (rhs, _rhs_type) = self.attempt_array_decay((rhs, rhs_type));
             self.push(IROp::CondBranch(BranchType::NonZero, skip_label_str, rhs));
             let out = self.generate_pseudo(CType::SignedInt.sizeof());
             self.ops.push(IROp::One(
@@ -1811,22 +1840,22 @@ impl TopLevelBuilder<'_> {
                 CType::SignedInt.into(),
             ));
             self.push(end_label);
-            return Ok((out, CType::SignedInt));
+            return Ok(ExpressionOutput::Plain((out, CType::SignedInt)));
         }
 
         let mut assigning_to_pointer = false;
-        let (lhs, rhs, out_type) = match expr.node.operator.node {
-            BinaryOperator::AssignPlus
-            | BinaryOperator::AssignMinus
-            | BinaryOperator::AssignMultiply
-            | BinaryOperator::AssignDivide
-            | BinaryOperator::AssignModulo
-            | BinaryOperator::AssignShiftLeft
-            | BinaryOperator::AssignShiftRight
-            | BinaryOperator::AssignBitwiseAnd
-            | BinaryOperator::AssignBitwiseXor
-            | BinaryOperator::AssignBitwiseOr
-            | BinaryOperator::Assign => {
+        let ((lhs, lhs_type), (rhs, rhs_type), out_type) = match expr.node.operator.node {
+            CBinOp::AssignPlus
+            | CBinOp::AssignMinus
+            | CBinOp::AssignMultiply
+            | CBinOp::AssignDivide
+            | CBinOp::AssignModulo
+            | CBinOp::AssignShiftLeft
+            | CBinOp::AssignShiftRight
+            | CBinOp::AssignBitwiseAnd
+            | CBinOp::AssignBitwiseXor
+            | CBinOp::AssignBitwiseOr
+            | CBinOp::Assign => {
                 // on assignment, rhs is cast to typeof(lhs)
                 let (lhs, lhs_type) = match self.parse_expression_inner(&expr.node.lhs)? {
                     ExpressionOutput::Plain((val, ctype)) => (val, ctype),
@@ -1835,112 +1864,193 @@ impl TopLevelBuilder<'_> {
                         (val, ctype)
                     }
                 };
-                let (mut rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
-                rhs = self.convert_to((rhs, rhs_type), &lhs_type).map_err(|err| {
-                    IRGenerationError {
-                        err,
-                        span: expr.span,
-                    }
-                })?;
-                (lhs, rhs, lhs_type)
+                let (lhs, lhs_type) = self.attempt_array_decay((lhs, lhs_type));
+                let (rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
+                let (mut rhs, rhs_type) = self.attempt_array_decay((rhs, rhs_type));
+                if !matches!(expr.node.operator.node, CBinOp::AssignMinus) && !rhs_type.is_pointer()
+                {
+                    rhs = self
+                        .convert_to((rhs, rhs_type.clone()), &lhs_type)
+                        .map_err(|err| IRGenerationError {
+                            err,
+                            span: expr.span,
+                        })?;
+                }
+                ((lhs, lhs_type.clone()), (rhs, rhs_type), lhs_type)
             }
 
-            BinaryOperator::Less
-            | BinaryOperator::Greater
-            | BinaryOperator::LessOrEqual
-            | BinaryOperator::GreaterOrEqual
-            | BinaryOperator::Equals
-            | BinaryOperator::NotEquals
-            | BinaryOperator::Plus
-            | BinaryOperator::Minus
-            | BinaryOperator::Multiply
-            | BinaryOperator::Divide
-            | BinaryOperator::Modulo
-            | BinaryOperator::ShiftLeft
-            | BinaryOperator::ShiftRight
-            | BinaryOperator::BitwiseAnd
-            | BinaryOperator::BitwiseXor
-            | BinaryOperator::BitwiseOr => {
-                let (mut lhs, lhs_type) = self.parse_expression(&expr.node.lhs)?;
-                let (mut rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
+            CBinOp::Less
+            | CBinOp::Index
+            | CBinOp::Greater
+            | CBinOp::LessOrEqual
+            | CBinOp::GreaterOrEqual
+            | CBinOp::Equals
+            | CBinOp::NotEquals
+            | CBinOp::Plus
+            | CBinOp::Minus
+            | CBinOp::Multiply
+            | CBinOp::Divide
+            | CBinOp::Modulo
+            | CBinOp::ShiftLeft
+            | CBinOp::ShiftRight
+            | CBinOp::BitwiseAnd
+            | CBinOp::BitwiseXor
+            | CBinOp::BitwiseOr => {
+                let (lhs, lhs_type) = self.parse_expression(&expr.node.lhs)?;
+                let (mut lhs, lhs_type) = self.attempt_array_decay((lhs, lhs_type));
+                let (rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
+                let (mut rhs, rhs_type) = self.attempt_array_decay((rhs, rhs_type));
 
                 let common_type =
                     CType::get_common(&lhs_type, &rhs_type).map_err(|err| IRGenerationError {
                         err: err.into(),
                         span: expr.span,
                     })?;
-                lhs = self
-                    .convert_to((lhs, lhs_type), &common_type)
-                    .map_err(|err| IRGenerationError {
-                        err,
-                        span: expr.span,
-                    })?;
-                rhs = self
-                    .convert_to((rhs, rhs_type), &common_type)
-                    .map_err(|err| IRGenerationError {
-                        err,
-                        span: expr.span,
-                    })?;
-                (lhs, rhs, common_type)
+
+                if !matches!(
+                    expr.node.operator.node,
+                    CBinOp::Plus | CBinOp::AssignPlus | CBinOp::Minus | CBinOp::AssignMinus
+                ) && !lhs_type.is_pointer()
+                {
+                    lhs = self
+                        .convert_to((lhs, lhs_type.clone()), &common_type)
+                        .map_err(|err| IRGenerationError {
+                            err,
+                            span: expr.span,
+                        })?;
+                }
+                if !matches!(
+                    expr.node.operator.node,
+                    CBinOp::Plus | CBinOp::AssignPlus | CBinOp::Minus | CBinOp::AssignMinus
+                ) && !rhs_type.is_pointer()
+                {
+                    rhs = self
+                        .convert_to((rhs, rhs_type.clone()), &common_type)
+                        .map_err(|err| IRGenerationError {
+                            err,
+                            span: expr.span,
+                        })?;
+                }
+                ((lhs, lhs_type), (rhs, rhs_type), common_type)
             }
 
-            BinaryOperator::Index => todo!("indexing"),
             // dealt with higher up
-            BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr => unreachable!(),
+            CBinOp::LogicalAnd | CBinOp::LogicalOr => unreachable!(),
         };
 
         let out = self.generate_pseudo(out_type.sizeof());
 
         let lhs2 = lhs.clone();
-        self.push(match expr.node.operator.node {
-            BinaryOperator::Plus | BinaryOperator::AssignPlus => {
-                IROp::Two(BinOp::Add, lhs, rhs, out.clone(), (&out_type).into())
-            }
-            BinaryOperator::Minus | BinaryOperator::AssignMinus => {
-                IROp::Two(BinOp::Sub, lhs, rhs, out.clone(), (&out_type).into())
-            }
-            BinaryOperator::Multiply | BinaryOperator::AssignMultiply => {
+        let op = match expr.node.operator.node {
+            // FIXME: this codegen is wrong because it still generates the casts beforehand
+            CBinOp::Plus | CBinOp::AssignPlus => match (lhs_type, rhs_type) {
+                (CType::Pointer(..) | CType::Array(..), CType::Pointer(..) | CType::Array(..)) => {
+                    panic!("cannot add two pointers");
+                }
+                (CType::Pointer(inner) | CType::Array(inner, _), _) => {
+                    IROp::AddPtr(lhs, rhs, out.clone(), inner.sizeof())
+                }
+                (_, CType::Pointer(inner) | CType::Array(inner, _)) => {
+                    IROp::AddPtr(rhs, lhs, out.clone(), inner.sizeof())
+                }
+
+                _ => IROp::Two(BinOp::Add, lhs, rhs, out.clone(), (&out_type).into()),
+            },
+            CBinOp::Index => match (lhs_type, rhs_type) {
+                (CType::Pointer(..) | CType::Array(..), CType::Pointer(..) | CType::Array(..)) => {
+                    panic!("cannot add two pointers");
+                }
+                (CType::Pointer(inner) | CType::Array(inner, _), _) => {
+                    self.push(IROp::AddPtr(lhs, rhs, out.clone(), inner.sizeof()));
+                    return Ok(ExpressionOutput::Dereferenced((out, *inner)));
+                }
+                (_, CType::Pointer(inner) | CType::Array(inner, _)) => {
+                    self.push(IROp::AddPtr(rhs, lhs, out.clone(), inner.sizeof()));
+                    return Ok(ExpressionOutput::Dereferenced((out, *inner)));
+                }
+                _ => panic!("lhs or rhs of index must be a pointer or similar"),
+            },
+            // FIXME: this codegen is wrong because it still generates the casts beforehand
+            CBinOp::Minus | CBinOp::AssignMinus => match (lhs_type, rhs_type) {
+                (
+                    CType::Pointer(inner_l) | CType::Array(inner_l, ..),
+                    CType::Pointer(inner_r) | CType::Array(inner_r, ..),
+                ) => {
+                    assert_eq!(inner_l, inner_r);
+                    let difference = self.generate_pseudo(out_type.sizeof());
+                    self.push(IROp::Two(
+                        BinOp::Sub,
+                        lhs,
+                        rhs,
+                        difference.clone(),
+                        (&out_type).into(),
+                    ));
+                    IROp::Two(
+                        BinOp::Div,
+                        difference,
+                        IRValue::Immediate(inner_l.sizeof()),
+                        out.clone(),
+                        (&out_type).into(),
+                    )
+                }
+                (CType::Pointer(inner) | CType::Array(inner, _), _) => {
+                    let negated = self.generate_pseudo(CType::UnsignedInt.sizeof());
+                    self.push(IROp::One(
+                        UnaryOp::Complement,
+                        rhs,
+                        negated.clone(),
+                        (&out_type).into(),
+                    ));
+                    IROp::AddPtr(lhs, negated, out.clone(), inner.sizeof())
+                }
+                (_, CType::Pointer(..) | CType::Array(..)) => {
+                    panic!("cannot subtract pointer from integer");
+                }
+
+                _ => IROp::Two(BinOp::Sub, lhs, rhs, out.clone(), (&out_type).into()),
+            },
+            CBinOp::Multiply | CBinOp::AssignMultiply => {
                 IROp::Two(BinOp::Mult, lhs, rhs, out.clone(), (&out_type).into())
             }
-            BinaryOperator::Divide | BinaryOperator::AssignDivide => {
+            CBinOp::Divide | CBinOp::AssignDivide => {
                 IROp::Two(BinOp::Div, lhs, rhs, out.clone(), (&out_type).into())
             }
-            BinaryOperator::Modulo | BinaryOperator::AssignModulo => {
+            CBinOp::Modulo | CBinOp::AssignModulo => {
                 IROp::Two(BinOp::Mod, lhs, rhs, out.clone(), (&out_type).into())
             }
 
-            BinaryOperator::Less => IROp::Two(
+            CBinOp::Less => IROp::Two(
                 BinOp::LessThan,
                 lhs,
                 rhs,
                 out.clone(),
                 CType::SignedInt.into(),
             ),
-            BinaryOperator::Greater => IROp::Two(
+            CBinOp::Greater => IROp::Two(
                 BinOp::GreaterThan,
                 lhs,
                 rhs,
                 out.clone(),
                 CType::SignedInt.into(),
             ),
-            BinaryOperator::LessOrEqual => IROp::Two(
+            CBinOp::LessOrEqual => IROp::Two(
                 BinOp::LessOrEqual,
                 lhs,
                 rhs,
                 out.clone(),
                 CType::SignedInt.into(),
             ),
-            BinaryOperator::GreaterOrEqual => IROp::Two(
+            CBinOp::GreaterOrEqual => IROp::Two(
                 BinOp::GreaterOrEqual,
                 lhs,
                 rhs,
                 out.clone(),
                 CType::SignedInt.into(),
             ),
-            BinaryOperator::Equals => {
+            CBinOp::Equals => {
                 IROp::Two(BinOp::Equal, lhs, rhs, out.clone(), CType::SignedInt.into())
             }
-            BinaryOperator::NotEquals => IROp::Two(
+            CBinOp::NotEquals => IROp::Two(
                 BinOp::NotEqual,
                 lhs,
                 rhs,
@@ -1948,46 +2058,43 @@ impl TopLevelBuilder<'_> {
                 CType::SignedInt.into(),
             ),
 
-            BinaryOperator::Index => todo!("index"),
-
             // bitwise ops
-            BinaryOperator::ShiftLeft | BinaryOperator::AssignShiftLeft => {
+            CBinOp::ShiftLeft | CBinOp::AssignShiftLeft => {
                 IROp::Two(BinOp::ShiftLeft, lhs, rhs, out.clone(), (&out_type).into())
             }
-            BinaryOperator::ShiftRight | BinaryOperator::AssignShiftRight => {
+            CBinOp::ShiftRight | CBinOp::AssignShiftRight => {
                 IROp::Two(BinOp::ShiftRight, lhs, rhs, out.clone(), (&out_type).into())
             }
-            BinaryOperator::BitwiseAnd | BinaryOperator::AssignBitwiseAnd => {
+            CBinOp::BitwiseAnd | CBinOp::AssignBitwiseAnd => {
                 IROp::Two(BinOp::BitwiseAnd, lhs, rhs, out.clone(), (&out_type).into())
             }
-            BinaryOperator::BitwiseXor | BinaryOperator::AssignBitwiseXor => {
+            CBinOp::BitwiseXor | CBinOp::AssignBitwiseXor => {
                 IROp::Two(BinOp::BitwiseXor, lhs, rhs, out.clone(), (&out_type).into())
             }
-            BinaryOperator::BitwiseOr | BinaryOperator::AssignBitwiseOr => {
+            CBinOp::BitwiseOr | CBinOp::AssignBitwiseOr => {
                 IROp::Two(BinOp::BitwiseOr, lhs, rhs, out.clone(), (&out_type).into())
             }
 
-            BinaryOperator::Assign => {
-                IROp::One(UnaryOp::Copy, rhs, out.clone(), (&out_type).into())
-            }
+            CBinOp::Assign => IROp::One(UnaryOp::Copy, rhs, out.clone(), (&out_type).into()),
 
             // dealt with higher up
-            BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr => unreachable!(),
-        });
+            CBinOp::LogicalAnd | CBinOp::LogicalOr => unreachable!(),
+        };
+        self.push(op);
 
         if matches!(
             expr.node.operator.node,
-            BinaryOperator::Assign
-                | BinaryOperator::AssignPlus
-                | BinaryOperator::AssignMinus
-                | BinaryOperator::AssignMultiply
-                | BinaryOperator::AssignDivide
-                | BinaryOperator::AssignModulo
-                | BinaryOperator::AssignShiftLeft
-                | BinaryOperator::AssignShiftRight
-                | BinaryOperator::AssignBitwiseAnd
-                | BinaryOperator::AssignBitwiseXor
-                | BinaryOperator::AssignBitwiseOr
+            CBinOp::Assign
+                | CBinOp::AssignPlus
+                | CBinOp::AssignMinus
+                | CBinOp::AssignMultiply
+                | CBinOp::AssignDivide
+                | CBinOp::AssignModulo
+                | CBinOp::AssignShiftLeft
+                | CBinOp::AssignShiftRight
+                | CBinOp::AssignBitwiseAnd
+                | CBinOp::AssignBitwiseXor
+                | CBinOp::AssignBitwiseOr
         ) {
             if assigning_to_pointer {
                 self.push(IROp::One(
@@ -2005,7 +2112,7 @@ impl TopLevelBuilder<'_> {
                 ));
             }
         }
-        Ok((out, out_type))
+        Ok(ExpressionOutput::Plain((out, out_type)))
     }
 
     #[expect(clippy::match_same_arms)]
@@ -2084,6 +2191,17 @@ impl TopLevelBuilder<'_> {
                 out.clone(),
             ));
             Ok(out)
+        }
+    }
+
+    fn attempt_array_decay(&mut self, val: (IRValue, CType)) -> (IRValue, CType) {
+        match val.1 {
+            CType::Array(inner_type, ..) => {
+                let new = self.generate_pseudo(CType::SignedInt.sizeof());
+                self.push(IROp::AddressOf(val.0.clone(), new.clone()));
+                (new, CType::Pointer(inner_type))
+            }
+            _ => val,
         }
     }
 

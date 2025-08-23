@@ -75,7 +75,6 @@ impl CType {
 
 #[derive(Debug, Clone)]
 pub enum IROp {
-    FunctionLabel(String),
     Return(IRValue),
     Call(String, Vec<IRValue>),
     Label(String),
@@ -87,6 +86,7 @@ pub enum IROp {
     Two(BinOp, IRValue, IRValue, IRValue, IRType),
     Cast(IRType, (IRValue, IRType), IRValue),
     CopyToOffset(IRValue, IRValue, usize),
+    AddPtr(IRValue, IRValue, IRValue, usize),
 }
 
 #[derive(Debug, Clone, Copy)]

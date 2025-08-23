@@ -36,7 +36,12 @@ fn apply_to_all_ir_values(ops: &mut IRTopLevel, func: &mut impl FnMut(&mut IRVal
                 func(a);
                 func(out);
             }
-            _ => (),
+            IROp::AddPtr(ptr, b, out, _) => {
+                func(ptr);
+                func(b);
+                func(out);
+            }
+            IROp::Label(..) | IROp::InlineBefunge(..) | IROp::AlwaysBranch(..) => (),
         }
     }
 }

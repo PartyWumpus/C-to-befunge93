@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
+use lang_c::ast::SizeOfTy;
+
 use crate::{
     builder::OpBuilder,
-    ir::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRValue, UnaryOp},
+    c_compiler::CType,
+    ir::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRType, IRValue, UnaryOp},
     ARGS,
 };
 
@@ -82,7 +85,6 @@ impl CodeGen {
         self.builder = OpBuilder::new(!func.is_initializer);
         for op in func.ops {
             match &op {
-                IROp::FunctionLabel(_) => (),
                 IROp::Call(called_func_name, vals) => {
                     assert!(!func.is_initializer, "Non static call in static context");
                     // TODO: improve error on unknown func call
@@ -96,7 +98,7 @@ impl CodeGen {
                 IROp::Return(val) => {
                     self.builder.return_(val);
                 }
-                IROp::Cast(_ctype, val, output) => {
+                IROp::Cast(irtype, val, output) => {
                     // FIXME: Casts are currently no op, through the power of being incorrect
                     self.builder.copy(&val.0, output);
                 }
@@ -161,6 +163,10 @@ impl CodeGen {
                 }
                 IROp::CopyToOffset(source, location, offset) => {
                     self.builder.copy_with_offset(source, location, *offset);
+                }
+                IROp::AddPtr(ptr, b, out, size) => {
+                    self.builder.add_ptr(ptr, b, *size);
+                    self.builder.copy(&IRValue::BefungeStack, out);
                 }
             }
             self.builder.add_space();
