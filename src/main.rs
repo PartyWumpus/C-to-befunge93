@@ -45,6 +45,9 @@ struct Args {
     /// Add preprocessor info to the bottom for `BefunExec`
     #[arg(short, long)]
     preprocessor_info: bool,
+
+    #[arg(long)]
+    zero_stack_before_use: bool,
 }
 
 fn main() {

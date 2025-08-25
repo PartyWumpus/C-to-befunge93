@@ -52,7 +52,7 @@ impl From<&CType> for IRType {
             CType::UnsignedLong => Self::Unsigned(32),
             CType::Void => panic!("void cannot be used as concrete types"),
             CType::Pointer(_) => Self::Signed(64),
-            CType::Array(..) => Self::Sized(value.sizeof()),
+            CType::Array(..) | CType::ImmediateArray(..) => Self::Sized(value.sizeof()),
             CType::Function(..) => panic!("functions cannot be used as concrete types"),
         }
     }
@@ -66,7 +66,7 @@ impl CType {
             | CType::UnsignedInt
             | CType::UnsignedLong
             | CType::Pointer(..) => 1,
-            CType::Array(inner_type, size) => inner_type.sizeof() * size,
+            CType::Array(inner_type, size) | CType::ImmediateArray(inner_type, size) => inner_type.sizeof() * size,
             CType::Void => panic!("void is not sized"),
             CType::Function(..) => panic!("functions cannot be used as concrete types"),
         }

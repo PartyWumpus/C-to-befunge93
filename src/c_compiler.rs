@@ -227,7 +227,10 @@ pub enum CType {
     UnsignedLong,
     Void,
     Pointer(Box<CType>),
+    // A fancy pointer
     Array(Box<CType>, usize),
+    // The immediate location of an array
+    ImmediateArray(Box<CType>, usize),
     // TODO: convert vec to Box<[CType]>
     Function(Vec<CType>, Box<CType>),
 }
@@ -258,7 +261,7 @@ impl CType {
             | CType::UnsignedLong => {
                 vec![IRValue::Immediate(0)]
             }
-            CType::Array(inner_type, length) => {
+            CType::Array(inner_type, length) | CType::ImmediateArray(inner_type, length) => {
                 let mut out = vec![];
                 for _ in 0..*length {
                     out.extend(inner_type.zero_init())
@@ -1247,7 +1250,7 @@ impl TopLevelBuilder<'_> {
                     .convert_to((rhs, rhs_type), &target_type)
                     .map_err(|err| IRGenerationError { err, span: span })?]
             }
-            (CType::Array(inner_type, size), InitializerInfo::Compound(init_list, span)) => {
+            (CType::Array(inner_type, size) | CType::ImmediateArray(inner_type, size), InitializerInfo::Compound(init_list, span)) => {
                 if init_list.len() > *size {
                     return Err(IRGenerationError{
                         err: IRGenerationErrorType::ExcessElementsInInitializer,
@@ -1263,7 +1266,7 @@ impl TopLevelBuilder<'_> {
                     let x = self.flatten_and_type_check_initializer_info(init_info, inner_type)?;
                     out.extend(x);
                 }
-                while out.len() < *size {
+                while out.len() < size * inner_type.sizeof() {
                     out.extend(inner_type.zero_init());
                 }
                 out
@@ -1278,11 +1281,15 @@ impl TopLevelBuilder<'_> {
         // TODO: use type info
         for decl in &decls.node.declarators {
             let name = self.parse_declarator_name(&decl.node.declarator);
-            let ctype = CType::from_declarator(&decl.node.declarator, &info.c_type)?;
+            let mut ctype = CType::from_declarator(&decl.node.declarator, &info.c_type)?;
 
-            if matches!(ctype, CType::Function(..)) {
+            if let CType::Function(..) = ctype {
                 self.scope.var_map.insert(name, (None, ctype));
                 continue;
+            }
+
+            if let CType::Array(inner, length) = ctype {
+                ctype = CType::ImmediateArray(inner, length)
             }
 
             let loc = if self.is_const {
@@ -1351,6 +1358,7 @@ impl TopLevelBuilder<'_> {
                     }
                 }
             };
+
             self.scope
                 .var_map
                 .insert(name, (Some(loc.clone()), ctype.clone()));
@@ -1648,16 +1656,27 @@ impl TopLevelBuilder<'_> {
             UnaryOperator::Indirection => {
                 let (val, val_type) = self.parse_expression(&expr.node.operand)?;
                 match val_type {
-                    CType::Pointer(pointee_type) => {
+                    CType::Pointer(pointee_type) | CType::Array(pointee_type, _) => {
                         // will be dereferenced laterTM
-                        return Ok(Out::Dereferenced((val, *pointee_type)));
+                        return match *pointee_type {
+                            // Value is already the pointer it is supposed to be
+                            CType::Array(..) => Ok(Out::Plain((val, *pointee_type))),
+                            CType::ImmediateArray(..) => panic!(),
+                            // will be dereferenced laterTM
+                            _ => Ok(Out::Dereferenced((val, *pointee_type)))
+                        }
                     }
-                    CType::Array(pointee_type, _) => {
+                    CType::ImmediateArray(pointee_type, _) => {
                         // array decay
                         let out = self.generate_pseudo(CType::UnsignedInt.sizeof());
                         self.push(IROp::AddressOf(val, out.clone()));
-                        // will be dereferenced laterTM
-                        return Ok(Out::Dereferenced((out, *pointee_type)));
+                        return match *pointee_type {
+                            // value is now the pointer it is supposed to be
+                            CType::Array(..) => Ok(Out::Plain((out, *pointee_type))),
+                            CType::ImmediateArray(..) => panic!(),
+                            // will be dereferenced laterTM
+                            _ => Ok(Out::Dereferenced((out, *pointee_type)))
+                        }
                     }
                     _ => Err(IRGenerationError {
                         err: IRGenerationErrorType::DereferenceNonPointer,
@@ -1944,13 +1963,13 @@ impl TopLevelBuilder<'_> {
         let op = match expr.node.operator.node {
             // FIXME: this codegen is wrong because it still generates the casts beforehand
             CBinOp::Plus | CBinOp::AssignPlus => match (lhs_type, rhs_type) {
-                (CType::Pointer(..) | CType::Array(..), CType::Pointer(..) | CType::Array(..)) => {
+                (CType::Pointer(..), CType::Pointer(..)) => {
                     panic!("cannot add two pointers");
                 }
-                (CType::Pointer(inner) | CType::Array(inner, _), _) => {
+                (CType::Pointer(inner), _) => {
                     IROp::AddPtr(lhs, rhs, out.clone(), inner.sizeof())
                 }
-                (_, CType::Pointer(inner) | CType::Array(inner, _)) => {
+                (_, CType::Pointer(inner)) => {
                     IROp::AddPtr(rhs, lhs, out.clone(), inner.sizeof())
                 }
 
@@ -1958,15 +1977,27 @@ impl TopLevelBuilder<'_> {
             },
             CBinOp::Index => match (lhs_type, rhs_type) {
                 (CType::Pointer(..) | CType::Array(..), CType::Pointer(..) | CType::Array(..)) => {
-                    panic!("cannot add two pointers");
+                    panic!("cannot index with two pointers");
                 }
                 (CType::Pointer(inner) | CType::Array(inner, _), _) => {
                     self.push(IROp::AddPtr(lhs, rhs, out.clone(), inner.sizeof()));
-                    return Ok(ExpressionOutput::Dereferenced((out, *inner)));
+                    return match *inner {
+                        // Value is already the pointer it is supposed to be
+                        CType::Array(..) => Ok(ExpressionOutput::Plain((out, *inner))),
+                        CType::ImmediateArray(..) => panic!(),
+                        // will be dereferenced laterTM
+                        _ => Ok(ExpressionOutput::Dereferenced((out, *inner)))
+                    }
                 }
                 (_, CType::Pointer(inner) | CType::Array(inner, _)) => {
                     self.push(IROp::AddPtr(rhs, lhs, out.clone(), inner.sizeof()));
-                    return Ok(ExpressionOutput::Dereferenced((out, *inner)));
+                    return match *inner {
+                        // Value is already the pointer it is supposed to be
+                        CType::Array(..) => Ok(ExpressionOutput::Plain((out, *inner))),
+                        CType::ImmediateArray(..) => panic!(),
+                        // will be dereferenced laterTM
+                        _ => Ok(ExpressionOutput::Dereferenced((out, *inner)))
+                    }
                 }
                 _ => panic!("lhs or rhs of index must be a pointer or similar"),
             },
@@ -2197,6 +2228,9 @@ impl TopLevelBuilder<'_> {
     fn attempt_array_decay(&mut self, val: (IRValue, CType)) -> (IRValue, CType) {
         match val.1 {
             CType::Array(inner_type, ..) => {
+                (val.0, CType::Pointer(inner_type))
+            },
+            CType::ImmediateArray(inner_type, ..) => {
                 let new = self.generate_pseudo(CType::SignedInt.sizeof());
                 self.push(IROp::AddressOf(val.0.clone(), new.clone()));
                 (new, CType::Pointer(inner_type))

@@ -8,10 +8,11 @@
 - The [lang_c](https://docs.rs/lang-c/latest/lang_c/index.html) crate for doing the lexing and parsing of c for me (i love skipping 1/2 of the work)
 
 ## Befunge interpreter assumptions
-I've been testing this with [BefunExec](https://github.com/Mikescher/BefunExec) and [RBeJ](https://github.com/PartyWumpus/RBeJ), so I'd recommend either of those.
-- Infinite (or at least a lot of) positive fungespace (right and downwards from 0,0), although negative space is not needed (left and up from 0,0)
+I've been testing this with [BefunExec](https://github.com/Mikescher/BefunExec), [RBeJ](https://github.com/PartyWumpus/RBeJ) and my [befunge-editor](https://github.com/PartyWumpus/befunge-editor), so I'd recommend one of those.
+- Infinite (or at least a lot of) positive fungespace (right and downwards from 0,0)
+- All negative fungespace positions are zeros (that assumption used for bitshifts)
 - 64 bit signed values on the stack
-- 64 bit values allowed in the funge space
+- 64 bit values in fungespace
 
 ## Important usage note
 Requires being run in this repo, because the preproccessor step (for now) requires the befunge_libc/ folder to exist.
@@ -41,12 +42,13 @@ There's also a static memory space used for globals.
 - Returning can go to specific parts of a function
 - Inline jumps and loops
 - Pointers to stack local and static data
+- Multidimensional arrays
 - Clear error messages
 - Global variables
 
 ### Current Limitations
 None of these are full architectural failures so will eventually be resolved.
-- Only pointers, signed ints and signed longs are supported.
+- Only arrays, pointers, signed ints and signed longs are supported.
 - Bitshifts and bitwise operations are wrong for negative values sort of
 - Linking is currently limited to the befunge_libc library
 - No arbitrarily accessable memory for malloc (doable, just need a 4th stack and some more IR)

@@ -86,7 +86,6 @@ async def test_valid(test: str) -> tuple[str, Status, bytes]:
         proc = await asyncio.create_subprocess_shell(f"{befunge_interpeter} {tf.name}",stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT)
         try:
-
             stdout, _ = await asyncio.wait_for(proc.communicate(), 5)
         except asyncio.TimeoutError:
             proc.kill()
@@ -97,7 +96,7 @@ async def test_valid(test: str) -> tuple[str, Status, bytes]:
             interpreter_crashes.append(test)
             return (f"INTERPRETER CRASH {test}", Status.YELLOW, stdout)
 
-        if (int(stdout.splitlines()[-1]) % 256 != valid_tests[test]):
+        if test in valid_tests and (int(stdout.splitlines()[-1]) % 256 != valid_tests[test]):
             incorrect_execution.append(test)
             return (f"FAIL EXECUTION (got: {stdout.splitlines()[-1]} expected: {valid_tests[test]}) {test}", Status.RED, stdout)
 
@@ -163,9 +162,20 @@ async def run_single_test(test: str):
     if test in invalid_tests:
         print((await test_invalid(test))[2].decode())
 
+async def run_single_file(filename: str):
+    valid_tests.pop(filename, "")
+    res = await test_valid(filename)
+    print(res[0])
+    print("stdout:", res[2].decode())
+
 if len(sys.argv) > 1:
-    asyncio.run(run_single_test(sys.argv[1]))
-    exit(0)
+    if sys.argv[1] == "test":
+        asyncio.run(run_single_test(sys.argv[2]))
+        exit(0)
+    if sys.argv[1] == "run":
+        asyncio.run(run_single_file(sys.argv[2]))
+        exit(0)
+    exit(1)
 
 asyncio.run(run_tests())
 print("\033[0m")

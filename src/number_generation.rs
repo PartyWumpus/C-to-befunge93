@@ -12,7 +12,7 @@ pub fn int_to_befunge_str(num: u64) -> String {
     match num {
         0..10 => num.to_string(),
         10..19 => (num - 9).to_string() + "9+",
-        19 => "55*1-".to_owned(),
+        19 => "45*1-".to_owned(),
         20 => "45*".to_owned(),
         34 => "98+2*".to_owned(),
         _ => {

@@ -654,7 +654,10 @@ impl OpBuilder {
         match a {
             IRValue::Stack(offset) => {
                 // TODO: optimize this
-                self.load_number(2_usize.pow(61) + *offset);
+                // FIXME: INVESTIGATE, IT APPEARS 2^61 + 7 IS INVALID!
+                self.load_number(2_usize.pow(61));
+                self.load_number(*offset);
+                self.add(&IRValue::BefungeStack, &IRValue::BefungeStack);
                 self.load_stack_ptr();
                 self.add(&IRValue::BefungeStack, &IRValue::BefungeStack);
             }
