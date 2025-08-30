@@ -46,8 +46,13 @@ struct Args {
     #[arg(short, long)]
     preprocessor_info: bool,
 
+    /// Fills stack values with zero before they're first written to
     #[arg(long)]
     zero_stack_before_use: bool,
+
+    /// Disables the use of bitwise operations to speed up startup times
+    #[arg(long)]
+    disable_bitwise_ops: bool,
 }
 
 fn main() {

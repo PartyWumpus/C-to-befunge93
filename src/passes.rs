@@ -1,4 +1,7 @@
-use crate::ir::{FuncInfo, IROp, IRTopLevel, IRValue};
+use crate::{
+    ir::{FuncInfo, IROp, IRTopLevel, IRValue},
+    ARGS,
+};
 use std::collections::HashMap;
 
 struct PsuedoMap<'a> {
@@ -138,15 +141,18 @@ fn stack_size_recalculator(func: &mut IRTopLevel) -> usize {
     };
     apply_to_all_ir_values(func, &mut check);
     let out = std::cmp::max(counter, func.parameters) + 1;
-    // cheeky debug
-    /*
-    let mut new_ops = vec![];
-    for i in 0..out {
-        new_ops.push(IROp::CopyToOffset(IRValue::Immediate(i), IRValue::Stack(1), i));
+    if ARGS.zero_stack_before_use {
+        let mut new_ops = vec![];
+        for i in func.parameters..out {
+            new_ops.push(IROp::CopyToOffset(
+                IRValue::Immediate(0),
+                IRValue::Stack(1),
+                i,
+            ));
+        }
+        new_ops.extend(func.ops.iter().cloned());
+        func.ops = new_ops;
     }
-    new_ops.extend(func.ops.iter().cloned());
-    func.ops = new_ops;
-    */
     out
 }
 

@@ -1,37 +1,39 @@
 use std::collections::HashMap;
 
-use lang_c::ast::SizeOfTy;
-
 use crate::{
     builder::OpBuilder,
-    c_compiler::CType,
-    ir::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRType, IRValue, UnaryOp},
+    ir::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRValue, UnaryOp},
     ARGS,
 };
 
-static PRE_INIT_PRELUDE: &str = r##"v!R#######
-v#########    main stack ->      !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ...etc
-v#########    call stack ->      !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ...etc
-v######### static memory ->      !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ...etc
-v#########        // IN FUTURE, malloc() mem could be a 4th mem location here
-v#########
+static PRE_INIT_PRELUDE: &str = r##"
+v!R#######    main stack    =>   !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ...etc
+v#########    static memory =>   !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ...etc
+v#########    dynamic alloc =>   !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ...etc
+v#########    call stack    =>   !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ...etc
+v#########    filename: 
+v#########    compiled by: c-to-befunge
 v#########  below are the bit stacks, for bitshifts and bitwise operations
 v#########  the last 64 bits are just zeros for cheaper bitshifts
 v bit stack A
 v bit stack B
->"!"00p 010g3-2pv
+>"!"00p 010g3-3pv
 v               <
+"##;
+
+static SETUP_BIT_STACKS: &str = r#"
 >0>:0\9p:0\8p1+v
   ^_v#-+"@A":  <
 v $ <
+"#;
 
-"##;
-
-static POST_INIT_PRELUDE: &str = "0
+static POST_INIT_PRELUDE: &str = "
+0
 1
 >v
  >:#v_  $$ 55+ , 20g . @
- v  <";
+ v  <
+";
 
 pub struct CodeGen {
     builder: OpBuilder,
@@ -49,7 +51,7 @@ impl CodeGen {
         };
 
         let mut out: Vec<String> = vec![];
-        out.extend(PRE_INIT_PRELUDE.lines().map(ToOwned::to_owned));
+        out.extend(PRE_INIT_PRELUDE.lines().skip(1).map(ToOwned::to_owned));
         let mut funcs: Vec<String> = vec![];
         let mut inits: Vec<String> = vec![];
         for func in program {
@@ -62,12 +64,15 @@ impl CodeGen {
             }
         }
         out.extend(inits);
+        // consider being smart here
+        if !ARGS.disable_bitwise_ops {
+            out.extend(SETUP_BIT_STACKS.lines().map(ToOwned::to_owned));
+        }
         out.extend(POST_INIT_PRELUDE.lines().map(ToOwned::to_owned));
         let func_finder_pos = (3, out.len() - 2);
         out.extend(funcs);
 
-        // Sneaky stick filename at top
-        out[0] += &(" file: ".to_owned() + &ARGS.filename);
+        out[4] += &ARGS.filename;
 
         // Stick preproccesor info at the bottom
         if ARGS.preprocessor_info {

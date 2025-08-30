@@ -37,10 +37,10 @@ fn factors_to_befunge_str_rec(res: &Factors, chars: &mut Vec<char>, ops: &mut Ve
     for i in &res.direct_factors {
         let j = char::from_u32((*i).try_into().unwrap()).unwrap();
         chars.push(j);
-        if !at_least_one {
-            at_least_one = true;
-        } else {
+        if at_least_one {
             ops.push('*');
+        } else {
+            at_least_one = true;
         }
     }
 
@@ -58,10 +58,10 @@ fn factors_to_befunge_str_rec(res: &Factors, chars: &mut Vec<char>, ops: &mut Ve
             }
             _ => unreachable!(),
         }
-        if !at_least_one {
-            at_least_one = true;
-        } else {
+        if at_least_one {
             ops.push('*');
+        } else {
+            at_least_one = true;
         }
     }
 }

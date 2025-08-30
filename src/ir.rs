@@ -61,14 +61,16 @@ impl From<&CType> for IRType {
 impl CType {
     pub fn sizeof(&self) -> usize {
         match self {
-            CType::SignedInt
-            | CType::SignedLong
-            | CType::UnsignedInt
-            | CType::UnsignedLong
-            | CType::Pointer(..) => 1,
-            CType::Array(inner_type, size) | CType::ImmediateArray(inner_type, size) => inner_type.sizeof() * size,
-            CType::Void => panic!("void is not sized"),
-            CType::Function(..) => panic!("functions cannot be used as concrete types"),
+            Self::SignedInt
+            | Self::SignedLong
+            | Self::UnsignedInt
+            | Self::UnsignedLong
+            | Self::Pointer(..) => 1,
+            Self::Array(inner_type, size) | Self::ImmediateArray(inner_type, size) => {
+                inner_type.sizeof() * size
+            }
+            Self::Void => panic!("void is not sized"),
+            Self::Function(..) => panic!("functions cannot be used as concrete types"),
         }
     }
 }

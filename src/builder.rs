@@ -118,28 +118,28 @@ impl OpBuilder {
     fn load_stack_val(&mut self, offset: usize) {
         self.load_stack_ptr();
         self.load_number(offset);
-        self.str("+1g");
+        self.str("+0g");
         self.current_stack_size -= 1;
     }
 
     fn set_stack_val(&mut self, offset: usize) {
         self.load_stack_ptr();
         self.load_number(offset);
-        self.str("+1p");
+        self.str("+0p");
         self.current_stack_size -= 3;
     }
 
     /// Puts data value on bstack
     fn load_data_val(&mut self, position: usize) {
         self.load_number(position + 31); // + 31 to avoid the register space
-        self.str("3g");
+        self.str("1g");
         self.current_stack_size += 0;
     }
 
     /// Set data value to top of bstack
     fn set_data_val(&mut self, position: usize) {
         self.load_number(position + 31); // + 31 to avoid the register space
-        self.str("3p");
+        self.str("1p");
         self.current_stack_size -= 2;
     }
 
@@ -201,10 +201,10 @@ impl OpBuilder {
         self.set_return_val();
         self.load_call_stack_ptr();
 
-        self.str(r"1-:2g");
+        self.str(r"1-:3g");
         self.set_stack_ptr();
 
-        self.str(r"1-:2g\1-:2g\");
+        self.str(r"1-:3g\1-:3g\");
         self.set_call_stack_ptr();
 
         self.exit();
@@ -241,17 +241,17 @@ impl OpBuilder {
         self.char(' ');
         self.load_number(caller.id);
         self.load_call_stack_ptr();
-        self.str("2p");
+        self.str("3p");
 
         // Load current location in function onto the call stack
         self.load_number(self.return_points.len() + 1);
         self.load_call_stack_ptr();
-        self.str("1+2p");
+        self.str("1+3p");
 
         // Put saved stack ptr value onto the call stack
         self.load_return_val();
         self.load_call_stack_ptr();
-        self.str("2+2p");
+        self.str("2+3p");
 
         // Increment call stack ptr
         self.load_call_stack_ptr();
@@ -655,9 +655,7 @@ impl OpBuilder {
             IRValue::Stack(offset) => {
                 // TODO: optimize this
                 // FIXME: INVESTIGATE, IT APPEARS 2^61 + 7 IS INVALID!
-                self.load_number(2_usize.pow(61));
                 self.load_number(*offset);
-                self.add(&IRValue::BefungeStack, &IRValue::BefungeStack);
                 self.load_stack_ptr();
                 self.add(&IRValue::BefungeStack, &IRValue::BefungeStack);
             }
@@ -665,7 +663,7 @@ impl OpBuilder {
                 // TODO: fix load number so this just works
                 //self.load_number(0b001 * 2_usize.pow(61) + *position);
                 self.add(
-                    &IRValue::Immediate(0b011 * 2_usize.pow(61)),
+                    &IRValue::Immediate(2_usize.pow(61)),
                     &IRValue::Immediate(*position),
                 );
             }
