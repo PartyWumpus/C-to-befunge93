@@ -158,7 +158,7 @@ impl OpBuilder {
     }
 
     pub fn not_zero_branch(&mut self, val: &IRValue, label: String) {
-        self.get_val(val);
+        self.load_val(val);
         self.str("#v_");
         self.branch_points
             .entry(label)
@@ -169,7 +169,7 @@ impl OpBuilder {
     }
 
     pub fn zero_branch(&mut self, val: &IRValue, label: String) {
-        self.get_val(val);
+        self.load_val(val);
         self.char('!');
         self.not_zero_branch(&IRValue::BefungeStack, label);
     }
@@ -197,7 +197,7 @@ impl OpBuilder {
     }
 
     pub fn return_(&mut self, val: &IRValue) {
-        self.get_val(val);
+        self.load_val(val);
         self.set_return_val();
         self.load_call_stack_ptr();
 
@@ -225,7 +225,7 @@ impl OpBuilder {
             if matches!(val, IRValue::BefungeStack) {
                 panic!("function param cannot be assumed to be on the bstack")
             }
-            self.get_val(val);
+            self.load_val(val);
         }
 
         self.increment_stack_ptr(caller.stack_frame_size);
@@ -268,7 +268,7 @@ impl OpBuilder {
 
     // Puts sign bit and abs(a) on the bstack
     fn absolute_value_and_sign_bit(&mut self, a: &IRValue) {
-        self.get_val(a);
+        self.load_val(a);
 
         self.insert_inline_befunge(&[
             r#"v    >>\ "#.to_owned(),
@@ -281,7 +281,7 @@ impl OpBuilder {
 
     // Leaves sign bit on the stack!
     fn load_bit_stack(&mut self, a: &IRValue, first: bool) {
-        self.get_val(a);
+        self.load_val(a);
 
         self.absolute_value_and_sign_bit(&IRValue::BefungeStack);
 
@@ -366,7 +366,7 @@ impl OpBuilder {
         self.load_bit_stack(a, true);
         // sign bit (0/1) to sign (-1/1)
         self.str("2*1-");
-        self.get_val(b);
+        self.load_val(b);
         self.insert_inline_befunge(&[
             r#"097p:87p"?"+>:9g97g2*+97pv>"#.to_owned(),
             r#"            ^-1_v#+g78:  < "#.to_owned(),
@@ -384,7 +384,7 @@ impl OpBuilder {
         self.load_bit_stack(a, true);
         // sign bit (0/1) to sign (-1/1)
         self.str("2*1-");
-        self.get_val(b);
+        self.load_val(b);
         self.insert_inline_befunge(&[
             r#"097p:87p"?"\->:9g97g2*+97pv>"#.to_owned(),
             r#"             ^-1_v#-\g78: < "#.to_owned(),
@@ -396,7 +396,7 @@ impl OpBuilder {
     }
 
     pub fn constrain_to_range(&mut self, value: &IRValue, size: IRType) {
-        self.get_val(value);
+        self.load_val(value);
         match size {
             IRType::Unsigned(size) => {
                 assert!(size <= 64);
@@ -557,7 +557,7 @@ impl OpBuilder {
 }
 
 impl OpBuilder {
-    fn get_val(&mut self, val: &IRValue) {
+    fn load_val(&mut self, val: &IRValue) {
         match val {
             IRValue::Stack(offset) => self.load_stack_val(*offset),
             IRValue::Register(id) => self.load_register_val(*id),
@@ -591,32 +591,32 @@ impl OpBuilder {
     // TODO: add special optimizations
     fn get_two_ordered(&mut self, a: &IRValue, b: &IRValue) {
         if matches!(b, IRValue::BefungeStack) && !matches!(a, IRValue::BefungeStack) {
-            self.get_val(b);
-            self.get_val(a);
+            self.load_val(b);
+            self.load_val(a);
             self.char('\\');
         } else {
-            self.get_val(a);
-            self.get_val(b);
+            self.load_val(a);
+            self.load_val(b);
         }
     }
 
     fn get_two_reorderable(&mut self, a: &IRValue, b: &IRValue) {
         if matches!(b, IRValue::BefungeStack) {
-            self.get_val(b);
-            self.get_val(a);
+            self.load_val(b);
+            self.load_val(a);
         } else {
-            self.get_val(a);
-            self.get_val(b);
+            self.load_val(a);
+            self.load_val(b);
         }
     }
 
     pub fn copy(&mut self, a: &IRValue, b: &IRValue) {
-        self.get_val(a);
+        self.load_val(a);
         self.put_val(b);
     }
 
     pub fn copy_with_offset(&mut self, a: &IRValue, b: &IRValue, offset: usize) {
-        self.get_val(a);
+        self.load_val(a);
         match b {
             IRValue::Stack(position) => self.set_stack_val(*position + offset),
             IRValue::Data(position) => self.set_data_val(*position + offset),
@@ -629,10 +629,24 @@ impl OpBuilder {
         }
     }
 
+    pub fn copy_from_offset(&mut self, a: &IRValue, b: &IRValue, offset: usize) {
+        match a {
+            IRValue::Stack(position) => self.load_stack_val(*position + offset),
+            IRValue::Data(position) => self.load_data_val(*position + offset),
+            IRValue::Register(..) => panic!("Cannot copy with offset into a register"),
+            IRValue::BefungeStack => panic!("Cannot copy with offset into the befunge stack"),
+            IRValue::Immediate(_) => panic!("Immediate value as output location"),
+            IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
+                panic!("Psuedo registers should be removed by befunge generation time")
+            }
+        }
+        self.put_val(b);
+    }
+
     // 0 - x
     pub fn unary_minus(&mut self, a: &IRValue) {
         self.load_number(0);
-        self.get_val(a);
+        self.load_val(a);
         self.char('-');
         self.current_stack_size -= 1;
     }
@@ -640,13 +654,13 @@ impl OpBuilder {
     // TODO: improve. x -> -1 - x
     pub fn bitwise_complement(&mut self, a: &IRValue) {
         self.load_number(0);
-        self.get_val(a);
+        self.load_val(a);
         self.str("-1-");
         self.current_stack_size -= 1;
     }
 
     pub fn boolean_negate(&mut self, a: &IRValue) {
-        self.get_val(a);
+        self.load_val(a);
         self.char('!');
     }
 
@@ -676,7 +690,7 @@ impl OpBuilder {
     }
 
     pub fn dereference(&mut self, a: &IRValue) {
-        self.get_val(a);
+        self.load_val(a);
         self.char(':');
         self.current_stack_size += 1;
 
@@ -694,9 +708,9 @@ impl OpBuilder {
 
     /// follows pointer
     pub fn store(&mut self, val: &IRValue, loc: &IRValue) {
-        self.get_val(val);
+        self.load_val(val);
 
-        self.get_val(loc);
+        self.load_val(loc);
         self.char(':');
         self.current_stack_size += 1;
 

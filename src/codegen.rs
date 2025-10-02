@@ -169,6 +169,9 @@ impl CodeGen {
                 IROp::CopyToOffset(source, location, offset) => {
                     self.builder.copy_with_offset(source, location, *offset);
                 }
+                IROp::CopyFromOffset(source, location, offset) => {
+                    self.builder.copy_from_offset(source, location, *offset);
+                }
                 IROp::AddPtr(ptr, b, out, size) => {
                     self.builder.add_ptr(ptr, b, *size);
                     self.builder.copy(&IRValue::BefungeStack, out);

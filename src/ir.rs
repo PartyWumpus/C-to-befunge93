@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::c_compiler::CType;
+use crate::c_compiler::{CType, ScopeInfo};
 
 #[derive(Debug, Clone)]
 pub enum IRValue {
@@ -37,14 +37,8 @@ pub enum IRTypeConversionError {
     FunctionNotValidType,
 }
 
-impl From<CType> for IRType {
-    fn from(value: CType) -> Self {
-        Self::from(&value)
-    }
-}
-
-impl From<&CType> for IRType {
-    fn from(value: &CType) -> Self {
+impl IRType {
+    pub fn from_ctype(value: &CType, scope: &ScopeInfo) -> Self {
         match value {
             CType::SignedInt => Self::Signed(16),
             CType::SignedLong => Self::Signed(32),
@@ -52,14 +46,15 @@ impl From<&CType> for IRType {
             CType::UnsignedLong => Self::Unsigned(32),
             CType::Void => panic!("void cannot be used as concrete types"),
             CType::Pointer(_) => Self::Signed(64),
-            CType::Array(..) | CType::ImmediateArray(..) => Self::Sized(value.sizeof()),
+            CType::Array(..) | CType::ImmediateArray(..) => Self::Sized(value.sizeof(scope)),
+            CType::Struct(tag_id) => Self::Sized(scope.get_struct_by_id(*tag_id).size),
             CType::Function(..) => panic!("functions cannot be used as concrete types"),
         }
     }
 }
 
 impl CType {
-    pub fn sizeof(&self) -> usize {
+    pub fn sizeof(&self, scope: &ScopeInfo) -> usize {
         match self {
             Self::SignedInt
             | Self::SignedLong
@@ -67,8 +62,9 @@ impl CType {
             | Self::UnsignedLong
             | Self::Pointer(..) => 1,
             Self::Array(inner_type, size) | Self::ImmediateArray(inner_type, size) => {
-                inner_type.sizeof() * size
+                inner_type.sizeof(scope) * size
             }
+            Self::Struct(tag_id) => scope.get_struct_by_id(*tag_id).size,
             Self::Void => panic!("void is not sized"),
             Self::Function(..) => panic!("functions cannot be used as concrete types"),
         }
@@ -88,6 +84,7 @@ pub enum IROp {
     Two(BinOp, IRValue, IRValue, IRValue, IRType),
     Cast(IRType, (IRValue, IRType), IRValue),
     CopyToOffset(IRValue, IRValue, usize),
+    CopyFromOffset(IRValue, IRValue, usize),
     AddPtr(IRValue, IRValue, IRValue, usize),
 }
 
