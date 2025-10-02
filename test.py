@@ -1,55 +1,74 @@
 #!/usr/bin/env python3
 
 from enum import IntEnum
-import json, subprocess, sys, re, os, asyncio, tempfile
-# TODO: consider returning the tracebacks n stuff for each test
+from dataclasses import dataclass
+import json, subprocess, sys, re, os, asyncio, tempfile, argparse
+from collections.abc import Awaitable, Sequence
 
 compiler = "./target/release/c-to-befunge"
 befunge_interpeter = "./RBeJ/target/release/rbej"
 befunge_out_path = "out.b93"
 
-compile_fails = []
-incorrect_execution = []
-interpreter_crashes = []
-successes = []
-
-accepted_invalid_code = []
-
-valid_tests: dict[str, str] = {}
-invalid_tests: list[str] = []
-
-scores = [0,0,0]
-
 NUM_CORES = 7
 
-chapter_regex = ".*chapter_(1|2|3|4|5|6|7|8|9|10|14|15)/.*"
+parser = argparse.ArgumentParser(prog='c-to-befunge tester')
+subparsers = parser.add_subparsers(
+    title="subcommands", dest="command"
+)
+run_parser = subparsers.add_parser("run", help="Run a single test")
+run_parser.add_argument("filename")
 
-# find valid tests
-with open(f"./writing-a-c-compiler-tests/expected_results.json") as f:
-    data = json.loads(f.read())
-    for test in data:
-        if re.match(chapter_regex, test):
-            valid_tests[f"./writing-a-c-compiler-tests/tests/{test}"] = data[test]["return_code"]
+suite_parser = subparsers.add_parser("test", help="Run full test suite")
+suite_parser.add_argument("--include-stdout", action='store_true')
+suite_parser.add_argument("--chapters", nargs='+', default=['1','2','3','4','5','6','7','8','9','10'])
 
-for root, dirs, files in os.walk("./writing-a-c-compiler-tests/tests/"):
-    if re.match(chapter_regex, root) and "/valid" not in root:
-        for file in files:
-            invalid_tests.append(root + "/" + file)
+args = parser.parse_args()
 
-valid_tests = dict(sorted(valid_tests.items()))
-invalid_tests.sort()
+def find_valid_tests(chapter_regex: str):
+    valid_tests: dict[str, str] = {}
+    # find valid tests
+    with open(f"./writing-a-c-compiler-tests/expected_results.json") as f:
+        data = json.loads(f.read())
+        for test in data:
+            if re.match(chapter_regex, test):
+                valid_tests[f"./writing-a-c-compiler-tests/tests/{test}"] = data[test]["return_code"]
+    
+    valid_tests = dict(sorted(valid_tests.items()))
+    return valid_tests
 
-# compile compiler
-subprocess.run(["cargo", "build", "--release"], capture_output=True)
+def find_invalid_tests(chapter_regex: str):
+    invalid_tests: list[str] = []
+    for root, _dirs, files in os.walk("./writing-a-c-compiler-tests/tests/"):
+        if re.match(chapter_regex, root) and "/valid" not in root:
+            for file in files:
+                invalid_tests.append(root + "/" + file)
+
+    invalid_tests.sort()
+    return invalid_tests
 
 class TestType(IntEnum):
     Invalid = 0
     Valid = 1
 
+class ResultType(IntEnum):
+    COMPILE_FAIL = 0
+    INCORRECT_EXECUTION = 1
+    INTERPRETER_TIMEOUT = 2
+    INTERPRETER_CRASH = 3
+    INVALID_ACCEPTED = 4
+    SUCCESS = 5
+
 class Status(IntEnum):
     RED = 0
     YELLOW = 1
     GREEN = 2
+
+@dataclass
+class Result:
+    info: str
+    result: ResultType
+    status: Status
+    stdout: bytes
 
 def status_to_code(status: Status):
     match status:
@@ -61,27 +80,24 @@ def status_to_code(status: Status):
             return "\033[1;32m"
 
 # run tests
-async def test_invalid(test: str) -> tuple[str, Status, bytes]:
+async def test_invalid(test: str) -> Result:
     with tempfile.NamedTemporaryFile() as tf:
         proc = await asyncio.create_subprocess_shell(f"{compiler} {test} -q -o {tf.name}", stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT)
         stdout, _ = await proc.communicate()
 
         if proc.returncode != 0: # compiler failed, which is what we want
-            successes.append(test)
-            return (f"PASS {test}", Status.GREEN, stdout)
+            return Result(f"PASS {test}", ResultType.SUCCESS, Status.GREEN, stdout)
         else:
-            accepted_invalid_code.append(test)
-            return (f"INVALID ACCEPTED {test}", Status.YELLOW, stdout)
+            return Result(f"INVALID ACCEPTED {test}", ResultType.INVALID_ACCEPTED, Status.YELLOW, stdout)
 
-async def test_valid(test: str) -> tuple[str, Status, bytes]:
+async def test_valid(test: str, expected: str | None) -> Result:
     with tempfile.NamedTemporaryFile() as tf:
         proc = await asyncio.create_subprocess_shell(f"{compiler} {test} -q -o {tf.name}", stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT)
         stdout, _ = await proc.communicate()
         if proc.returncode != 0: # compiler failed
-            compile_fails.append(test)
-            return (f"FAIL COMPILATION {test}", Status.RED, stdout)
+            return Result(f"FAIL COMPILATION {test}", ResultType.COMPILE_FAIL, Status.RED, stdout)
 
         proc = await asyncio.create_subprocess_shell(f"{befunge_interpeter} {tf.name}",stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT)
@@ -89,25 +105,26 @@ async def test_valid(test: str) -> tuple[str, Status, bytes]:
             stdout, _ = await asyncio.wait_for(proc.communicate(), 5)
         except asyncio.TimeoutError:
             proc.kill()
-            interpreter_crashes.append(test)
-            return (f"INTERPRETER TIMEOUT {test}", Status.YELLOW, bytes())
+            return Result(f"INTERPRETER TIMEOUT {test}", ResultType.INTERPRETER_TIMEOUT, Status.YELLOW, bytes())
 
-        if proc.returncode != 0: # interpeter crashed
-            interpreter_crashes.append(test)
-            return (f"INTERPRETER CRASH {test}", Status.YELLOW, stdout)
+        if proc.returncode != 0: # interpreter crashed
+            return Result(f"INTERPRETER CRASH {test}", ResultType.INTERPRETER_CRASH, Status.YELLOW, stdout)
 
-        if test in valid_tests and (int(stdout.splitlines()[-1]) % 256 != valid_tests[test]):
-            incorrect_execution.append(test)
-            return (f"FAIL EXECUTION (got: {stdout.splitlines()[-1]} expected: {valid_tests[test]}) {test}", Status.RED, stdout)
+        if expected is not None and int(stdout.splitlines()[-1]) % 256 != expected:
+            return Result(f"FAIL EXECUTION (got: {stdout.splitlines()[-1]} expected: {expected}) {test}", ResultType.INCORRECT_EXECUTION, Status.RED, stdout)
 
-        successes.append(test)
-        return (f"PASS {test}", Status.GREEN, stdout)
+        return Result(f"PASS {test}", ResultType.SUCCESS, Status.GREEN, stdout)
 
 def move_cursor_up(n: int):
     print("\033[F"*n)
 
 in_progress_tests = ["... waiting"]*NUM_CORES
-async def test_runner(tsts: list[tuple[TestType, str]], n:int):
+async def test_runner(
+        tsts: Sequence[tuple[TestType, tuple[str, str | None]]], 
+        scores: list[int], 
+        counts: dict[ResultType, int], 
+        n:int
+    ) -> None:
     if n == 0:
           print("\n"*NUM_CORES)
     while True:
@@ -115,18 +132,23 @@ async def test_runner(tsts: list[tuple[TestType, str]], n:int):
             test = tsts.pop()
         else:
             break
-        in_progress_tests[n] = test[1]
+        in_progress_tests[n] = test[1][0]
         if test[0] == TestType.Valid:
-            res = await test_valid(test[1])
+            res = await test_valid(test[1][0], test[1][1])
         else:
-            res = await test_invalid(test[1])
+            res = await test_invalid(test[1][0])
         move_cursor_up(NUM_CORES+2)
-        scores[res[1]] += 1
-        if res[1] != Status.GREEN:
-            sys.stdout.write(status_to_code(res[1]))
-            sys.stdout.write(res[0])
+        scores[res.status] += 1
+        counts[res.result] += 1
+        if res.status != Status.GREEN:
+            sys.stdout.write(status_to_code(res.status))
+            sys.stdout.write(res.info)
             sys.stdout.write("\033[0m") # reset
             sys.stdout.write("\n")
+            if res.stdout != b'' and args.include_stdout:
+                sys.stdout.write("\33[2K\r")
+                sys.stdout.write(res.stdout.decode("utf-8").strip().replace("\n", "\n\33[2K\r"))
+                sys.stdout.write("\n")
         sys.stdout.write("\33[2K\r")
         sys.stdout.write(f"{scores[0] + scores[1] + scores[2]}/{len(valid_tests) + len(invalid_tests)}")
 
@@ -141,50 +163,49 @@ async def test_runner(tsts: list[tuple[TestType, str]], n:int):
         sys.stdout.flush()
     in_progress_tests[n] = "done"
 
-async def run_tests():
-    tasks = []
-    tests: list[tuple[TestType, str]] = list(map(lambda x: (TestType.Valid, x), valid_tests)) + list(map(lambda x: (TestType.Invalid, x), invalid_tests))
+async def run_tests(valid_tests: dict[str, str], invalid_tests: list[str]):
+    tasks: Sequence[Awaitable[None]] = []
+    tests: Sequence[tuple[TestType, tuple[str, str | None]]] = list(map(lambda x: (TestType.Valid, x), valid_tests.items())) + list(map(lambda x: (TestType.Invalid, (x, None)), invalid_tests))
+    scores = [0,0,0]
+    counts = {s: 0 for s in ResultType}
     for i in range(NUM_CORES):
-        tasks.append(test_runner(tests, i))
+        tasks.append(test_runner(tests, scores, counts, i))
     res = await asyncio.gather(*tasks, return_exceptions=True)
     sys.stdout.write("\n")
     for i, err in enumerate(res):
         if err != None:
             print(err)
     sys.stdout.flush()
+    return counts
 
 async def run_single_test(test: str):
+    with open(f"./writing-a-c-compiler-tests/expected_results.json") as f:
+        valid_tests = json.loads(f.read())
     if test in valid_tests:
-        res = await test_valid(test)
-        print(res[0])
-        print("stdout:", res[2].decode())
+        res = await test_valid(test, valid_tests[test])
+        print(res.info)
+        print("stdout:", res.stdout.decode())
 
-    if test in invalid_tests:
-        print((await test_invalid(test))[2].decode())
-
-async def run_single_file(filename: str):
-    valid_tests.pop(filename, "")
-    res = await test_valid(filename)
-    print(res[0])
-    print("stdout:", res[2].decode())
-
-if len(sys.argv) > 1:
-    if sys.argv[1] == "test":
-        asyncio.run(run_single_test(sys.argv[2]))
-        exit(0)
-    if sys.argv[1] == "run":
-        asyncio.run(run_single_file(sys.argv[2]))
-        exit(0)
-    exit(1)
-
-asyncio.run(run_tests())
-print("\033[0m")
-
-total_tests = len(successes) + len(interpreter_crashes) + len(compile_fails) + len(accepted_invalid_code) + len(incorrect_execution)
+    else:
+        print(f"{test} not a known test, running anyways")
+        res = await test_valid(test, None)
+        print(res.info)
+        print("stdout:", res.stdout.decode())
 
 
-print(f"\033[1;33minvalid acceptances: {len(accepted_invalid_code)}\033[0m")
-print(f"\033[1;33minterpreter crashes: {len(interpreter_crashes)}\033[0m")
-print(f"\033[1;33mcompile fails: {len(compile_fails)}\033[0m")
-print(f"\033[1;31mincorrect execution: {len(incorrect_execution)}\033[0m")
-print(f"\033[1;32msuccesses: {len(successes)}\033[0m / {total_tests}")
+subprocess.run(["cargo", "build", "--release"], capture_output=True)
+if args.command == "run":
+    asyncio.run(run_single_test(args.filename))
+elif args.command == "test":
+    chapter_regex = f".*chapter_({'|'.join(args.chapters)})/.*"
+    valid_tests, invalid_tests = find_valid_tests(chapter_regex), find_invalid_tests(chapter_regex)
+    counts = asyncio.run(run_tests(valid_tests, invalid_tests))
+    print("\033[0m")
+
+    total_tests = sum(counts.values())
+
+    print(f"\033[1;33minvalid acceptances: {counts[ResultType.INVALID_ACCEPTED]}\033[0m")
+    print(f"\033[1;33minterpreter crashes: {counts[ResultType.INTERPRETER_CRASH] + counts[ResultType.INTERPRETER_TIMEOUT]}\033[0m")
+    print(f"\033[1;33mcompile fails: {counts[ResultType.COMPILE_FAIL]}\033[0m")
+    print(f"\033[1;31mincorrect execution: {counts[ResultType.INCORRECT_EXECUTION]}\033[0m")
+    print(f"\033[1;32msuccesses: {counts[ResultType.SUCCESS]}\033[0m / {total_tests}")
