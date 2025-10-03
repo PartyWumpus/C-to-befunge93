@@ -816,6 +816,13 @@ impl CType {
         let mut out = base_type.clone();
         let mut param_list = None;
 
+        match &declarator.node.kind.node {
+            DeclaratorKind::Identifier(_) | DeclaratorKind::Abstract => (),
+            DeclaratorKind::Declarator(nested_decl) => {
+                out = Self::from_declarator(nested_decl, &out, scope)?;
+            }
+        }
+
         for modifier in declarator.node.derived.iter().rev() {
             match &modifier.node {
                 DerivedDeclarator::Pointer(qualifiers) => {
@@ -859,13 +866,6 @@ impl CType {
                         span: modifier.span,
                     })
                 }
-            }
-        }
-
-        match &declarator.node.kind.node {
-            DeclaratorKind::Identifier(_) | DeclaratorKind::Abstract => (),
-            DeclaratorKind::Declarator(nested_decl) => {
-                out = Self::from_declarator(nested_decl, &out, scope)?;
             }
         }
 

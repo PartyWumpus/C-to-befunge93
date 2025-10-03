@@ -3,10 +3,6 @@ use clap::Parser;
 use codegen::CodeGen;
 use include_dir::{include_dir, Dir};
 use ir::print_ir;
-use passes::{
-    function_id_mapping_pass, pseudo_removal_pass, sort_functions_pass, stack_size_reducer_pass,
-    the_linkening,
-};
 use std::process;
 use std::sync::LazyLock;
 
@@ -99,7 +95,7 @@ fn main() {
     }
 
     // TODO: strip out unused functions
-    let mut program = the_linkening(files);
+    let mut program = passes::the_linkening(files);
 
     if ARGS.verbose {
         println!("\n-- IR, (post linking, pre optimizations)");
@@ -107,10 +103,10 @@ fn main() {
     }
 
     // Mandatory passes
-    program = sort_functions_pass(program); // put main function at the top
-    pseudo_removal_pass(&mut program);
-    stack_size_reducer_pass(&mut program);
-    let function_map = function_id_mapping_pass(&program);
+    passes::sort_functions(&mut program); // put main function at the top
+    passes::remove_pseudos(&mut program);
+    passes::stack_size_reducer(&mut program);
+    let function_map = passes::function_id_mapping(&program);
 
     if ARGS.verbose {
         println!("\n-- IR, (post optimizations)");
@@ -153,8 +149,6 @@ fn write_each(
     file.sync_all()
 }
 
-// FIXME: Fix first function having a stack size greater than x. Just increment by stack_frame_size
-// at start :)
 // FIXME: reorganise __asm__ so all [bstack]'s are loaded first
 // TODO: use seperate global counter for global values
 //

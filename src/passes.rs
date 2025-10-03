@@ -94,7 +94,7 @@ impl PsuedoMap<'_> {
     }
 }
 
-pub fn pseudo_removal_pass(funcs: &mut Vec<IRTopLevel>) {
+pub fn remove_pseudos(funcs: &mut Vec<IRTopLevel>) {
     let mut data_count = 0;
     let mut data_map = HashMap::new();
     for func in funcs {
@@ -137,6 +137,7 @@ fn stack_size_recalculator(func: &mut IRTopLevel) -> usize {
     // find biggest Stack value
     let mut counter = 0;
     let mut check = |val: &mut IRValue| {
+        // TODO: take into account sized values
         if let IRValue::Stack(val) = val {
             if *val > counter {
                 counter = *val;
@@ -160,13 +161,13 @@ fn stack_size_recalculator(func: &mut IRTopLevel) -> usize {
     out
 }
 
-pub fn stack_size_reducer_pass(funcs: &mut Vec<IRTopLevel>) {
+pub fn stack_size_reducer(funcs: &mut [IRTopLevel]) {
     for func in funcs {
         func.stack_frame_size = stack_size_recalculator(func);
     }
 }
 
-pub fn function_id_mapping_pass(funcs: &[IRTopLevel]) -> HashMap<String, FuncInfo> {
+pub fn function_id_mapping(funcs: &[IRTopLevel]) -> HashMap<String, FuncInfo> {
     let mut map = HashMap::new();
     let mut i = 1;
     for func in funcs {
@@ -184,16 +185,15 @@ pub fn function_id_mapping_pass(funcs: &[IRTopLevel]) -> HashMap<String, FuncInf
     map
 }
 
-pub fn sort_functions_pass(funcs: Vec<IRTopLevel>) -> Vec<IRTopLevel> {
-    let mut out = vec![];
-    let main_found = false;
-    for func in funcs {
+// TODO: return result instead of panic
+pub fn sort_functions(funcs: &mut [IRTopLevel]) {
+    let mut main_pos = None;
+    for (i, func) in funcs.iter().enumerate() {
         if func.name == "main" {
-            assert!(!main_found, "Only one main function may exist");
-            out.insert(0, func);
-        } else {
-            out.push(func);
+            assert!(main_pos.is_none(), "There can only be one 'main' function");
+            main_pos = Some(i);
         }
     }
-    out
+    let main_pos = main_pos.expect("There must be a 'main' function (lib compilation is not yet supported)");
+    funcs.swap(main_pos, 0);
 }
