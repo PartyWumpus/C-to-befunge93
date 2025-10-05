@@ -244,8 +244,7 @@ pub enum CType {
     Array(Box<CType>, usize),
     // The immediate location of an array
     ImmediateArray(Box<CType>, usize),
-    // TODO: convert vec to Box<[CType]>
-    Function(Vec<CType>, Box<CType>),
+    Function(Box<[CType]>, Box<CType>),
     Struct(TagID),
 }
 
@@ -870,7 +869,7 @@ impl CType {
         }
 
         if let Some(params) = param_list {
-            Ok(Self::Function(params, Box::new(out)))
+            Ok(Self::Function(params.into(), Box::new(out)))
         } else {
             Ok(out)
         }
