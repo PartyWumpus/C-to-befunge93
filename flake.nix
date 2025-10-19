@@ -28,7 +28,6 @@
                 #extensions = [ "rustc-codegen-cranelift-preview" ];
               }))
             gcc13
-            mold
             python3
           ];
         };
