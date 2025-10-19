@@ -684,11 +684,12 @@ impl CType {
             [] => panic!("No type specifiers?"),
             [TypeSpecifier::Int | TypeSpecifier::Signed]
             | [TypeSpecifier::Signed, TypeSpecifier::Int] => Self::SignedInt,
-            [TypeSpecifier::Long] | [TypeSpecifier::Long, TypeSpecifier::Int] |
-[TypeSpecifier::Int | TypeSpecifier::Signed, TypeSpecifier::Long] |
-[TypeSpecifier::Long, TypeSpecifier::Int, TypeSpecifier::Signed] |
-[TypeSpecifier::Long, TypeSpecifier::Signed, TypeSpecifier::Int] |
-[TypeSpecifier::Signed, TypeSpecifier::Long, TypeSpecifier::Int] => Self::SignedLong,
+            [TypeSpecifier::Long]
+            | [TypeSpecifier::Long, TypeSpecifier::Int]
+            | [TypeSpecifier::Int | TypeSpecifier::Signed, TypeSpecifier::Long]
+            | [TypeSpecifier::Long, TypeSpecifier::Int, TypeSpecifier::Signed]
+            | [TypeSpecifier::Long, TypeSpecifier::Signed, TypeSpecifier::Int]
+            | [TypeSpecifier::Signed, TypeSpecifier::Long, TypeSpecifier::Int] => Self::SignedLong,
             [TypeSpecifier::Unsigned] | [TypeSpecifier::Unsigned, TypeSpecifier::Int] => {
                 Self::UnsignedInt
             }
@@ -716,7 +717,6 @@ impl CType {
                         // if it has not been declared yet then just insert
                         None => {
                             if declaration {
-                                
                                 scope.insert_incomplete_struct(name)
                             } else {
                                 panic!("invalid type pensiveemoji")

@@ -19,7 +19,11 @@ run_parser = subparsers.add_parser("run", help="Run a single test")
 run_parser.add_argument("filename")
 
 suite_parser = subparsers.add_parser("test", help="Run full test suite")
-suite_parser.add_argument("--include-stdout", action='store_true')
+suite_parser.add_argument("--quiet", "-q", action='store_true')
+suite_parser.add_argument("--silent", "-s", action='store_true')
+suite_parser.add_argument("--save-diff", action='store_true')
+suite_parser.add_argument("--check-diff", action='store_true')
+suite_parser.add_argument("--extra-credit", action='store_true')
 suite_parser.add_argument("--chapters", nargs='+', default=['1','2','3','4','5','6','7','8','9','10'])
 
 args = parser.parse_args()
@@ -122,10 +126,10 @@ in_progress_tests = ["... waiting"]*NUM_CORES
 async def test_runner(
         tsts: Sequence[tuple[TestType, tuple[str, str | None]]], 
         scores: list[int], 
-        counts: dict[ResultType, int], 
+        counts: dict[ResultType, list[str]], 
         n:int
     ) -> None:
-    if n == 0:
+    if n == 0 and not args.silent:
           print("\n"*NUM_CORES)
     while True:
         if len(tsts) > 0:
@@ -137,41 +141,45 @@ async def test_runner(
             res = await test_valid(test[1][0], test[1][1])
         else:
             res = await test_invalid(test[1][0])
-        move_cursor_up(NUM_CORES+2)
+        if not args.silent:
+            move_cursor_up(NUM_CORES+2)
         scores[res.status] += 1
-        counts[res.result] += 1
-        if res.status != Status.GREEN:
-            sys.stdout.write(status_to_code(res.status))
-            sys.stdout.write(res.info)
+        counts[res.result].append(test[1][0])
+        if not args.quiet and not args.silent:
+            if res.status != Status.GREEN:
+                sys.stdout.write(status_to_code(res.status))
+                sys.stdout.write(res.info)
+                sys.stdout.write("\033[0m") # reset
+                sys.stdout.write("\n")
+                if res.stdout != b'':
+                    sys.stdout.write("\33[2K\r")
+                    sys.stdout.write(res.stdout.decode("utf-8").strip().replace("\n", "\n\33[2K\r"))
+                    sys.stdout.write("\n")
+            sys.stdout.write("\33[2K\r")
+            sys.stdout.write(f"{scores[0] + scores[1] + scores[2]}/{len(valid_tests) + len(invalid_tests)}")
+
+        if not args.silent:
+            for i in Status:
+                sys.stdout.write(status_to_code(i))
+                sys.stdout.write(f" {scores[i]}")
             sys.stdout.write("\033[0m") # reset
             sys.stdout.write("\n")
-            if res.stdout != b'' and args.include_stdout:
+            for in_prog in in_progress_tests:
                 sys.stdout.write("\33[2K\r")
-                sys.stdout.write(res.stdout.decode("utf-8").strip().replace("\n", "\n\33[2K\r"))
-                sys.stdout.write("\n")
-        sys.stdout.write("\33[2K\r")
-        sys.stdout.write(f"{scores[0] + scores[1] + scores[2]}/{len(valid_tests) + len(invalid_tests)}")
-
-        for i in Status:
-            sys.stdout.write(status_to_code(i))
-            sys.stdout.write(f" {scores[i]}")
-        sys.stdout.write("\033[0m") # reset
-        sys.stdout.write("\n")
-        for in_prog in in_progress_tests:
-            sys.stdout.write("\33[2K\r")
-            sys.stdout.write(f"{in_prog}\n")
-        sys.stdout.flush()
+                sys.stdout.write(f"{in_prog}\n")
+            sys.stdout.flush()
     in_progress_tests[n] = "done"
 
 async def run_tests(valid_tests: dict[str, str], invalid_tests: list[str]):
     tasks: Sequence[Awaitable[None]] = []
     tests: Sequence[tuple[TestType, tuple[str, str | None]]] = list(map(lambda x: (TestType.Valid, x), valid_tests.items())) + list(map(lambda x: (TestType.Invalid, (x, None)), invalid_tests))
     scores = [0,0,0]
-    counts = {s: 0 for s in ResultType}
+    counts = {s: [] for s in ResultType}
     for i in range(NUM_CORES):
         tasks.append(test_runner(tests, scores, counts, i))
     res = await asyncio.gather(*tasks, return_exceptions=True)
-    sys.stdout.write("\n")
+    if not args.silent:
+        sys.stdout.write("\n")
     for i, err in enumerate(res):
         if err != None:
             print(err)
@@ -181,8 +189,8 @@ async def run_tests(valid_tests: dict[str, str], invalid_tests: list[str]):
 async def run_single_test(test: str):
     with open(f"./writing-a-c-compiler-tests/expected_results.json") as f:
         valid_tests = json.loads(f.read())
-    if test in valid_tests:
-        res = await test_valid(test, valid_tests[test])
+    if test.removeprefix("./writing-a-c-compiler-tests/tests/") in valid_tests:
+        res = await test_valid(test, valid_tests[test.removeprefix("./writing-a-c-compiler-tests/tests/")])
         print(res.info)
         print("stdout:", res.stdout.decode())
 
@@ -197,15 +205,38 @@ subprocess.run(["cargo", "build", "--release"], capture_output=True)
 if args.command == "run":
     asyncio.run(run_single_test(args.filename))
 elif args.command == "test":
-    chapter_regex = f".*chapter_({'|'.join(args.chapters)})/.*"
+    if args.extra_credit:
+        chapter_regex = f"^.*chapter_({'|'.join(args.chapters)})/.*$"
+    else:
+        chapter_regex = f"^.*chapter_({'|'.join(args.chapters)})/((?!extra_credit/).)*$"
+
     valid_tests, invalid_tests = find_valid_tests(chapter_regex), find_invalid_tests(chapter_regex)
     counts = asyncio.run(run_tests(valid_tests, invalid_tests))
-    print("\033[0m")
 
-    total_tests = sum(counts.values())
+    if args.check_diff:
+        with open("test_diff.json", "r") as f:
+            data = json.load(f)
+    if args.save_diff:
+        with open("test_diff.json", "w") as f:
+            json.dump(counts, f)
 
-    print(f"\033[1;33minvalid acceptances: {counts[ResultType.INVALID_ACCEPTED]}\033[0m")
-    print(f"\033[1;33minterpreter crashes: {counts[ResultType.INTERPRETER_CRASH] + counts[ResultType.INTERPRETER_TIMEOUT]}\033[0m")
-    print(f"\033[1;33mcompile fails: {counts[ResultType.COMPILE_FAIL]}\033[0m")
-    print(f"\033[1;31mincorrect execution: {counts[ResultType.INCORRECT_EXECUTION]}\033[0m")
-    print(f"\033[1;32msuccesses: {counts[ResultType.SUCCESS]}\033[0m / {total_tests}")
+    def wawa(text: str, *restypes: ResultType):
+        a = sum([counts[restype] for restype in restypes], [])
+        if args.check_diff:
+            b = sum([data[str(restype)] for restype in restypes], [])
+            gains = len(list(set(a) - set(b)))
+            losses = len(list(set(b) - set(a)))
+            print(f"{text}: {len(a)}, +{gains} -{losses}\033[0m")
+            if not args.quiet:
+                if len(list(set(a) - set(b))) > 0:
+                    print("+ ", list(set(a) - set(b)))
+                if len(list(set(b) - set(a))) > 0:
+                    print("- ", list(set(b) - set(a)))
+        else:
+            print(f"{text}: {len(a)}\033[0m")
+
+    wawa(f"\033[1;33minvalid acceptances: ", ResultType.INVALID_ACCEPTED)
+    wawa(f"\033[1;33minterpreter crashes: ", ResultType.INTERPRETER_CRASH, ResultType.INTERPRETER_TIMEOUT)
+    wawa(f"\033[1;33mcompile fails: ", ResultType.COMPILE_FAIL)
+    wawa(f"\033[1;31mincorrect execution: ", ResultType.INCORRECT_EXECUTION)
+    wawa(f"\033[1;32msuccesses: ", ResultType.SUCCESS)

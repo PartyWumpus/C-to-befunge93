@@ -194,6 +194,7 @@ pub fn sort_functions(funcs: &mut [IRTopLevel]) {
             main_pos = Some(i);
         }
     }
-    let main_pos = main_pos.expect("There must be a 'main' function (lib compilation is not yet supported)");
+    let main_pos =
+        main_pos.expect("There must be a 'main' function (lib compilation is not yet supported)");
     funcs.swap(main_pos, 0);
 }
