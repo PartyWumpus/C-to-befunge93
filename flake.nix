@@ -21,7 +21,7 @@
     in
       with pkgs; {
         formatter = pkgs.alejandra;
-        devShell = mkShell {
+        devShells.default = mkShell {
           packages = [
             (rust-bin.selectLatestNightlyWith (toolchain:
               toolchain.default.override {
