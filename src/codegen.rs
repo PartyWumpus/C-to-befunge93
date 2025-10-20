@@ -110,8 +110,8 @@ impl CodeGen {
                 IROp::Label(label) => self.builder.label(label.to_owned()),
                 IROp::InlineBefunge(lines) => self.builder.insert_inline_befunge(lines),
                 IROp::CondBranch(flavour, label, val) => match flavour {
-                    BranchType::Zero => self.builder.zero_branch(val, label.to_string()),
-                    BranchType::NonZero => self.builder.not_zero_branch(val, label.to_string()),
+                    BranchType::Zero => self.builder.zero_branch(val, label.to_owned()),
+                    BranchType::NonZero => self.builder.not_zero_branch(val, label.to_owned()),
                 },
                 IROp::AlwaysBranch(label) => self.builder.unconditional_branch(label.to_owned()),
                 IROp::AddressOf(a, out) => {

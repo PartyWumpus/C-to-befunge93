@@ -497,21 +497,18 @@ fn preprocess(config: &lang_c::driver::Config, source: &[u8]) -> io::Result<Stri
     if output.status.success() {
         match String::from_utf8(output.stdout) {
             Ok(s) => Ok(s),
-            Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+            Err(e) => Err(io::Error::other(e)),
         }
     } else {
-        match String::from_utf8(output.stderr) {
-            Ok(s) => Err(io::Error::new(io::ErrorKind::Other, s)),
-            Err(_) => Err(io::Error::new(
-                io::ErrorKind::Other,
-                "cpp error contains invalid utf-8",
-            )),
-        }
+        String::from_utf8(output.stderr).map_or_else(
+            |_| Err(io::Error::other("cpp error: contains invalid utf-8")),
+            |s| Err(io::Error::other(s)),
+        )
     }
 }
 
 impl FileBuilder {
-    pub fn parse_c(source: &[u8], filename: &str) -> Result<Vec<IRTopLevel>, CompilerError> {
+    pub fn parse_c(source: &[u8], filename: &str) -> Result<Vec<IRTopLevel>, Box<CompilerError>> {
         let mut builder = Self {
             count: 0,
             scope: ScopeInfo::default(),
@@ -941,11 +938,7 @@ impl DeclarationInfo {
     }
 }
 
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    clippy::unused_self,
-    clippy::only_used_in_recursion
-)]
+#[expect(clippy::needless_pass_by_ref_mut, clippy::unused_self)]
 impl TopLevelBuilder<'_> {
     fn parse_func_declarator(
         &mut self,
