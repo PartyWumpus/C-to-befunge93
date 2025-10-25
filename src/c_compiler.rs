@@ -91,6 +91,10 @@ pub enum IRGenerationErrorType {
     TODOCaseRange,
     #[error("Static asserts are not yet supported")]
     TODOStaticAssert,
+    #[error("Designated initializers are not yet supported")]
+    TODODesignatedInit,
+    #[error("Abstract declarators are not yet supported")]
+    TODOAbstractDeclarator,
 
     // switch case errors
     #[error("Breaks can only appear inside loops or switch case statements")]
@@ -404,11 +408,11 @@ impl ScopeInfo {
                 tag_type,
                 tag_id,
             }) => {
-                // it has been declared earlier, but in a higher scope, so overwrite
                 if *source_depth == self.depth {
                     assert_eq!(*tag_type, TagType::Struct);
                     (*tag_id, false)
                 } else {
+                    // it has been declared earlier, but in a higher scope, so overwrite
                     (self.structs.lock().len(), true)
                 }
             }
@@ -583,7 +587,7 @@ impl FileBuilder {
         &mut self,
         func: &Node<FunctionDefinition>,
     ) -> Result<IRTopLevel, IRGenerationError> {
-        let info = DeclarationInfo::from_decl(&func.node.specifiers, &mut self.scope)?;
+        let info = DeclarationInfo::from_decl(&func.node.specifiers, &mut self.scope, false)?;
         let mut builder = TopLevelBuilder {
             ops: vec![],
             count: self.count,
@@ -596,7 +600,7 @@ impl FileBuilder {
             return_type: info.c_type,
         };
 
-        let name = parse_declarator_name(&func.node.declarator);
+        let name = parse_declarator_name(&func.node.declarator)?;
         let param_count = builder.parse_func_declarator(&func.node.declarator)?.len();
         builder.parse_statement(&func.node.statement)?;
         builder.push(IROp::Return(IRValue::Immediate(0)));
@@ -635,8 +639,8 @@ impl FileBuilder {
             .node
             .declarators
             .iter()
-            .map(|x| format!("'{}'", parse_declarator_name(&x.node.declarator)))
-            .collect::<Vec<String>>()
+            .map(|x| Ok(format!("'{}'", parse_declarator_name(&x.node.declarator)?)))
+            .collect::<Result<Vec<String>, _>>()?
             .join(", ");
         let name = if name.is_empty() {
             "empty region"
@@ -660,12 +664,15 @@ impl FileBuilder {
     }
 }
 
-fn parse_declarator_name(decl: &Node<Declarator>) -> String {
+fn parse_declarator_name(decl: &Node<Declarator>) -> Result<String, IRGenerationError> {
     match &decl.node.kind.node {
-        DeclaratorKind::Identifier(node) => node.node.name.clone(),
+        DeclaratorKind::Identifier(node) => Ok(node.node.name.clone()),
         DeclaratorKind::Declarator(node) => parse_declarator_name(node),
         DeclaratorKind::Abstract => {
-            todo!("figure out what to do for the 'name' when a function is abstract")
+            Err(IRGenerationError{
+                err: IRGenerationErrorType::TODOAbstractDeclarator,
+                span: decl.span,
+            })
         }
     }
 }
@@ -674,7 +681,7 @@ impl CType {
     fn from_specifiers(
         types: &[&Node<TypeSpecifier>],
         scope: &mut ScopeInfo,
-        declaration: bool,
+        is_statement: bool,
     ) -> Result<Self, IRGenerationError> {
         let ctypes = types.iter().map(|x| x.node.clone()).collect::<Vec<_>>();
         Ok(match &ctypes[..] {
@@ -713,7 +720,7 @@ impl CType {
                     None => match scope.tag_map.get(&name) {
                         // if it has not been declared yet then just insert
                         None => {
-                            if declaration {
+                            if is_statement {
                                 scope.insert_incomplete_struct(name)
                             } else {
                                 panic!("invalid type pensiveemoji")
@@ -725,7 +732,7 @@ impl CType {
                             tag_id,
                         }) => {
                             // it has been declared earlier, but in a higher scope, so overwrite
-                            if declaration && *source_depth != scope.depth {
+                            if is_statement && *source_depth != scope.depth {
                                 scope.insert_incomplete_struct(name)
                             } else {
                                 assert_eq!(*tag_type, TagType::Struct);
@@ -739,7 +746,10 @@ impl CType {
                         let mut struct_data = StructData::default();
                         for decl in decls {
                             match &decl.node {
-                                StructDeclaration::StaticAssert(..) => todo!(),
+                                StructDeclaration::StaticAssert(..) => return Err(IRGenerationError{
+                                    err: IRGenerationErrorType::TODOAbstractDeclarator,
+                                    span: decl.span,
+                                }),
                                 StructDeclaration::Field(field) => {
                                     let ctype =
                                         Self::from_qualifiers(&field.node.specifiers, scope)?;
@@ -754,7 +764,7 @@ impl CType {
                                     }
                                     let sizeof = ctype.sizeof(scope);
                                     struct_data.fields.insert(
-                                        parse_declarator_name(declarator),
+                                        parse_declarator_name(declarator)?,
                                         (ctype, struct_data.size),
                                     );
                                     struct_data.size += sizeof;
@@ -839,7 +849,8 @@ impl CType {
                     assert!(param_list.is_none());
                     param_list = Some(vec![]);
                     for param in &func_decl.node.parameters {
-                        let info = DeclarationInfo::from_decl(&param.node.specifiers, scope)?;
+                        // FIXME:
+                        let info = DeclarationInfo::from_decl(&param.node.specifiers, scope, false)?;
                         let ctype = if let Some(decl) = &param.node.declarator {
                             Self::from_declarator(decl, &info.c_type, scope)?
                         } else {
@@ -896,6 +907,7 @@ impl DeclarationInfo {
     fn from_decl(
         specifiers: &[Node<DeclarationSpecifier>],
         scope: &mut ScopeInfo,
+        is_statement: bool,
     ) -> Result<Self, IRGenerationError> {
         let mut c_types = vec![];
         let mut duration: StorageDuration = StorageDuration::Default;
@@ -933,7 +945,7 @@ impl DeclarationInfo {
 
         Ok(Self {
             duration,
-            c_type: CType::from_specifiers(&c_types, scope, true)?,
+            c_type: CType::from_specifiers(&c_types, scope, is_statement)?,
         })
     }
 }
@@ -945,7 +957,7 @@ impl TopLevelBuilder<'_> {
         decl: &Node<Declarator>,
     ) -> Result<Vec<(String, CType)>, IRGenerationError> {
         // FIXME: this name is found twice (also in parse_function). that's dumb.
-        let name = parse_declarator_name(decl);
+        let name = parse_declarator_name(decl)?;
 
         let mut params = vec![];
         for node in &decl.node.derived {
@@ -959,10 +971,10 @@ impl TopLevelBuilder<'_> {
                     }
                     for param in &func_decl.node.parameters {
                         let info =
-                            DeclarationInfo::from_decl(&param.node.specifiers, &mut self.scope)?;
+                            DeclarationInfo::from_decl(&param.node.specifiers, &mut self.scope, false)?;
 
                         if let Some(decl) = param.node.declarator.clone() {
-                            let name = parse_declarator_name(&decl);
+                            let name = parse_declarator_name(&decl)?;
                             let ctype =
                                 CType::from_declarator(&decl, &info.c_type, &mut self.scope)?;
                             params.push((name, ctype));
@@ -1467,11 +1479,11 @@ impl TopLevelBuilder<'_> {
     }
 
     fn parse_declarations(&mut self, decls: &Node<Declaration>) -> Result<(), IRGenerationError> {
-        let info = DeclarationInfo::from_decl(&decls.node.specifiers, &mut self.scope)?;
+        let info = DeclarationInfo::from_decl(&decls.node.specifiers, &mut self.scope, decls.node.declarators.len() == 0)?;
         // FIXME: this is horrific.
         // TODO: use type info
         for decl in &decls.node.declarators {
-            let name = parse_declarator_name(&decl.node.declarator);
+            let name = parse_declarator_name(&decl.node.declarator)?;
             let mut ctype =
                 CType::from_declarator(&decl.node.declarator, &info.c_type, &mut self.scope)?;
 
@@ -1628,10 +1640,9 @@ impl TopLevelBuilder<'_> {
             Initializer::List(expr_list) => {
                 let mut res = vec![];
                 for expr in expr_list {
-                    assert!(
-                        expr.node.designation.is_empty(),
-                        "Init list designation no allowed"
-                    );
+                    if !expr.node.designation.is_empty() {
+                        return Err(IRGenerationError { err: IRGenerationErrorType::TODODesignatedInit, span: expr.node.designation[0].span })
+                    }
                     res.push(self.parse_initializer(&expr.node.initializer)?);
                 }
                 Ok(InitializerInfo::Compound(res, init.span))

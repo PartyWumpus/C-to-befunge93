@@ -36,23 +36,26 @@ For ease of C compilation we just always move the value from the return register
 There's also a static memory space used for globals.
 
 ### TLDR: Stuff it supports
+- All c operators, aside from `->`, `alignof` and some uses of `,`
 - Stack frames for each function
-- Call stack for returning
-- Function calling with an arbitrary number of args
-- Returning can go to specific parts of a function
-- Inline jumps and loops
-- Pointers to stack local and static data
+- Call stack for returning, including returning to the middle of a function
+- Function calling with an arbitrary number of args (no varargs yet)
+- Inline if statements and loops
+- Pointers to stack locals, static data and dynamically allocated memory
 - Multidimensional arrays
 - Clear error messages
 - Global variables
 
 ### Current Limitations
 None of these are full architectural failures so will eventually be resolved.
-- Only arrays, pointers, signed ints and signed longs are supported.
-- Bitshifts and bitwise operations are wrong for negative values sort of
-- Linking is currently limited to the befunge_libc library
-- No arbitrarily accessable memory for malloc (doable, just need a 4th stack and some more IR)
-- It's not particularly good
+- No floats/doubles, chars, unions or enums
+- No string literals
+- No var args
+- Struct support is very incomplete
+- Type qualifiers like `const`, `volatile` and `restrict` are not supported
+- Bitshifts and bitwise operations are wrong (i think?) for negative values
+- `malloc` is just a dumb linear allocator with `free()` being a no-op
+- Linking is currently limited to the static befunge_libc library (which is extremely minimal)
 - Doesn't do a register allocation pass or any other optimizations, which would probably make it a decent bit faster
 - Uses gcc for preprocessing (ie #includes), so requires gcc installed to work (step one to making a c compiler, use another c compiler...)
 
