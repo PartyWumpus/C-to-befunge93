@@ -887,6 +887,11 @@ impl CType {
         }
 
         if let Some(params) = param_list {
+            let params = if matches!(params, [Self::Void]) {
+                vec![]
+            } else {
+                params
+            };
             Ok(Self::Function(params.into(), Box::new(out)))
         } else {
             Ok(out)
@@ -1519,7 +1524,19 @@ impl TopLevelBuilder<'_> {
                 CType::from_declarator(&decl.node.declarator, &info.c_type, &mut self.scope)?;
 
             if let CType::Function(..) = ctype {
-                self.scope.var_map.insert(name, (None, ctype));
+                if let Some((_, prev_ctype @ CType::Function(..))) = self.scope.var_map.get(&name) {
+                    if *prev_ctype != ctype {
+                        return Err(IRGenerationError {
+                            err: IRGenerationErrorType::NonMatchingDeclarations(
+                                ctype,
+                                prev_ctype.clone(),
+                            ),
+                            span: decl.span,
+                        });
+                    }
+                } else {
+                    self.scope.var_map.insert(name, (None, ctype));
+                }
                 continue;
             }
 
@@ -2819,14 +2836,50 @@ fn integer_constant_to_usize(int: &Integer) -> usize {
     }
 }
 
+// TODO: improve errors here
+// TODO: consider octal/decimal escapes
 fn char_constant_to_usize(str: &str) -> usize {
-    assert_eq!(str.chars().count(), 3, "Char constant must be length 1");
-    let mut chars = str.chars();
-    assert_eq!(chars.next().unwrap(), '\'');
-    let out = chars.next().unwrap() as usize;
-    assert_eq!(chars.next().unwrap(), '\'');
-
-    out
+    let len = str.chars().count();
+    if len == 3 {
+        let mut chars = str.chars();
+        assert_eq!(chars.next().unwrap(), '\'');
+        let out = chars.next().unwrap() as usize;
+        assert_eq!(chars.next().unwrap(), '\'');
+        out
+    } else if len == 4 {
+        let mut chars = str.chars();
+        assert_eq!(chars.next().unwrap(), '\'');
+        assert_eq!(chars.next().unwrap(), '\\');
+        let out = match chars.next().unwrap() {
+            // Single quote
+            '\'' => 39,
+            // Double quote
+            '"' => 34,
+            // Question mark
+            '?' => 63,
+            // Backslash
+            '\\' => 92,
+            // Audible alert
+            'a' => 7,
+            // Backspace
+            'b' => 8,
+            // Form feed
+            'f' => 12,
+            // New line
+            'n' => 10,
+            // Carriage return
+            'r' => 13,
+            // Horizontal tab
+            't' => 9,
+            // Vertical tab
+            'v' => 11,
+            a => panic!("\\{a} is not a valid escape sequence"),
+        };
+        assert_eq!(chars.next().unwrap(), '\'');
+        out
+    } else {
+        panic!("char literals must be one character wide");
+    }
 }
 
 fn parse_array_length(decl: &Node<ArrayDeclarator>) -> Result<usize, IRGenerationError> {

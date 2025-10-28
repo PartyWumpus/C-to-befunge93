@@ -540,6 +540,11 @@ impl OpBuilder {
             rows.push(row);
         }
 
+        // quick correctness check
+        for branch in self.branch_points.keys() {
+            assert!(self.branch_labels.contains_key(branch));
+        }
+
         // Add branches
         for (label, label_pos) in self.branch_labels.clone() {
             let mut row = vec![' '; row_length];
