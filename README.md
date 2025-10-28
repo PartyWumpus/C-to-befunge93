@@ -36,7 +36,7 @@ For ease of C compilation we just always move the value from the return register
 There's also a static memory space used for globals.
 
 ### TLDR: Stuff it supports
-- All c operators, aside from `->`, `alignof` and some uses of `,`
+- All c operators, aside from `alignof` and some uses of `,`
 - Stack frames for each function
 - Call stack for returning, including returning to the middle of a function
 - Function calling with an arbitrary number of args (no varargs yet)
@@ -51,7 +51,9 @@ None of these are full architectural failures so will eventually be resolved.
 - No floats/doubles, chars, unions or enums
 - No string literals
 - No var args
+- Errors containing types do not use the canonical names (`Pointer(Int)` instead of `int *`)
 - Struct support is very incomplete
+- Some invalid lvalues are incorrectly allowed (stuff like `func().a = 5`)
 - Type qualifiers like `const`, `volatile` and `restrict` are not supported
 - Bitshifts and bitwise operations are wrong (i think?) for negative values
 - `malloc` is just a dumb linear allocator with `free()` being a no-op

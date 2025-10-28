@@ -217,13 +217,16 @@ impl OpBuilder {
         self.current_stack_size = 0;
     }
 
-    pub fn call(&mut self, caller: FuncInfo, calle: FuncInfo, params: &[IRValue]) {
+    pub fn call(&mut self, caller: FuncInfo, calle: FuncInfo, params: &[(IRValue, usize)]) {
         self.load_stack_ptr();
         self.set_return_val();
 
-        for val in params {
+        for (val, size) in params {
             if matches!(val, IRValue::BefungeStack) {
                 panic!("function param cannot be assumed to be on the bstack")
+            }
+            if *size != 1 {
+                todo!("Structs cannot yet be used as function args")
             }
             self.load_val(val);
         }

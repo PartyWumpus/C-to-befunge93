@@ -106,6 +106,14 @@ pub enum IRGenerationErrorType {
     #[error("'default' not in switch statement")]
     DefaultNotInSwitch,
 
+    // struct errors
+    #[error("Type {0:?} is a struct, use '.' instead of '->'")]
+    AttemptToAccessStructWithArrow(CType),
+    #[error("Type {0:?} is a pointer to a struct, use '->' instead of '.'")]
+    AttemptToAccessPointerToStructWithDot(CType),
+    #[error("Attempt to access non struct type: {0:?}")]
+    AttemptToAccessNonStruct(CType),
+
     // TODO: store the span of the location of the first declaration!
     #[error("Type {0:?} does not match earlier defined {1:?}")]
     NonMatchingDeclarations(CType, CType),
@@ -220,6 +228,7 @@ impl CompilerError {
     }
 }
 
+#[derive(Debug)]
 enum ExpressionOutput {
     Plain((IRValue, CType)),
     Dereferenced((IRValue, CType)),
@@ -668,12 +677,10 @@ fn parse_declarator_name(decl: &Node<Declarator>) -> Result<String, IRGeneration
     match &decl.node.kind.node {
         DeclaratorKind::Identifier(node) => Ok(node.node.name.clone()),
         DeclaratorKind::Declarator(node) => parse_declarator_name(node),
-        DeclaratorKind::Abstract => {
-            Err(IRGenerationError{
-                err: IRGenerationErrorType::TODOAbstractDeclarator,
-                span: decl.span,
-            })
-        }
+        DeclaratorKind::Abstract => Err(IRGenerationError {
+            err: IRGenerationErrorType::TODOAbstractDeclarator,
+            span: decl.span,
+        }),
     }
 }
 
@@ -746,10 +753,12 @@ impl CType {
                         let mut struct_data = StructData::default();
                         for decl in decls {
                             match &decl.node {
-                                StructDeclaration::StaticAssert(..) => return Err(IRGenerationError{
-                                    err: IRGenerationErrorType::TODOAbstractDeclarator,
-                                    span: decl.span,
-                                }),
+                                StructDeclaration::StaticAssert(..) => {
+                                    return Err(IRGenerationError {
+                                        err: IRGenerationErrorType::TODOAbstractDeclarator,
+                                        span: decl.span,
+                                    })
+                                }
                                 StructDeclaration::Field(field) => {
                                     let ctype =
                                         Self::from_qualifiers(&field.node.specifiers, scope)?;
@@ -850,7 +859,8 @@ impl CType {
                     param_list = Some(vec![]);
                     for param in &func_decl.node.parameters {
                         // FIXME:
-                        let info = DeclarationInfo::from_decl(&param.node.specifiers, scope, false)?;
+                        let info =
+                            DeclarationInfo::from_decl(&param.node.specifiers, scope, false)?;
                         let ctype = if let Some(decl) = &param.node.declarator {
                             Self::from_declarator(decl, &info.c_type, scope)?
                         } else {
@@ -970,8 +980,11 @@ impl TopLevelBuilder<'_> {
                         });
                     }
                     for param in &func_decl.node.parameters {
-                        let info =
-                            DeclarationInfo::from_decl(&param.node.specifiers, &mut self.scope, false)?;
+                        let info = DeclarationInfo::from_decl(
+                            &param.node.specifiers,
+                            &mut self.scope,
+                            false,
+                        )?;
 
                         if let Some(decl) = param.node.declarator.clone() {
                             let name = parse_declarator_name(&decl)?;
@@ -1034,11 +1047,14 @@ impl TopLevelBuilder<'_> {
                 ),
             ),
         );
-        for (i, (name, ctype)) in params.iter().cloned().enumerate() {
-            // TODO: fix this simple count logic when allowing size > 1 args
+
+        let mut i = 1;
+        for (name, ctype) in params.iter().cloned() {
+            let size = ctype.sizeof(&self.scope);
             self.scope
                 .var_map
-                .insert(name, (Some(IRValue::Stack(i + 1)), ctype));
+                .insert(name, (Some(IRValue::Stack(i)), ctype));
+            i += size;
         }
         Ok(params)
     }
@@ -1415,11 +1431,22 @@ impl TopLevelBuilder<'_> {
         target_type: &CType,
     ) -> Result<Vec<IRValue>, IRGenerationError> {
         Ok(match (target_type, init_info) {
+            (CType::Struct(..), InitializerInfo::Single((_rhs, _rhs_type), _span)) => {
+                todo!("no struct copying by assignment yet");
+            }
+            (
+                CType::Array(_inner_type, _size) | CType::ImmediateArray(_inner_type, _size),
+                InitializerInfo::Single((_rhs, _rhs_type), _span),
+            ) => {
+                panic!("Arrays cannot be copied by init");
+            }
+
             (_, InitializerInfo::Single((rhs, rhs_type), span)) => {
                 vec![self
                     .convert_to((rhs, rhs_type), target_type)
                     .map_err(|err| IRGenerationError { err, span })?]
             }
+
             (
                 CType::Array(inner_type, size) | CType::ImmediateArray(inner_type, size),
                 InitializerInfo::Compound(init_list, span),
@@ -1474,12 +1501,16 @@ impl TopLevelBuilder<'_> {
                 }
                 out
             }
-            a => panic!("{a:?}"),
+            a => panic!("{a:?} (TODO: better handle invalid init)"),
         })
     }
 
     fn parse_declarations(&mut self, decls: &Node<Declaration>) -> Result<(), IRGenerationError> {
-        let info = DeclarationInfo::from_decl(&decls.node.specifiers, &mut self.scope, decls.node.declarators.len() == 0)?;
+        let info = DeclarationInfo::from_decl(
+            &decls.node.specifiers,
+            &mut self.scope,
+            decls.node.declarators.is_empty(),
+        )?;
         // FIXME: this is horrific.
         // TODO: use type info
         for decl in &decls.node.declarators {
@@ -1641,7 +1672,10 @@ impl TopLevelBuilder<'_> {
                 let mut res = vec![];
                 for expr in expr_list {
                     if !expr.node.designation.is_empty() {
-                        return Err(IRGenerationError { err: IRGenerationErrorType::TODODesignatedInit, span: expr.node.designation[0].span })
+                        return Err(IRGenerationError {
+                            err: IRGenerationErrorType::TODODesignatedInit,
+                            span: expr.node.designation[0].span,
+                        });
                     }
                     res.push(self.parse_initializer(&expr.node.initializer)?);
                 }
@@ -1742,6 +1776,7 @@ impl TopLevelBuilder<'_> {
         if let CType::Struct(tag_id) = base_type {
             let struct_data = self.scope.get_struct_by_id(*tag_id);
             let field = struct_data.fields.get(&expr.node.identifier.node.name);
+
             match field {
                 None => panic!("NAME is not a valid member"),
                 Some((ctype, member_offset)) => match expr.node.operator.node {
@@ -1767,11 +1802,75 @@ impl TopLevelBuilder<'_> {
                             Out::Dereferenced((out, ctype.clone()))
                         }
                     }),
-                    MemberOperator::Indirect => todo!("wah"),
+                    MemberOperator::Indirect => Err(IRGenerationError {
+                        err: IRGenerationErrorType::AttemptToAccessStructWithArrow(
+                            base_type.clone(),
+                        ),
+                        span: expr.span,
+                    }),
+                },
+            }
+        } else if let CType::Pointer(CType::Struct(tag_id)) = base_type {
+            let struct_data = self.scope.get_struct_by_id(*tag_id);
+            let field = struct_data.fields.get(&expr.node.identifier.node.name);
+
+            match field {
+                None => panic!("NAME is not a valid member"),
+                Some((ctype, member_offset)) => match expr.node.operator.node {
+                    MemberOperator::Indirect => Ok(match &inner {
+                        Out::Plain((base, _)) => {
+                            let out = self.generate_pseudo(1);
+                            self.push(IROp::AddPtr(
+                                base.clone(),
+                                IRValue::Immediate(*member_offset),
+                                out.clone(),
+                                1,
+                            ));
+                            Out::Dereferenced((out, ctype.clone()))
+                        }
+                        Out::SubObject { base, offset, .. } => {
+                            let ptr = self.generate_pseudo(1);
+                            self.push(IROp::CopyFromOffset(base.clone(), ptr.clone(), *offset));
+                            let out = self.generate_pseudo(1);
+                            self.push(IROp::AddPtr(
+                                ptr,
+                                IRValue::Immediate(*member_offset),
+                                out.clone(),
+                                1,
+                            ));
+                            Out::Dereferenced((out, ctype.clone()))
+                        }
+                        Out::Dereferenced((val, _)) => {
+                            let ptr = self.generate_pseudo(ctype.sizeof(&self.scope));
+                            self.push(IROp::One(
+                                UnaryOp::Dereference,
+                                val.clone(),
+                                ptr.clone(),
+                                IRType::from_ctype(ctype, &self.scope),
+                            ));
+                            let out = self.generate_pseudo(1);
+                            self.push(IROp::AddPtr(
+                                ptr,
+                                IRValue::Immediate(*member_offset),
+                                out.clone(),
+                                1,
+                            ));
+                            Out::Dereferenced((out, ctype.clone()))
+                        }
+                    }),
+                    MemberOperator::Direct => Err(IRGenerationError {
+                        err: IRGenerationErrorType::AttemptToAccessPointerToStructWithDot(
+                            base_type.clone(),
+                        ),
+                        span: expr.span,
+                    }),
                 },
             }
         } else {
-            panic!("can only access on a struct")
+            Err(IRGenerationError {
+                err: IRGenerationErrorType::AttemptToAccessNonStruct(base_type.clone()),
+                span: expr.span,
+            })
         }
     }
 
@@ -1913,7 +2012,9 @@ impl TopLevelBuilder<'_> {
 
                         self.push(IROp::Call(
                             ident.node.name.clone(),
-                            args.iter().map(|x| x.0.clone()).collect(),
+                            args.iter()
+                                .map(|x| (x.0.clone(), x.1.sizeof(&self.scope)))
+                                .collect(),
                         ));
                         let out = self.generate_pseudo(return_type.sizeof(&self.scope));
                         self.push(IROp::One(
@@ -2198,7 +2299,7 @@ impl TopLevelBuilder<'_> {
                         subtype,
                         offset,
                     } => {
-                        todo!()
+                        todo!("assigning to members of structs")
                     }
                 };
                 let (lhs, lhs_type) = self.attempt_array_decay((lhs, lhs_type));

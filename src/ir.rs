@@ -4,20 +4,24 @@ use crate::c_compiler::{CType, ScopeInfo};
 
 #[derive(Debug, Clone)]
 pub enum IRValue {
+    /// An offset from the current bottom of the stack
     Stack(usize),
+    /// A constant immediate value, cannnot be written to
     Immediate(usize),
-    Register(usize), // limited to only like 70ish tho
+    /// A register, ie a position in the "zero-page"
+    Register(usize),
+    /// An absolute position in static memory
     Data(usize),
-    Psuedo {
-        name: String,
-        size: usize,
-    },
+    /// A location to be determined Later, will be on the stack
+    Psuedo { name: String, size: usize },
+    /// A location to be determined Later, will be in static memory
     StaticPsuedo {
         name: String,
         linkable: bool,
         size: usize,
     },
-    // Must be careful when using
+    /// The current value on the top of the bstack
+    /// Must be careful when using
     BefungeStack,
 }
 
@@ -74,7 +78,7 @@ impl CType {
 #[derive(Debug, Clone)]
 pub enum IROp {
     Return(IRValue),
-    Call(String, Vec<IRValue>),
+    Call(String, Vec<(IRValue, usize)>),
     Label(String),
     InlineBefunge(Vec<String>),
     AlwaysBranch(String),

@@ -1,3 +1,6 @@
+#![allow(incomplete_features)]
+#![feature(deref_patterns)]
+
 use c_compiler::FileBuilder;
 use clap::Parser;
 use codegen::CodeGen;
