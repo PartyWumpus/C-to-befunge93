@@ -72,6 +72,8 @@ pub enum IRGenerationErrorType {
     InvalidASMSymbol(String),
     #[error("Excess elements in array initializer")]
     ExcessElementsInInitializer,
+    #[error("Char literals must be one character (or an escape sequence)")]
+    LongCharLiteral,
 
     #[error("INTERNAL: A non func declarator in the func declarator parser? type: {0:?}")]
     INTERNALNonFuncDeclaratorInFuncDeclaratorParser(DerivedDeclarator),
@@ -2693,7 +2695,10 @@ impl TopLevelBuilder<'_> {
                 Ok((IRValue::Immediate(x), ctype))
             }
             Constant::Character(str) => {
-                let x = char_constant_to_usize(str);
+                let x = char_constant_to_usize(str).map_err(|err| IRGenerationError {
+                    err,
+                    span: val.span,
+                })?;
                 // NOTE: This is not a typo, char literals are ints.
                 Ok((IRValue::Immediate(x), CType::SignedInt))
             }
@@ -2836,50 +2841,58 @@ fn integer_constant_to_usize(int: &Integer) -> usize {
     }
 }
 
-// TODO: improve errors here
-// TODO: consider octal/decimal escapes
-fn char_constant_to_usize(str: &str) -> usize {
-    let len = str.chars().count();
-    if len == 3 {
-        let mut chars = str.chars();
-        assert_eq!(chars.next().unwrap(), '\'');
-        let out = chars.next().unwrap() as usize;
-        assert_eq!(chars.next().unwrap(), '\'');
-        out
-    } else if len == 4 {
-        let mut chars = str.chars();
-        assert_eq!(chars.next().unwrap(), '\'');
-        assert_eq!(chars.next().unwrap(), '\\');
-        let out = match chars.next().unwrap() {
-            // Single quote
-            '\'' => 39,
-            // Double quote
-            '"' => 34,
-            // Question mark
-            '?' => 63,
-            // Backslash
-            '\\' => 92,
-            // Audible alert
-            'a' => 7,
-            // Backspace
-            'b' => 8,
-            // Form feed
-            'f' => 12,
-            // New line
-            'n' => 10,
-            // Carriage return
-            'r' => 13,
-            // Horizontal tab
-            't' => 9,
-            // Vertical tab
-            'v' => 11,
-            a => panic!("\\{a} is not a valid escape sequence"),
-        };
-        assert_eq!(chars.next().unwrap(), '\'');
-        out
-    } else {
-        panic!("char literals must be one character wide");
-    }
+// minimal error handling is required here, because lang-c validates the literal
+fn char_constant_to_usize(str: &str) -> Result<usize, IRGenerationErrorType> {
+    let mut chars = str.chars().skip(1).collect::<Vec<_>>();
+    chars.pop();
+
+    Ok(match &chars {
+        // octal
+        ['\\', '0'..'7', ..] => {
+            let num: String = chars.into_iter().skip(1).collect();
+            usize::from_str_radix(&num, 8).unwrap()
+        },
+        // hex
+        ['\\', 'x', ..] => {
+            let num: String = chars.into_iter().skip(2).collect();
+            usize::from_str_radix(&num, 16).unwrap()
+        },
+        // normal escape
+        ['\\', ..] => {
+            match chars[1] {
+                // Single quote
+                '\'' => 39,
+                // Double quote
+                '"' => 34,
+                // Question mark
+                '?' => 63,
+                // Backslash
+                '\\' => 92,
+                // Audible alert
+                'a' => 7,
+                // Backspace
+                'b' => 8,
+                // Form feed
+                'f' => 12,
+                // New line
+                'n' => 10,
+                // Carriage return
+                'r' => 13,
+                // Horizontal tab
+                't' => 9,
+                // Vertical tab
+                'v' => 11,
+                a => unreachable!("\\{a} is not a valid escape sequence"),
+            }
+        }
+        // normal character
+        _ => {
+            if chars.len() != 1 {
+                return Err(IRGenerationErrorType::LongCharLiteral);
+            }
+            chars[0] as usize
+        }
+    })
 }
 
 fn parse_array_length(decl: &Node<ArrayDeclarator>) -> Result<usize, IRGenerationError> {
@@ -2906,7 +2919,12 @@ fn parse_array_length(decl: &Node<ArrayDeclarator>) -> Result<usize, IRGeneratio
                         })
                     }
                     Constant::Integer(int) => integer_constant_to_usize(int),
-                    Constant::Character(str) => char_constant_to_usize(str),
+                    Constant::Character(str) => {
+                        char_constant_to_usize(str).map_err(|err| IRGenerationError {
+                            err,
+                            span: decl.span,
+                        })?
+                    }
                 },
                 _ => {
                     return Err(IRGenerationError {
@@ -2927,7 +2945,12 @@ fn parse_array_length(decl: &Node<ArrayDeclarator>) -> Result<usize, IRGeneratio
                         })
                     }
                     Constant::Integer(int) => integer_constant_to_usize(int),
-                    Constant::Character(str) => char_constant_to_usize(str),
+                    Constant::Character(str) => {
+                        char_constant_to_usize(str).map_err(|err| IRGenerationError {
+                            err,
+                            span: decl.span,
+                        })?
+                    }
                 },
                 _ => {
                     return Err(IRGenerationError {
