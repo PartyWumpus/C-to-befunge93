@@ -48,12 +48,16 @@ pub enum IRGenerationErrorType {
     InvalidCoercion(#[from] InvalidCoercionError),
     #[error("Unknown type: {0:?}")]
     InvalidType(Box<[TypeSpecifier]>),
+    #[error("Unknown struct: {0:?}")]
+    InvalidStructType(String),
     #[error("Cannot dereference non-pointers")]
     DereferenceNonPointer,
     #[error("Unknown identifier")]
     UnknownIdentifier,
     #[error("Non-integer array length")]
     NonIntegerArrayLength,
+    #[error("Arrays must be initialized with an initializer list or string literal")]
+    InvalidArrayInit,
     #[error("(TODO) Non trivial array length. VLAs are not supported and neither are constant expressions.")]
     TODONonConstantArrayLength,
     #[error("(TODO) Array length must be manually specified for now.")]
@@ -115,6 +119,8 @@ pub enum IRGenerationErrorType {
     AttemptToAccessPointerToStructWithDot(CType),
     #[error("Attempt to access non struct type: {0:?}")]
     AttemptToAccessNonStruct(CType),
+    #[error("'{0}' is not a member of struct {1:?}")]
+    InvalidStructMember(String, CType),
 
     // TODO: store the span of the location of the first declaration!
     #[error("Type {0:?} does not match earlier defined {1:?}")]
@@ -291,9 +297,9 @@ impl CType {
                 }
                 out
             }
-            Self::Struct(..) => todo!(),
-            Self::Void => panic!("i am not sure what this would mean"),
-            Self::Function(..) => panic!("i am not zero initializing your function sorry"),
+            Self::Struct(..) => todo!("zero init of structs"),
+            Self::Void => unreachable!("void in zero init"),
+            Self::Function(..) => unreachable!("function type in zero init"),
         }
     }
 
@@ -694,7 +700,7 @@ impl CType {
     ) -> Result<Self, IRGenerationError> {
         let ctypes = types.iter().map(|x| x.node.clone()).collect::<Vec<_>>();
         Ok(match &ctypes[..] {
-            [] => panic!("No type specifiers?"),
+            [] => unreachable!("No type specifiers?"),
             [TypeSpecifier::Int | TypeSpecifier::Signed]
             | [TypeSpecifier::Signed, TypeSpecifier::Int] => Self::SignedInt,
             [TypeSpecifier::Long]
@@ -732,7 +738,7 @@ impl CType {
                             if is_statement {
                                 scope.insert_incomplete_struct(name)
                             } else {
-                                panic!("invalid type pensiveemoji")
+                                return Err(IRGenerationError { err: IRGenerationErrorType::InvalidStructType(name.clone()), span: struct_data.span })
                             }
                         }
                         Some(TagData {
@@ -769,7 +775,7 @@ impl CType {
                                     let declarator =
                                         &field.node.declarators[0].node.declarator.clone().unwrap();
                                     let mut ctype =
-                                        Self::from_declarator(declarator, &ctype, scope).unwrap(); //FIXME:
+                                        Self::from_declarator(declarator, &ctype, scope)?;
                                     if let Self::Array(inner, length) = ctype {
                                         ctype = Self::ImmediateArray(inner, length);
                                     }
@@ -1443,9 +1449,9 @@ impl TopLevelBuilder<'_> {
             }
             (
                 CType::Array(_inner_type, _size) | CType::ImmediateArray(_inner_type, _size),
-                InitializerInfo::Single((_rhs, _rhs_type), _span),
+                InitializerInfo::Single((_rhs, _rhs_type), span),
             ) => {
-                panic!("Arrays cannot be copied by init");
+                return Err(IRGenerationError { err: IRGenerationErrorType::InvalidArrayInit, span });
             }
 
             (_, InitializerInfo::Single((rhs, rhs_type), span)) => {
@@ -1794,10 +1800,11 @@ impl TopLevelBuilder<'_> {
         };
         if let CType::Struct(tag_id) = base_type {
             let struct_data = self.scope.get_struct_by_id(*tag_id);
-            let field = struct_data.fields.get(&expr.node.identifier.node.name);
+            let field_name = &expr.node.identifier.node.name;
+            let field = struct_data.fields.get(field_name);
 
             match field {
-                None => panic!("NAME is not a valid member"),
+                None => Err(IRGenerationError { err: IRGenerationErrorType::InvalidStructMember(field_name.clone(), base_type.clone()), span: expr.node.identifier.span }),
                 Some((ctype, member_offset)) => match expr.node.operator.node {
                     MemberOperator::Direct => Ok(match &inner {
                         Out::Plain((base, _)) => Out::SubObject {
@@ -1831,10 +1838,11 @@ impl TopLevelBuilder<'_> {
             }
         } else if let CType::Pointer(CType::Struct(tag_id)) = base_type {
             let struct_data = self.scope.get_struct_by_id(*tag_id);
-            let field = struct_data.fields.get(&expr.node.identifier.node.name);
+            let field_name = &expr.node.identifier.node.name;
+            let field = struct_data.fields.get(field_name);
 
             match field {
-                None => panic!("NAME is not a valid member"),
+                None => Err(IRGenerationError { err: IRGenerationErrorType::InvalidStructMember(field_name.clone(), base_type.clone()), span: expr.node.identifier.span }),
                 Some((ctype, member_offset)) => match expr.node.operator.node {
                     MemberOperator::Indirect => Ok(match &inner {
                         Out::Plain((base, _)) => {
@@ -2096,7 +2104,7 @@ impl TopLevelBuilder<'_> {
                         return match *pointee_type {
                             // Value is already the pointer it is supposed to be
                             CType::Array(..) => Ok(Out::Plain((val, *pointee_type))),
-                            CType::ImmediateArray(..) => panic!(),
+                            CType::ImmediateArray(..) => unreachable!(),
                             // will be dereferenced laterTM
                             _ => Ok(Out::Dereferenced((val, *pointee_type))),
                         };
@@ -2108,7 +2116,7 @@ impl TopLevelBuilder<'_> {
                         return match *pointee_type {
                             // value is now the pointer it is supposed to be
                             CType::Array(..) => Ok(Out::Plain((out, *pointee_type))),
-                            CType::ImmediateArray(..) => panic!(),
+                            CType::ImmediateArray(..) => unreachable!(),
                             // will be dereferenced laterTM
                             _ => Ok(Out::Dereferenced((out, *pointee_type))),
                         };
@@ -2421,7 +2429,7 @@ impl TopLevelBuilder<'_> {
             },
             CBinOp::Index => match (lhs_type, rhs_type) {
                 (CType::Pointer(..) | CType::Array(..), CType::Pointer(..) | CType::Array(..)) => {
-                    panic!("cannot index with two pointers");
+                    panic!("cannot index pointer with pointer");
                 }
                 (CType::Pointer(inner) | CType::Array(inner, _), _) => {
                     self.push(IROp::AddPtr(
@@ -2433,7 +2441,7 @@ impl TopLevelBuilder<'_> {
                     return match *inner {
                         // Value is already the pointer it is supposed to be
                         CType::Array(..) => Ok(ExpressionOutput::Plain((out, *inner))),
-                        CType::ImmediateArray(..) => panic!(),
+                        CType::ImmediateArray(..) => unreachable!(),
                         // will be dereferenced laterTM
                         _ => Ok(ExpressionOutput::Dereferenced((out, *inner))),
                     };
@@ -2448,7 +2456,7 @@ impl TopLevelBuilder<'_> {
                     return match *inner {
                         // Value is already the pointer it is supposed to be
                         CType::Array(..) => Ok(ExpressionOutput::Plain((out, *inner))),
-                        CType::ImmediateArray(..) => panic!(),
+                        CType::ImmediateArray(..) => unreachable!(),
                         // will be dereferenced laterTM
                         _ => Ok(ExpressionOutput::Dereferenced((out, *inner))),
                     };
