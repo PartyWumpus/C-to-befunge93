@@ -1,6 +1,8 @@
 use prime_factorization::Factorization;
 use std::num::NonZeroU64;
 
+// all the logic in here is completely wrong, will be fixed eventually
+
 #[derive(Debug, Clone)]
 struct Factors {
     offset: i8,
@@ -16,10 +18,33 @@ pub fn int_to_befunge_str(num: u64) -> String {
         20 => "45*".to_owned(),
         34 => "98+2*".to_owned(),
         _ => {
-            let factors = highest_valid_factors(NonZeroU64::new(num).unwrap());
-            factors_to_befunge_str(&factors)
+            // FIXME: do better than this solution
+            base_9_befunge(num)
+            //let factors = highest_valid_factors(NonZeroU64::new(num).unwrap());
+            //factors_to_befunge_str(&factors)
         }
     }
+}
+
+pub fn base_9_befunge(num: u64) -> String {
+    let mut result = vec![];
+    let mut x = num;
+    loop {
+        let m = x % 9;
+        x /= 9;
+
+        result.push(char::from_digit(m as u32, 9).unwrap());
+        result.push('9');
+        if x == 0 {
+            break;
+        }
+    }
+    result.pop(); // remove extra 9 at the end
+    for _ in 0..result.len() / 2 {
+        result.push('*');
+        result.push('+');
+    }
+    result.into_iter().collect()
 }
 
 fn factors_to_befunge_str(res: &Factors) -> String {
