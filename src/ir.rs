@@ -44,15 +44,21 @@ pub enum IRTypeConversionError {
 impl IRType {
     pub fn from_ctype(value: &CType, scope: &ScopeInfo) -> Self {
         match value {
-            CType::SignedInt => Self::Signed(16),
-            CType::SignedLong => Self::Signed(32),
+            CType::UnsignedChar => Self::Unsigned(8),
+            CType::Char | CType::SignedChar => Self::Signed(8),
+
             CType::UnsignedInt => Self::Unsigned(32),
-            CType::UnsignedLong => Self::Unsigned(32),
-            CType::Void => panic!("void cannot be used as concrete types"),
+            CType::SignedInt => Self::Signed(32),
+
+            CType::UnsignedLong => Self::Unsigned(64),
+            CType::SignedLong => Self::Signed(64),
+
             CType::Pointer(_) => Self::Signed(64),
             CType::Array(..) | CType::ImmediateArray(..) => Self::Sized(value.sizeof(scope)),
             CType::Struct(tag_id) => Self::Sized(scope.get_struct_by_id(*tag_id).size),
+
             CType::Function(..) => panic!("functions cannot be used as concrete types"),
+            CType::Void => panic!("void cannot be used as a concrete type"),
         }
     }
 }
@@ -60,11 +66,14 @@ impl IRType {
 impl CType {
     pub fn sizeof(&self, scope: &ScopeInfo) -> usize {
         match self {
-            Self::SignedInt
+            Self::Pointer(..)
+            | Self::Char
+            | Self::SignedChar
+            | Self::SignedInt
             | Self::SignedLong
+            | Self::UnsignedChar
             | Self::UnsignedInt
-            | Self::UnsignedLong
-            | Self::Pointer(..) => 1,
+            | Self::UnsignedLong => 1,
             Self::Array(inner_type, size) | Self::ImmediateArray(inner_type, size) => {
                 inner_type.sizeof(scope) * size
             }

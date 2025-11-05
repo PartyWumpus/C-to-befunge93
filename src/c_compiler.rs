@@ -255,6 +255,9 @@ pub struct StructData {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum CType {
+    UnsignedChar,
+    SignedChar,
+    Char,
     SignedInt,
     SignedLong,
     UnsignedInt,
@@ -284,8 +287,11 @@ impl CType {
     pub fn zero_init(&self) -> Vec<IRValue> {
         match self {
             Self::Pointer(..)
+            | Self::Char
+            | Self::SignedChar
             | Self::SignedInt
             | Self::SignedLong
+            | Self::UnsignedChar
             | Self::UnsignedInt
             | Self::UnsignedLong => {
                 vec![IRValue::Immediate(0)]
@@ -701,6 +707,10 @@ impl CType {
         let ctypes = types.iter().map(|x| x.node.clone()).collect::<Vec<_>>();
         Ok(match &ctypes[..] {
             [] => unreachable!("No type specifiers?"),
+            [TypeSpecifier::Signed, TypeSpecifier::Char] => Self::SignedChar,
+            [TypeSpecifier::Unsigned, TypeSpecifier::Char] => Self::UnsignedChar,
+            [TypeSpecifier::Char] => Self::Char,
+
             [TypeSpecifier::Int | TypeSpecifier::Signed]
             | [TypeSpecifier::Signed, TypeSpecifier::Int] => Self::SignedInt,
             [TypeSpecifier::Long]
@@ -738,7 +748,10 @@ impl CType {
                             if is_statement {
                                 scope.insert_incomplete_struct(name)
                             } else {
-                                return Err(IRGenerationError { err: IRGenerationErrorType::InvalidStructType(name.clone()), span: struct_data.span })
+                                return Err(IRGenerationError {
+                                    err: IRGenerationErrorType::InvalidStructType(name.clone()),
+                                    span: struct_data.span,
+                                });
                             }
                         }
                         Some(TagData {
@@ -1451,7 +1464,10 @@ impl TopLevelBuilder<'_> {
                 CType::Array(_inner_type, _size) | CType::ImmediateArray(_inner_type, _size),
                 InitializerInfo::Single((_rhs, _rhs_type), span),
             ) => {
-                return Err(IRGenerationError { err: IRGenerationErrorType::InvalidArrayInit, span });
+                return Err(IRGenerationError {
+                    err: IRGenerationErrorType::InvalidArrayInit,
+                    span,
+                });
             }
 
             (_, InitializerInfo::Single((rhs, rhs_type), span)) => {
@@ -1804,7 +1820,13 @@ impl TopLevelBuilder<'_> {
             let field = struct_data.fields.get(field_name);
 
             match field {
-                None => Err(IRGenerationError { err: IRGenerationErrorType::InvalidStructMember(field_name.clone(), base_type.clone()), span: expr.node.identifier.span }),
+                None => Err(IRGenerationError {
+                    err: IRGenerationErrorType::InvalidStructMember(
+                        field_name.clone(),
+                        base_type.clone(),
+                    ),
+                    span: expr.node.identifier.span,
+                }),
                 Some((ctype, member_offset)) => match expr.node.operator.node {
                     MemberOperator::Direct => Ok(match &inner {
                         Out::Plain((base, _)) => Out::SubObject {
@@ -1842,7 +1864,13 @@ impl TopLevelBuilder<'_> {
             let field = struct_data.fields.get(field_name);
 
             match field {
-                None => Err(IRGenerationError { err: IRGenerationErrorType::InvalidStructMember(field_name.clone(), base_type.clone()), span: expr.node.identifier.span }),
+                None => Err(IRGenerationError {
+                    err: IRGenerationErrorType::InvalidStructMember(
+                        field_name.clone(),
+                        base_type.clone(),
+                    ),
+                    span: expr.node.identifier.span,
+                }),
                 Some((ctype, member_offset)) => match expr.node.operator.node {
                     MemberOperator::Indirect => Ok(match &inner {
                         Out::Plain((base, _)) => {
@@ -2859,12 +2887,12 @@ fn char_constant_to_usize(str: &str) -> Result<usize, IRGenerationErrorType> {
         ['\\', '0'..'7', ..] => {
             let num: String = chars.into_iter().skip(1).collect();
             usize::from_str_radix(&num, 8).unwrap()
-        },
+        }
         // hex
         ['\\', 'x', ..] => {
             let num: String = chars.into_iter().skip(2).collect();
             usize::from_str_radix(&num, 16).unwrap()
-        },
+        }
         // normal escape
         ['\\', ..] => {
             match chars[1] {

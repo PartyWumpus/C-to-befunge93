@@ -49,6 +49,7 @@ There's also a static memory space used for globals.
 ### Current Limitations
 None of these are full architectural failures so will eventually be resolved.
 - No floats/doubles, chars, unions or enums
+- Overflow is incorrectly handled for ints and unsigned longs (correct for all chars and signed longs though)
 - No string literals
 - No var args
 - Errors containing types do not use the canonical names (`Pointer(Int)` instead of `int *`)

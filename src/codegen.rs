@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     builder::OpBuilder,
-    ir::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRValue, UnaryOp},
+    ir::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRType, IRValue, UnaryOp},
     ARGS,
 };
 
@@ -103,9 +103,14 @@ impl CodeGen {
                 IROp::Return(val) => {
                     self.builder.return_(val);
                 }
-                IROp::Cast(irtype, val, output) => {
-                    // FIXME: Casts are currently no op, through the power of being incorrect
-                    self.builder.copy(&val.0, output);
+                IROp::Cast(irtype, (val, original_irtype), output) => {
+                    assert!(matches!(
+                        original_irtype,
+                        IRType::Signed(..) | IRType::Unsigned(..)
+                    ));
+                    assert!(matches!(irtype, IRType::Signed(..) | IRType::Unsigned(..)));
+                    self.builder.constrain_to_range(val, *irtype, false);
+                    self.builder.copy(&IRValue::BefungeStack, output);
                 }
                 IROp::Label(label) => self.builder.label(label.to_owned()),
                 IROp::InlineBefunge(lines) => self.builder.insert_inline_befunge(lines),
@@ -121,7 +126,7 @@ impl CodeGen {
                 }
                 IROp::One(op, a, out, irtype) => {
                     if matches!(op, UnaryOp::Store) {
-                        self.builder.constrain_to_range(a, *irtype);
+                        self.builder.constrain_to_range(a, *irtype, false);
                         self.builder.store(&IRValue::BefungeStack, out);
                     } else {
                         match op {
@@ -133,7 +138,7 @@ impl CodeGen {
                             UnaryOp::Dereference => self.builder.dereference(a),
                         }
                         self.builder
-                            .constrain_to_range(&IRValue::BefungeStack, *irtype);
+                            .constrain_to_range(&IRValue::BefungeStack, *irtype, false);
                         self.builder.copy(&IRValue::BefungeStack, out);
                     }
                 }
@@ -163,7 +168,7 @@ impl CodeGen {
                         }
                     }
                     self.builder
-                        .constrain_to_range(&IRValue::BefungeStack, *irtype);
+                        .constrain_to_range(&IRValue::BefungeStack, *irtype, false);
                     self.builder.copy(&IRValue::BefungeStack, out);
                 }
                 IROp::CopyToOffset(source, location, offset) => {
