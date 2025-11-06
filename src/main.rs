@@ -4,7 +4,7 @@
 use c_compiler::FileBuilder;
 use clap::Parser;
 use codegen::CodeGen;
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 use ir::print_ir;
 use std::process;
 use std::sync::LazyLock;

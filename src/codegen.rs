@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use crate::{
+    ARGS,
     builder::OpBuilder,
     ir::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRType, IRValue, UnaryOp},
-    ARGS,
 };
 
 static PRE_INIT_PRELUDE: &str = r##"

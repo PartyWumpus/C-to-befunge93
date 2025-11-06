@@ -30,14 +30,14 @@ use lang_c::{
         StructDeclaration, StructKind, SwitchStatement, TypeName, TypeSpecifier, UnaryOperator,
         UnaryOperatorExpression, WhileStatement,
     },
-    driver::{parse_preprocessed, Flavor},
+    driver::{Flavor, parse_preprocessed},
     span::{Node, Span},
 };
 use thiserror::Error;
 
 use crate::{
-    ir::{BinOp, BranchType, IROp, IRTopLevel, IRType, IRTypeConversionError, IRValue, UnaryOp},
     ARGS,
+    ir::{BinOp, BranchType, IROp, IRTopLevel, IRType, IRTypeConversionError, IRValue, UnaryOp},
 };
 
 #[derive(Error, Debug)]
@@ -58,7 +58,9 @@ pub enum IRGenerationErrorType {
     NonIntegerArrayLength,
     #[error("Arrays must be initialized with an initializer list or string literal")]
     InvalidArrayInit,
-    #[error("(TODO) Non trivial array length. VLAs are not supported and neither are constant expressions.")]
+    #[error(
+        "(TODO) Non trivial array length. VLAs are not supported and neither are constant expressions."
+    )]
     TODONonConstantArrayLength,
     #[error("(TODO) Array length must be manually specified for now.")]
     TODOUnknownArrayLength,
@@ -715,18 +717,39 @@ impl CType {
             | [TypeSpecifier::Signed, TypeSpecifier::Int] => Self::SignedInt,
             [TypeSpecifier::Long]
             | [TypeSpecifier::Long, TypeSpecifier::Int]
-            | [TypeSpecifier::Int | TypeSpecifier::Signed, TypeSpecifier::Long]
-            | [TypeSpecifier::Long, TypeSpecifier::Int, TypeSpecifier::Signed]
-            | [TypeSpecifier::Long, TypeSpecifier::Signed, TypeSpecifier::Int]
-            | [TypeSpecifier::Signed, TypeSpecifier::Long, TypeSpecifier::Int] => Self::SignedLong,
+            | [
+                TypeSpecifier::Int | TypeSpecifier::Signed,
+                TypeSpecifier::Long,
+            ]
+            | [
+                TypeSpecifier::Long,
+                TypeSpecifier::Int,
+                TypeSpecifier::Signed,
+            ]
+            | [
+                TypeSpecifier::Long,
+                TypeSpecifier::Signed,
+                TypeSpecifier::Int,
+            ]
+            | [
+                TypeSpecifier::Signed,
+                TypeSpecifier::Long,
+                TypeSpecifier::Int,
+            ] => Self::SignedLong,
             [TypeSpecifier::Unsigned] | [TypeSpecifier::Unsigned, TypeSpecifier::Int] => {
                 Self::UnsignedInt
             }
             [TypeSpecifier::Unsigned, TypeSpecifier::Long]
-            | [TypeSpecifier::Long, TypeSpecifier::Int, TypeSpecifier::Unsigned]
-            | [TypeSpecifier::Unsigned, TypeSpecifier::Long, TypeSpecifier::Int] => {
-                Self::UnsignedLong
-            }
+            | [
+                TypeSpecifier::Long,
+                TypeSpecifier::Int,
+                TypeSpecifier::Unsigned,
+            ]
+            | [
+                TypeSpecifier::Unsigned,
+                TypeSpecifier::Long,
+                TypeSpecifier::Int,
+            ] => Self::UnsignedLong,
 
             [TypeSpecifier::Void] => Self::Void,
             [TypeSpecifier::Struct(struct_data)] => {
@@ -778,7 +801,7 @@ impl CType {
                                     return Err(IRGenerationError {
                                         err: IRGenerationErrorType::TODOAbstractDeclarator,
                                         span: decl.span,
-                                    })
+                                    });
                                 }
                                 StructDeclaration::Field(field) => {
                                     let ctype =
@@ -896,13 +919,13 @@ impl CType {
                     return Err(IRGenerationError {
                         err: IRGenerationErrorType::KRFunctionDefinition,
                         span: modifier.span,
-                    })
+                    });
                 }
                 DerivedDeclarator::Block(_) => {
                     return Err(IRGenerationError {
                         err: IRGenerationErrorType::TODOBlockTypes,
                         span: modifier.span,
-                    })
+                    });
                 }
             }
         }
@@ -1024,7 +1047,7 @@ impl TopLevelBuilder<'_> {
                     return Err(IRGenerationError {
                         err: IRGenerationErrorType::KRFunctionDefinition,
                         span: node.span,
-                    })
+                    });
                 }
                 DerivedDeclarator::Pointer(qualifiers) => {
                     assert_eq!(qualifiers.len(), 0, "Pointer qualifiers not yet supported");
@@ -1040,7 +1063,7 @@ impl TopLevelBuilder<'_> {
                             node.node.clone(),
                         ),
                         span: node.span,
-                    })
+                    });
                 }
             }
         }
@@ -1231,7 +1254,7 @@ impl TopLevelBuilder<'_> {
                 return Err(IRGenerationError {
                     err: IRGenerationErrorType::TODOCaseRange,
                     span: expr.span,
-                })
+                });
             }
         }
         self.parse_statement(&stmt.node.statement)?;
@@ -1471,9 +1494,10 @@ impl TopLevelBuilder<'_> {
             }
 
             (_, InitializerInfo::Single((rhs, rhs_type), span)) => {
-                vec![self
-                    .convert_to((rhs, rhs_type), target_type)
-                    .map_err(|err| IRGenerationError { err, span })?]
+                vec![
+                    self.convert_to((rhs, rhs_type), target_type)
+                        .map_err(|err| IRGenerationError { err, span })?,
+                ]
             }
 
             (
@@ -1767,14 +1791,14 @@ impl TopLevelBuilder<'_> {
                     return Err(IRGenerationError {
                         err: IRGenerationErrorType::UnknownIdentifier,
                         span: ident.span,
-                    })
+                    });
                 }
                 Some((Some(loc), ctype)) => Out::Plain((loc.clone(), ctype.clone())),
                 Some((None, CType::Function(_, _))) => {
                     return Err(IRGenerationError {
                         err: IRGenerationErrorType::FunctionUsedAsVariable,
                         span: ident.span,
-                    })
+                    });
                 }
                 Some((None, _)) => unreachable!(),
             },
@@ -2952,7 +2976,7 @@ fn parse_array_length(decl: &Node<ArrayDeclarator>) -> Result<usize, IRGeneratio
                         return Err(IRGenerationError {
                             err: IRGenerationErrorType::NonIntegerArrayLength,
                             span: decl.span,
-                        })
+                        });
                     }
                     Constant::Integer(int) => integer_constant_to_usize(int),
                     Constant::Character(str) => {
@@ -2966,7 +2990,7 @@ fn parse_array_length(decl: &Node<ArrayDeclarator>) -> Result<usize, IRGeneratio
                     return Err(IRGenerationError {
                         err: IRGenerationErrorType::TODONonConstantArrayLength,
                         span: expr.span,
-                    })
+                    });
                 }
             }
         }
@@ -2978,7 +3002,7 @@ fn parse_array_length(decl: &Node<ArrayDeclarator>) -> Result<usize, IRGeneratio
                         return Err(IRGenerationError {
                             err: IRGenerationErrorType::NonIntegerArrayLength,
                             span: val.span,
-                        })
+                        });
                     }
                     Constant::Integer(int) => integer_constant_to_usize(int),
                     Constant::Character(str) => {
@@ -2992,7 +3016,7 @@ fn parse_array_length(decl: &Node<ArrayDeclarator>) -> Result<usize, IRGeneratio
                     return Err(IRGenerationError {
                         err: IRGenerationErrorType::NonStaticInStaticBlock,
                         span: expr.span,
-                    })
+                    });
                 }
             }
         }
@@ -3001,7 +3025,7 @@ fn parse_array_length(decl: &Node<ArrayDeclarator>) -> Result<usize, IRGeneratio
             return Err(IRGenerationError {
                 err: IRGenerationErrorType::TODOUnknownArrayLength,
                 span: decl.span,
-            })
+            });
         }
     })
 }

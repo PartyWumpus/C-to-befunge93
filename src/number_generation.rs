@@ -1,14 +1,7 @@
 use prime_factorization::Factorization;
-use std::num::NonZeroU64;
 
-// all the logic in here is completely wrong, will be fixed eventually
-
-#[derive(Debug, Clone)]
-struct Factors {
-    offset: i8,
-    direct_factors: Box<[u64]>,
-    offset_factors: Box<[Factors]>,
-}
+const MAX: u64 = 1_114_111;
+const ISIZE_MAX: isize = 1_114_111;
 
 pub fn int_to_befunge_str(num: u64) -> String {
     match num {
@@ -18,16 +11,53 @@ pub fn int_to_befunge_str(num: u64) -> String {
         20 => "45*".to_owned(),
         34 => "98+2*".to_owned(),
         _ => {
-            // FIXME: do better than this solution
-            base_9_befunge(num)
-            //let factors = highest_valid_factors(NonZeroU64::new(num).unwrap());
-            //factors_to_befunge_str(&factors)
+            if num < MAX
+                && let Some(char) = char::from_u32(num as u32)
+            {
+                return format!("\"{char}\"");
+            }
+
+            let mut len = usize::MAX;
+            let mut best = None;
+
+            for i in -9..=9 {
+                let x = with_offset(num, i, sqrt);
+                if let Some(x) = x {
+                    return x;
+                }
+            }
+
+            if let Some(n) = find_nearby_square(num) {
+                return n;
+            }
+
+            for i in -9..=9 {
+                let x = with_offset(num, i, factors);
+                if let Some(x) = x
+                    && x.chars().count() < len
+                {
+                    len = x.chars().count();
+                    best = Some(x);
+                }
+            }
+
+            if best.is_none() {
+                // TODO: investigate some smarter search
+                for i in -1000..=-10 {
+                    let x = with_offset(num, i, factors);
+                    if let Some(x) = x {
+                        return x;
+                    }
+                }
+            }
+
+            best.unwrap_or_else(|| base_9(num))
         }
     }
 }
 
-pub fn base_9_befunge(num: u64) -> String {
-    let mut result = vec![];
+fn base_9(num: u64) -> String {
+    let mut result = String::new();
     let mut x = num;
     loop {
         let m = x % 9;
@@ -44,185 +74,224 @@ pub fn base_9_befunge(num: u64) -> String {
         result.push('*');
         result.push('+');
     }
-    result.into_iter().collect()
+    result
 }
 
-fn factors_to_befunge_str(res: &Factors) -> String {
-    let (mut chars, mut ops) = (vec![], vec![]);
-    factors_to_befunge_str_rec(res, &mut chars, &mut ops);
-    format!(
-        r#""{}"{}"#,
-        chars.iter().collect::<String>(),
-        &ops.iter().collect::<String>()
-    )
-}
-
-fn factors_to_befunge_str_rec(res: &Factors, chars: &mut Vec<char>, ops: &mut Vec<char>) {
-    let mut at_least_one = false;
-    for i in &res.direct_factors {
-        let j = char::from_u32((*i).try_into().unwrap()).unwrap();
-        chars.push(j);
-        if at_least_one {
-            ops.push('*');
-        } else {
-            at_least_one = true;
-        }
+fn factors(num: u64) -> Option<String> {
+    if num < 32 {
+        return None;
     }
 
-    for i in &res.offset_factors {
-        factors_to_befunge_str_rec(i, chars, ops);
-        match i.offset {
-            0 => (),
-            1..=9 => {
-                ops.push(i.offset.to_string().chars().next().unwrap());
-                ops.push('+');
+    let mut factors = Factorization::run(num).factors;
+    if factors.iter().any(|x| *x >= MAX) {
+        return None;
+    }
+
+    let len = factors.len();
+    // TODO: make this faster
+    for _ in 0..len {
+        let mut left = 0;
+        'loopy: while left < factors.len() {
+            left += 1;
+            let mut right = factors.len();
+            while right > left {
+                right -= 1;
+                if factors[left - 1] * factors[right] < MAX
+                    && char::from_u32((factors[left - 1] * factors[right]) as u32).is_some()
+                {
+                    factors[left - 1] *= factors[right];
+                    factors.remove(right);
+                    continue 'loopy;
+                }
             }
-            -9..=-1 => {
-                ops.push((-i.offset).to_string().chars().next().unwrap());
-                ops.push('-');
+        }
+    }
+
+    let mut result = "\"".to_string();
+    let len = factors.len();
+    for factor in factors {
+        if factor == '"'.into() || factor == '\r'.into() || factor == '\n'.into() {
+            return None;
+        }
+        result.push(char::from_u32(factor as u32)?);
+    }
+    result.push('"');
+    for _ in 0..len - 1 {
+        result.push('*');
+    }
+
+    Some(result)
+}
+
+fn with_offset(
+    num: u64,
+    offset: isize,
+    mut func: impl FnMut(u64) -> Option<String>,
+) -> Option<String> {
+    let mut str = func(num.wrapping_add_signed(offset as i64))?;
+    match offset {
+        0 => (),
+        1..=9 => {
+            str.push(offset.to_string().chars().next().unwrap());
+            str.push('-');
+        }
+        10.. => {
+            let offset = offset as u64;
+            if !str.starts_with('"') {
+                return None;
             }
-            _ => unreachable!(),
-        }
-        if at_least_one {
-            ops.push('*');
-        } else {
-            at_least_one = true;
-        }
-    }
-}
-
-fn resolve(x: Factors) -> u64 {
-    let mut val: u64 = 1;
-    for i in x.direct_factors {
-        assert_ne!(i, 10);
-        assert_ne!(i, 13);
-        assert_ne!(i, 34);
-        val *= i;
-    }
-    for i in x.offset_factors {
-        val *= resolve(i);
-    }
-
-    val.wrapping_add_signed(i64::from(x.offset))
-}
-
-impl Factors {
-    fn size(&self) -> usize {
-        self.offset_factors
-            .iter()
-            .map(|x| x.size() + 3) // 3 for *, offset and +/-
-            .sum::<usize>()
-            + self.direct_factors.len() * 2 // 2 for * and factor
-            - 1 // -1 because there's one less * than numbers
-    }
-}
-
-fn highest_valid_factors(n: NonZeroU64) -> Factors {
-    highest_valid_factors_rec(n, 0)
-}
-
-// TODO: CONSIDER:
-//const MAX: u64 = 1_114_111;
-const MAX: u64 = 65_535;
-fn highest_valid_factors_rec(n: NonZeroU64, offset: i8) -> Factors {
-    let n = n.get();
-    if n == 1 {
-        return Factors {
-            offset: 0,
-            direct_factors: [1].into(),
-            offset_factors: [].into(),
-        };
-    }
-    // TODO: consider
-    //let factor_repr = if n < 2_u64.pow(32) {
-    //    Factorization::run(n as u32).factors.iter().map(|x| *x as u64).collect()
-    //} else {
-    //    Factorization::run(n).factors
-    //};
-    let factor_repr = Factorization::run(n).factors;
-    let mut direct_factors = vec![];
-    let mut offset_factors = vec![];
-    let mut in_progress = 1;
-    for factor in &factor_repr {
-        if *factor < MAX / 2 && char::from_u32(u32::try_from(*factor).unwrap()).is_some() {
-            let combined = in_progress * *factor;
-            if combined < MAX && char::from_u32(u32::try_from(combined).unwrap()).is_some() {
-                in_progress = combined;
+            if offset != '"'.into()
+                && offset != '\r'.into()
+                && offset != '\n'.into()
+                && let Some(n) = char::from_u32(offset as u32)
+            {
+                str.insert(1, n);
+                str.push('\\');
+                str.push('-');
             } else {
-                direct_factors.push(in_progress);
-                in_progress = *factor;
+                return None;
             }
-        } else if *factor < MAX && char::from_u32(u32::try_from(*factor).unwrap()).is_some() {
-            direct_factors.push(*factor);
-        } else {
-            // In theory it's safe to subtract one and two always, because 1 and 0 are never factors.
-            // Adding up to 9 is always okay because the largest prime is 59 away from U64::MAX
-            // In reality though this is very, very slow, for not great gains.
+        }
+        -9..=-1 => {
+            str.push((-offset).to_string().chars().next().unwrap());
+            str.push('+');
+        }
+        ..=-10 => {
+            let offset = (-offset) as u64;
+            if !str.starts_with('"') {
+                return None;
+            }
 
-            // Worth investigating if a heuristic could be used here to only try more
-            // things if the current solution is outside a reasonable range or something.
-            let a = highest_valid_factors_rec(NonZeroU64::new(*factor - 1).unwrap(), 1);
-            let b = highest_valid_factors_rec(NonZeroU64::new(*factor + 1).unwrap(), -1);
-            if a.size() < b.size() {
-                offset_factors.push(a);
+            if offset != '"'.into()
+                && offset != '\r'.into()
+                && offset != '\n'.into()
+                && let Some(n) = char::from_u32(offset as u32)
+            {
+                str.insert(1, n);
+                str.push('\\');
+                str.push('+');
             } else {
-                offset_factors.push(b);
+                return None;
             }
         }
     }
-    if in_progress != 1 {
-        direct_factors.push(in_progress);
-    }
-    sanitise_factors(&mut direct_factors, &mut offset_factors);
-    Factors {
-        direct_factors: direct_factors.into(),
-        offset_factors: offset_factors.into(),
-        offset,
-    }
+    Some(str)
 }
 
-fn sanitise_factors(arr: &mut Vec<u64>, bigs: &mut Vec<Factors>) {
-    let mut i = 0;
-    while i < arr.len() {
-        if arr[i] == 10 {
-            arr[i] = 2;
-            arr.push(5);
-        } else if arr[i] == 13 {
-            arr.remove(i);
-            bigs.push(Factors {
-                direct_factors: Box::new([6, 2]),
-                offset_factors: Box::new([]),
-                offset: 1,
-            });
-            continue;
-        } else if arr[i] == 34 {
-            arr[i] = 2;
-            arr.push(17);
-        }
-        i += 1;
+fn sqrt(num: u64) -> Option<String> {
+    let sqrt = num.isqrt();
+    if sqrt * sqrt != num {
+        return None;
     }
+
+    let mut str = int_to_befunge_str(sqrt);
+    str.push(':');
+    str.push('*');
+    Some(str)
+}
+
+fn find_nearby_square(num: u64) -> Option<String> {
+    let isqrt = num.isqrt();
+    let (lower, higher) = (isqrt * isqrt, (isqrt + 1) * (isqrt + 1));
+    if (num - lower) < MAX
+        && let Some(x) = with_offset(num, (lower - num) as isize, sqrt)
+    {
+        return Some(x);
+    }
+
+    if (higher - num) < MAX
+        && let Some(x) = with_offset(num, (higher - num) as isize, sqrt)
+    {
+        return Some(x);
+    }
+
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{Rng, rngs::StdRng};
 
-    fn check(n: u64) {
-        let res = highest_valid_factors(NonZeroU64::new(n).unwrap());
-        assert_eq!(resolve(res), n);
+    fn check_str(str: &str, num: u64) {
+        let mut stack: Vec<i64> = vec![];
+        let mut string_mode = false;
+        for char in str.chars() {
+            if string_mode {
+                assert_ne!(char, '\n');
+                assert_ne!(char, '\r');
+                if char == '"' {
+                    string_mode = false;
+                } else {
+                    stack.push(char as i64);
+                }
+            } else {
+                match char {
+                    '0'..='9' => stack.push((char as u8 - b'0').into()),
+                    '"' => string_mode = true,
+                    '+' => {
+                        let (a, b) = (stack.pop().unwrap_or(0), stack.pop().unwrap_or(0));
+                        stack.push(b + a);
+                    }
+                    '*' => {
+                        let (a, b) = (stack.pop().unwrap_or(0), stack.pop().unwrap_or(0));
+                        stack.push(b * a);
+                    }
+                    '-' => {
+                        let (a, b) = (stack.pop().unwrap_or(0), stack.pop().unwrap_or(0));
+                        stack.push(b - a);
+                    }
+                    ':' => {
+                        let a = stack.pop().unwrap_or(0);
+                        stack.push(a);
+                        stack.push(a);
+                    }
+                    '\\' => {
+                        let (a, b) = (stack.pop().unwrap_or(0), stack.pop().unwrap_or(0));
+                        stack.push(a);
+                        stack.push(b);
+                    }
+                    other => panic!("{other} is not a valid befunge operation {num}"),
+                }
+            }
+        }
+        assert_eq!(stack.len(), 1, "{num}");
+        assert!(stack[0] > 0);
+        assert_eq!(stack[0], num as i64, "{num}, {str}");
+    }
+
+    fn check_all(num: u64) {
+        check_str(&base_9(num), num);
+        if let Some(str) = factors(num) {
+            check_str(&str, num);
+        }
+        if let Some(str) = sqrt(num) {
+            check_str(&str, num);
+        }
+        if let Some(str) = find_nearby_square(num) {
+            check_str(&str, num);
+        }
     }
 
     #[test]
     fn small_values() {
-        for i in 1..100 {
-            check(i);
+        for i in 1..300 {
+            check_all(i);
         }
     }
 
     #[test]
     fn medium_values() {
         for i in 65_500..66_500 {
-            check(i);
+            check_all(i);
+        }
+    }
+
+    #[test]
+    fn squares() {
+        for i in 600..1000 {
+            check_all(i * i);
+            check_all((i * i) - 125);
         }
     }
 
@@ -230,20 +299,45 @@ mod tests {
     fn test_perfect() {
         let other_part = 2u64.pow(30) - 1;
         let num: u64 = 2u64.pow(31) * other_part;
-        check(num);
+        check_all(num);
     }
 
     #[test]
     fn test_large() {
         for i in 2u64.pow(60) - 50..2u64.pow(60) + 50 {
-            check(i);
+            check_all(i);
         }
     }
 
     #[test]
     fn test_max() {
-        for i in u64::MAX - 100..=u64::MAX {
-            check(i);
+        for i in i64::MAX - 100..=i64::MAX {
+            check_all(i as u64);
         }
+    }
+
+    #[test]
+    fn test_random() {
+        use rand::SeedableRng;
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..10_000 {
+            let x: i64 = rng.random();
+            check_all(x.abs() as u64);
+        }
+    }
+
+    #[test]
+    fn final_sanity_check() {
+        use rand::SeedableRng;
+        let mut rng = StdRng::seed_from_u64(42);
+        let mut vals = vec![];
+        for _ in 0..1_000 {
+            let x: i64 = rng.random();
+            vals.push(int_to_befunge_str(x.abs() as u64).chars().count());
+        }
+        println!(
+            "average: {}",
+            vals.iter().sum::<usize>() as f64 / vals.len() as f64
+        );
     }
 }
