@@ -22,6 +22,14 @@ fn apply_to_all_ir_values(ops: &mut IRTopLevel, func: &mut impl FnMut(&mut IRVal
                 func(a);
                 func(out);
             }
+            IROp::Copy(a, out, _) => {
+                func(a);
+                func(out);
+            }
+            IROp::Store(a, out, _) => {
+                func(a);
+                func(out);
+            }
             IROp::One(_, a, out, _) => {
                 func(a);
                 func(out);

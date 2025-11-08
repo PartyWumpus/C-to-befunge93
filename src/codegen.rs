@@ -124,23 +124,24 @@ impl CodeGen {
                     //self.builder.constrain_to_range(&IRValue::BefungeStack, IRType::Signed(64));
                     self.builder.copy(&IRValue::BefungeStack, out);
                 }
+                IROp::Copy(a, out, size) => {
+                    assert_eq!(*size, 1);
+                    self.builder.copy(a, out);
+                }
+                IROp::Store(a, out, size) => {
+                    assert_eq!(*size, 1);
+                    self.builder.store(a, out);
+                }
                 IROp::One(op, a, out, irtype) => {
-                    if matches!(op, UnaryOp::Store) {
-                        self.builder.constrain_to_range(a, *irtype, false);
-                        self.builder.store(&IRValue::BefungeStack, out);
-                    } else {
-                        match op {
-                            UnaryOp::Store => unreachable!(),
-                            UnaryOp::Copy => self.builder.copy(a, &IRValue::BefungeStack),
-                            UnaryOp::Minus => self.builder.unary_minus(a),
-                            UnaryOp::Complement => self.builder.bitwise_complement(a),
-                            UnaryOp::BooleanNegate => self.builder.boolean_negate(a),
-                            UnaryOp::Dereference => self.builder.dereference(a),
-                        }
-                        self.builder
-                            .constrain_to_range(&IRValue::BefungeStack, *irtype, false);
-                        self.builder.copy(&IRValue::BefungeStack, out);
+                    match op {
+                        UnaryOp::Minus => self.builder.unary_minus(a),
+                        UnaryOp::Complement => self.builder.bitwise_complement(a),
+                        UnaryOp::BooleanNegate => self.builder.boolean_negate(a),
+                        UnaryOp::Dereference => self.builder.dereference(a),
                     }
+                    self.builder
+                        .constrain_to_range(&IRValue::BefungeStack, *irtype, false);
+                    self.builder.copy(&IRValue::BefungeStack, out);
                 }
                 IROp::Two(op, a, b, out, irtype) => {
                     match op {

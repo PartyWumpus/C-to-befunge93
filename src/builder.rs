@@ -427,7 +427,6 @@ impl OpBuilder {
                     }
                 }
             }
-            IRType::Sized(..) => (),
             _ => panic!(),
         }
     }

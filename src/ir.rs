@@ -30,7 +30,6 @@ pub enum IRType {
     Signed(u8),
     Unsigned(u8),
     Float,
-    Sized(usize),
 }
 
 #[derive(Error, Debug)]
@@ -54,8 +53,8 @@ impl IRType {
             CType::SignedLong => Self::Signed(64),
 
             CType::Pointer(_) => Self::Signed(64),
-            CType::Array(..) | CType::ImmediateArray(..) => Self::Sized(value.sizeof(scope)),
-            CType::Struct(tag_id) => Self::Sized(scope.get_struct_by_id(*tag_id).size),
+            CType::Array(..) | CType::ImmediateArray(..) => panic!("Arrays cannot be irtypes"),
+            CType::Struct(tag_id) => panic!("Structs cannot be irtypes"),
 
             CType::Function(..) => panic!("functions cannot be used as concrete types"),
             CType::Void => panic!("void cannot be used as a concrete type"),
@@ -93,6 +92,8 @@ pub enum IROp {
     AlwaysBranch(String),
     CondBranch(BranchType, String, IRValue),
     AddressOf(IRValue, IRValue),
+    Copy(IRValue, IRValue, usize),
+    Store(IRValue, IRValue, usize),
     One(UnaryOp, IRValue, IRValue, IRType),
     Two(BinOp, IRValue, IRValue, IRValue, IRType),
     Cast(IRType, (IRValue, IRType), IRValue),
@@ -111,8 +112,6 @@ pub enum BranchType {
 pub enum UnaryOp {
     Minus,
     Complement,
-    Copy,
-    Store,
     BooleanNegate,
     Dereference,
 }

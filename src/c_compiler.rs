@@ -1316,19 +1316,9 @@ impl TopLevelBuilder<'_> {
             let asm_value = Self::parse_asm_symbolic(&output_name.node.name)
                 .map_err(|err| IRGenerationError { err, span: op.span })?;
             if input {
-                self.push(IROp::One(
-                    UnaryOp::Copy,
-                    c_value,
-                    asm_value,
-                    IRType::from_ctype(&ctype, &self.scope),
-                ));
+                self.push(IROp::Copy(c_value, asm_value, ctype.sizeof(&self.scope)));
             } else {
-                self.push(IROp::One(
-                    UnaryOp::Copy,
-                    asm_value,
-                    c_value,
-                    IRType::from_ctype(&ctype, &self.scope),
-                ));
+                self.push(IROp::Copy(asm_value, c_value, ctype.sizeof(&self.scope)));
             }
         }
         Ok(())
@@ -1992,11 +1982,10 @@ impl TopLevelBuilder<'_> {
         let ctype = self.parse_type_name(&expr.node.0)?;
         let size = ctype.sizeof(&self.scope);
         let out = self.generate_pseudo(CType::UnsignedInt.sizeof(&self.scope));
-        self.ops.push(IROp::One(
-            UnaryOp::Copy,
+        self.ops.push(IROp::Copy(
             IRValue::Immediate(size),
             out.clone(),
-            IRType::from_ctype(&CType::SignedInt, &self.scope),
+            CType::SignedInt.sizeof(&self.scope),
         ));
 
         Ok((out, CType::UnsignedInt))
@@ -2021,11 +2010,10 @@ impl TopLevelBuilder<'_> {
         let (_value, ctype) = builder.parse_expression(&expr.node.0)?;
         let size = ctype.sizeof(&self.scope);
         let out = self.generate_pseudo(CType::UnsignedInt.sizeof(&self.scope));
-        self.ops.push(IROp::One(
-            UnaryOp::Copy,
+        self.ops.push(IROp::Copy(
             IRValue::Immediate(size),
             out.clone(),
-            IRType::from_ctype(&CType::SignedInt, &self.scope),
+            CType::SignedInt.sizeof(&self.scope),
         ));
 
         Ok((out, CType::UnsignedInt))
@@ -2042,20 +2030,18 @@ impl TopLevelBuilder<'_> {
         self.push(IROp::CondBranch(BranchType::Zero, else_str, cond));
         let (temp1, temp1_type) = self.parse_expression(&expr.node.then_expression)?;
         let out = self.generate_pseudo(temp1_type.sizeof(&self.scope));
-        self.push(IROp::One(
-            UnaryOp::Copy,
+        self.push(IROp::Copy(
             temp1,
             out.clone(),
-            IRType::from_ctype(&temp1_type, &self.scope),
+            temp1_type.sizeof(&self.scope),
         ));
         self.push(IROp::AlwaysBranch(end_str));
         self.push(else_lbl);
         let (temp2, temp2_type) = self.parse_expression(&expr.node.else_expression)?;
-        self.push(IROp::One(
-            UnaryOp::Copy,
+        self.push(IROp::Copy(
             temp2,
             out.clone(),
-            IRType::from_ctype(&temp2_type, &self.scope),
+            temp2_type.sizeof(&self.scope),
         ));
         self.push(end_lbl);
 
@@ -2112,11 +2098,10 @@ impl TopLevelBuilder<'_> {
                                 .collect(),
                         ));
                         let out = self.generate_pseudo(return_type.sizeof(&self.scope));
-                        self.push(IROp::One(
-                            UnaryOp::Copy,
+                        self.push(IROp::Copy(
                             IRValue::Register(0),
                             out.clone(),
-                            IRType::from_ctype(&return_type, &self.scope),
+                            return_type.sizeof(&self.scope),
                         ));
 
                         Ok((out, return_type))
@@ -2227,12 +2212,9 @@ impl TopLevelBuilder<'_> {
                 // ! is special, always returns Int
                 return Ok(Out::Plain((out, CType::SignedInt)));
             }
-            UnaryOperator::Plus => self.push(IROp::One(
-                UnaryOp::Copy,
-                val,
-                out.clone(),
-                IRType::from_ctype(&val_type, &self.scope),
-            )), // silly
+            UnaryOperator::Plus => {
+                self.push(IROp::Copy(val, out.clone(), val_type.sizeof(&self.scope)))
+            } // silly
 
             // ++x, increment and evaluate to x+1
             UnaryOperator::PreIncrement => {
@@ -2259,11 +2241,10 @@ impl TopLevelBuilder<'_> {
 
             // x++, increment and evaluate to x
             UnaryOperator::PostIncrement => {
-                self.push(IROp::One(
-                    UnaryOp::Copy,
+                self.push(IROp::Copy(
                     val.clone(),
                     out.clone(),
-                    IRType::from_ctype(&val_type, &self.scope),
+                    val_type.sizeof(&self.scope),
                 ));
                 self.push(IROp::Two(
                     BinOp::Add,
@@ -2275,11 +2256,10 @@ impl TopLevelBuilder<'_> {
             }
             // x--
             UnaryOperator::PostDecrement => {
-                self.push(IROp::One(
-                    UnaryOp::Copy,
+                self.push(IROp::Copy(
                     val.clone(),
                     out.clone(),
-                    IRType::from_ctype(&val_type, &self.scope),
+                    val_type.sizeof(&self.scope),
                 ));
                 self.push(IROp::Two(
                     BinOp::Sub,
@@ -2317,20 +2297,18 @@ impl TopLevelBuilder<'_> {
             let (rhs, _rhs_type) = self.attempt_array_decay((rhs, rhs_type));
             self.push(IROp::CondBranch(BranchType::Zero, skip_label_str, rhs));
             let out = self.generate_pseudo(CType::SignedInt.sizeof(&self.scope));
-            self.ops.push(IROp::One(
-                UnaryOp::Copy,
+            self.ops.push(IROp::Copy(
                 IRValue::Immediate(1),
                 out.clone(),
-                IRType::from_ctype(&CType::SignedInt, &self.scope),
+                CType::SignedInt.sizeof(&self.scope),
             ));
 
             self.push(IROp::AlwaysBranch(end_label_str));
             self.push(skip_label);
-            self.ops.push(IROp::One(
-                UnaryOp::Copy,
+            self.ops.push(IROp::Copy(
                 IRValue::Immediate(0),
                 out.clone(),
-                IRType::from_ctype(&CType::SignedInt, &self.scope),
+                CType::SignedInt.sizeof(&self.scope),
             ));
             self.push(end_label);
             return Ok(ExpressionOutput::Plain((out, CType::SignedInt)));
@@ -2350,20 +2328,18 @@ impl TopLevelBuilder<'_> {
             let (rhs, _rhs_type) = self.attempt_array_decay((rhs, rhs_type));
             self.push(IROp::CondBranch(BranchType::NonZero, skip_label_str, rhs));
             let out = self.generate_pseudo(CType::SignedInt.sizeof(&self.scope));
-            self.ops.push(IROp::One(
-                UnaryOp::Copy,
+            self.ops.push(IROp::Copy(
                 IRValue::Immediate(0),
                 out.clone(),
-                IRType::from_ctype(&CType::SignedInt, &self.scope),
+                CType::SignedInt.sizeof(&self.scope),
             ));
 
             self.push(IROp::AlwaysBranch(end_label_str));
             self.push(skip_label);
-            self.ops.push(IROp::One(
-                UnaryOp::Copy,
+            self.ops.push(IROp::Copy(
                 IRValue::Immediate(1),
                 out.clone(),
-                IRType::from_ctype(&CType::SignedInt, &self.scope),
+                CType::SignedInt.sizeof(&self.scope),
             ));
             self.push(end_label);
             return Ok(ExpressionOutput::Plain((out, CType::SignedInt)));
@@ -2717,12 +2693,7 @@ impl TopLevelBuilder<'_> {
                 IRType::from_ctype(&out_type, &self.scope),
             ),
 
-            CBinOp::Assign => IROp::One(
-                UnaryOp::Copy,
-                rhs,
-                out.clone(),
-                IRType::from_ctype(&out_type, &self.scope),
-            ),
+            CBinOp::Assign => IROp::Copy(rhs, out.clone(), out_type.sizeof(&self.scope)),
 
             // dealt with higher up
             CBinOp::LogicalAnd | CBinOp::LogicalOr => unreachable!(),
@@ -2732,19 +2703,17 @@ impl TopLevelBuilder<'_> {
         match assignment_status {
             AssignmentStatus::NoAssignment => (),
             AssignmentStatus::AssigningToPointer(destination) => {
-                self.push(IROp::One(
-                    UnaryOp::Store,
+                self.push(IROp::Store(
                     out.clone(),
                     destination,
-                    IRType::from_ctype(&out_type, &self.scope),
+                    out_type.sizeof(&self.scope),
                 ));
             }
             AssignmentStatus::AssigningToValue(destination) => {
-                self.push(IROp::One(
-                    UnaryOp::Copy,
+                self.push(IROp::Copy(
                     out.clone(),
                     destination,
-                    IRType::from_ctype(&out_type, &self.scope),
+                    out_type.sizeof(&self.scope),
                 ));
             }
             AssignmentStatus::AssigningToSubObject(base, offset) => {
