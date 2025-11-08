@@ -52,6 +52,14 @@ pub enum IRGenerationErrorType {
     InvalidStructType(String),
     #[error("Cannot dereference non-pointers")]
     DereferenceNonPointer,
+    #[error("Cannot index pointers with pointers")]
+    IndexPointerWithPointer,
+    #[error("Cannot index non-pointers")]
+    IndexWithoutPointer,
+    #[error("Cannot add two pointers")]
+    PointerAddition,
+    #[error("Cannot subtract pointer from integer")]
+    PointerSubtraction,
     #[error("Unknown identifier")]
     UnknownIdentifier,
     #[error("Non-integer array length")]
@@ -247,6 +255,14 @@ enum ExpressionOutput {
         subtype: CType,
         offset: usize,
     },
+}
+
+#[derive(Debug)]
+enum AssignmentStatus {
+    NoAssignment,
+    AssigningToValue(IRValue),
+    AssigningToPointer(IRValue),
+    AssigningToSubObject(IRValue, usize),
 }
 
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
@@ -2353,116 +2369,144 @@ impl TopLevelBuilder<'_> {
             return Ok(ExpressionOutput::Plain((out, CType::SignedInt)));
         }
 
-        let mut assigning_to_pointer = false;
-        let ((lhs, lhs_type), (rhs, rhs_type), out_type) = match expr.node.operator.node {
-            CBinOp::AssignPlus
-            | CBinOp::AssignMinus
-            | CBinOp::AssignMultiply
-            | CBinOp::AssignDivide
-            | CBinOp::AssignModulo
-            | CBinOp::AssignShiftLeft
-            | CBinOp::AssignShiftRight
-            | CBinOp::AssignBitwiseAnd
-            | CBinOp::AssignBitwiseXor
-            | CBinOp::AssignBitwiseOr
-            | CBinOp::Assign => {
-                // on assignment, rhs is cast to typeof(lhs)
-                let (lhs, lhs_type) = match self.parse_expression_inner(&expr.node.lhs)? {
-                    ExpressionOutput::Plain((val, ctype)) => (val, ctype),
-                    ExpressionOutput::Dereferenced((val, ctype)) => {
-                        assigning_to_pointer = true;
-                        (val, ctype)
+        let ((lhs, lhs_type), (rhs, rhs_type), out_type, assignment_status) =
+            match expr.node.operator.node {
+                CBinOp::AssignPlus
+                | CBinOp::AssignMinus
+                | CBinOp::AssignMultiply
+                | CBinOp::AssignDivide
+                | CBinOp::AssignModulo
+                | CBinOp::AssignShiftLeft
+                | CBinOp::AssignShiftRight
+                | CBinOp::AssignBitwiseAnd
+                | CBinOp::AssignBitwiseXor
+                | CBinOp::AssignBitwiseOr
+                | CBinOp::Assign => {
+                    // on assignment, rhs is cast to typeof(lhs)
+                    let (lhs, lhs_type, assignment_status) =
+                        match self.parse_expression_inner(&expr.node.lhs)? {
+                            ExpressionOutput::Plain((val, ctype)) => {
+                                let (val, ctype) = self.attempt_array_decay((val, ctype));
+                                (val.clone(), ctype, AssignmentStatus::AssigningToValue(val))
+                            }
+                            ExpressionOutput::Dereferenced((val, ctype)) => {
+                                // NOTE: I think this isn't needed?
+                                let (val, ctype) = self.attempt_array_decay((val, ctype));
+                                (
+                                    val.clone(),
+                                    ctype,
+                                    AssignmentStatus::AssigningToPointer(val),
+                                )
+                            }
+                            ExpressionOutput::SubObject {
+                                base,
+                                subtype,
+                                offset,
+                            } => {
+                                let out = self.generate_pseudo(subtype.sizeof(&self.scope));
+                                self.push(IROp::CopyFromOffset(base.clone(), out.clone(), offset));
+                                (
+                                    out,
+                                    subtype,
+                                    AssignmentStatus::AssigningToSubObject(base, offset),
+                                )
+                            }
+                        };
+                    let (rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
+                    let (mut rhs, rhs_type) = self.attempt_array_decay((rhs, rhs_type));
+                    if !matches!(expr.node.operator.node, CBinOp::AssignMinus)
+                        && !rhs_type.is_pointer()
+                    {
+                        rhs = self
+                            .convert_to((rhs, rhs_type.clone()), &lhs_type)
+                            .map_err(|err| IRGenerationError {
+                                err,
+                                span: expr.span,
+                            })?;
                     }
-                    ExpressionOutput::SubObject {
-                        base,
-                        subtype,
-                        offset,
-                    } => {
-                        todo!("assigning to members of structs")
-                    }
-                };
-                let (lhs, lhs_type) = self.attempt_array_decay((lhs, lhs_type));
-                let (rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
-                let (mut rhs, rhs_type) = self.attempt_array_decay((rhs, rhs_type));
-                if !matches!(expr.node.operator.node, CBinOp::AssignMinus) && !rhs_type.is_pointer()
-                {
-                    rhs = self
-                        .convert_to((rhs, rhs_type.clone()), &lhs_type)
-                        .map_err(|err| IRGenerationError {
-                            err,
-                            span: expr.span,
-                        })?;
+                    (
+                        (lhs, lhs_type.clone()),
+                        (rhs, rhs_type),
+                        lhs_type,
+                        assignment_status,
+                    )
                 }
-                ((lhs, lhs_type.clone()), (rhs, rhs_type), lhs_type)
-            }
 
-            CBinOp::Less
-            | CBinOp::Index
-            | CBinOp::Greater
-            | CBinOp::LessOrEqual
-            | CBinOp::GreaterOrEqual
-            | CBinOp::Equals
-            | CBinOp::NotEquals
-            | CBinOp::Plus
-            | CBinOp::Minus
-            | CBinOp::Multiply
-            | CBinOp::Divide
-            | CBinOp::Modulo
-            | CBinOp::ShiftLeft
-            | CBinOp::ShiftRight
-            | CBinOp::BitwiseAnd
-            | CBinOp::BitwiseXor
-            | CBinOp::BitwiseOr => {
-                let (lhs, lhs_type) = self.parse_expression(&expr.node.lhs)?;
-                let (mut lhs, lhs_type) = self.attempt_array_decay((lhs, lhs_type));
-                let (rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
-                let (mut rhs, rhs_type) = self.attempt_array_decay((rhs, rhs_type));
+                CBinOp::Less
+                | CBinOp::Index
+                | CBinOp::Greater
+                | CBinOp::LessOrEqual
+                | CBinOp::GreaterOrEqual
+                | CBinOp::Equals
+                | CBinOp::NotEquals
+                | CBinOp::Plus
+                | CBinOp::Minus
+                | CBinOp::Multiply
+                | CBinOp::Divide
+                | CBinOp::Modulo
+                | CBinOp::ShiftLeft
+                | CBinOp::ShiftRight
+                | CBinOp::BitwiseAnd
+                | CBinOp::BitwiseXor
+                | CBinOp::BitwiseOr => {
+                    let (lhs, lhs_type) = self.parse_expression(&expr.node.lhs)?;
+                    let (mut lhs, lhs_type) = self.attempt_array_decay((lhs, lhs_type));
+                    let (rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
+                    let (mut rhs, rhs_type) = self.attempt_array_decay((rhs, rhs_type));
 
-                let common_type =
-                    CType::get_common(&lhs_type, &rhs_type).map_err(|err| IRGenerationError {
-                        err: err.into(),
-                        span: expr.span,
+                    let common_type = CType::get_common(&lhs_type, &rhs_type).map_err(|err| {
+                        IRGenerationError {
+                            err: err.into(),
+                            span: expr.span,
+                        }
                     })?;
 
-                if !matches!(
-                    expr.node.operator.node,
-                    CBinOp::Plus | CBinOp::AssignPlus | CBinOp::Minus | CBinOp::AssignMinus
-                ) && !lhs_type.is_pointer()
-                {
-                    lhs = self
-                        .convert_to((lhs, lhs_type.clone()), &common_type)
-                        .map_err(|err| IRGenerationError {
-                            err,
-                            span: expr.span,
-                        })?;
+                    if !matches!(
+                        expr.node.operator.node,
+                        CBinOp::Plus | CBinOp::AssignPlus | CBinOp::Minus | CBinOp::AssignMinus
+                    ) && !lhs_type.is_pointer()
+                    {
+                        lhs = self
+                            .convert_to((lhs, lhs_type.clone()), &common_type)
+                            .map_err(|err| IRGenerationError {
+                                err,
+                                span: expr.span,
+                            })?;
+                    }
+                    if !matches!(
+                        expr.node.operator.node,
+                        CBinOp::Plus | CBinOp::AssignPlus | CBinOp::Minus | CBinOp::AssignMinus
+                    ) && !rhs_type.is_pointer()
+                    {
+                        rhs = self
+                            .convert_to((rhs, rhs_type.clone()), &common_type)
+                            .map_err(|err| IRGenerationError {
+                                err,
+                                span: expr.span,
+                            })?;
+                    }
+                    (
+                        (lhs, lhs_type),
+                        (rhs, rhs_type),
+                        common_type,
+                        AssignmentStatus::NoAssignment,
+                    )
                 }
-                if !matches!(
-                    expr.node.operator.node,
-                    CBinOp::Plus | CBinOp::AssignPlus | CBinOp::Minus | CBinOp::AssignMinus
-                ) && !rhs_type.is_pointer()
-                {
-                    rhs = self
-                        .convert_to((rhs, rhs_type.clone()), &common_type)
-                        .map_err(|err| IRGenerationError {
-                            err,
-                            span: expr.span,
-                        })?;
-                }
-                ((lhs, lhs_type), (rhs, rhs_type), common_type)
-            }
 
-            // dealt with higher up
-            CBinOp::LogicalAnd | CBinOp::LogicalOr => unreachable!(),
-        };
+                // dealt with higher up
+                CBinOp::LogicalAnd | CBinOp::LogicalOr => unreachable!(),
+            };
 
         let out = self.generate_pseudo(out_type.sizeof(&self.scope));
 
-        let lhs2 = lhs.clone();
         let op = match expr.node.operator.node {
             // FIXME: this codegen is wrong because it still generates the casts beforehand
             CBinOp::Plus | CBinOp::AssignPlus => match (lhs_type, rhs_type) {
                 (CType::Pointer(..), CType::Pointer(..)) => {
-                    panic!("cannot add two pointers");
+                    return Err(IRGenerationError {
+                        err: IRGenerationErrorType::PointerAddition,
+                        span: expr.span,
+                    });
                 }
                 (CType::Pointer(inner), _) => {
                     IROp::AddPtr(lhs, rhs, out.clone(), inner.sizeof(&self.scope))
@@ -2481,7 +2525,10 @@ impl TopLevelBuilder<'_> {
             },
             CBinOp::Index => match (lhs_type, rhs_type) {
                 (CType::Pointer(..) | CType::Array(..), CType::Pointer(..) | CType::Array(..)) => {
-                    panic!("cannot index pointer with pointer");
+                    return Err(IRGenerationError {
+                        err: IRGenerationErrorType::IndexPointerWithPointer,
+                        span: expr.span,
+                    });
                 }
                 (CType::Pointer(inner) | CType::Array(inner, _), _) => {
                     self.push(IROp::AddPtr(
@@ -2513,7 +2560,12 @@ impl TopLevelBuilder<'_> {
                         _ => Ok(ExpressionOutput::Dereferenced((out, *inner))),
                     };
                 }
-                _ => panic!("lhs or rhs of index must be a pointer or similar"),
+                _ => {
+                    return Err(IRGenerationError {
+                        err: IRGenerationErrorType::IndexWithoutPointer,
+                        span: expr.span,
+                    });
+                }
             },
             // FIXME: this codegen is wrong because it still generates the casts beforehand
             CBinOp::Minus | CBinOp::AssignMinus => match (lhs_type, rhs_type) {
@@ -2549,7 +2601,10 @@ impl TopLevelBuilder<'_> {
                     IROp::AddPtr(lhs, negated, out.clone(), inner.sizeof(&self.scope))
                 }
                 (_, CType::Pointer(..) | CType::Array(..)) => {
-                    panic!("cannot subtract pointer from integer");
+                    return Err(IRGenerationError {
+                        err: IRGenerationErrorType::PointerSubtraction,
+                        span: expr.span,
+                    });
                 }
 
                 _ => IROp::Two(
@@ -2674,34 +2729,26 @@ impl TopLevelBuilder<'_> {
         };
         self.push(op);
 
-        if matches!(
-            expr.node.operator.node,
-            CBinOp::Assign
-                | CBinOp::AssignPlus
-                | CBinOp::AssignMinus
-                | CBinOp::AssignMultiply
-                | CBinOp::AssignDivide
-                | CBinOp::AssignModulo
-                | CBinOp::AssignShiftLeft
-                | CBinOp::AssignShiftRight
-                | CBinOp::AssignBitwiseAnd
-                | CBinOp::AssignBitwiseXor
-                | CBinOp::AssignBitwiseOr
-        ) {
-            if assigning_to_pointer {
+        match assignment_status {
+            AssignmentStatus::NoAssignment => (),
+            AssignmentStatus::AssigningToPointer(destination) => {
                 self.push(IROp::One(
                     UnaryOp::Store,
                     out.clone(),
-                    lhs2,
+                    destination,
                     IRType::from_ctype(&out_type, &self.scope),
                 ));
-            } else {
+            }
+            AssignmentStatus::AssigningToValue(destination) => {
                 self.push(IROp::One(
                     UnaryOp::Copy,
                     out.clone(),
-                    lhs2,
+                    destination,
                     IRType::from_ctype(&out_type, &self.scope),
                 ));
+            }
+            AssignmentStatus::AssigningToSubObject(base, offset) => {
+                self.push(IROp::CopyToOffset(out.clone(), base, offset));
             }
         }
         Ok(ExpressionOutput::Plain((out, out_type)))
