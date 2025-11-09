@@ -111,6 +111,10 @@ pub enum IRGenerationErrorType {
     TODODesignatedInit,
     #[error("Abstract declarators are not yet supported")]
     TODOAbstractDeclarator,
+    #[error("Non-trivial initializers are not yet supported")]
+    TODOComplexInitializers,
+    #[error("Scalar initializers are not yet supported")]
+    TODOScalarInitializers,
 
     // switch case errors
     #[error("Breaks can only appear inside loops or switch case statements")]
@@ -135,6 +139,8 @@ pub enum IRGenerationErrorType {
     // TODO: store the span of the location of the first declaration!
     #[error("Type {0:?} does not match earlier defined {1:?}")]
     NonMatchingDeclarations(CType, CType),
+    #[error("Type {0:?} is not compatible with {1:?}")]
+    IncompatibleTypes(CType, CType),
 }
 
 #[derive(Error, Debug)]
@@ -302,7 +308,7 @@ impl CType {
         matches!(self, Self::Pointer(..) | Self::Array(..))
     }
 
-    pub fn zero_init(&self) -> Vec<IRValue> {
+    pub fn zero_init(&self) -> Vec<(IRValue, usize)> {
         match self {
             Self::Pointer(..)
             | Self::Char
@@ -312,7 +318,7 @@ impl CType {
             | Self::UnsignedChar
             | Self::UnsignedInt
             | Self::UnsignedLong => {
-                vec![IRValue::Immediate(0)]
+                vec![(IRValue::Immediate(0), 1)]
             }
             Self::Array(inner_type, length) | Self::ImmediateArray(inner_type, length) => {
                 let mut out = vec![];
@@ -1484,10 +1490,23 @@ impl TopLevelBuilder<'_> {
         &mut self,
         init_info: InitializerInfo,
         target_type: &CType,
-    ) -> Result<Vec<IRValue>, IRGenerationError> {
+    ) -> Result<Vec<(IRValue, usize)>, IRGenerationError> {
         Ok(match (target_type, init_info) {
-            (CType::Struct(..), InitializerInfo::Single((_rhs, _rhs_type), _span)) => {
-                todo!("no struct copying by assignment yet");
+            (CType::Struct(..), InitializerInfo::Single((_rhs, rhs_type), span)) => {
+                if *target_type != rhs_type {
+                    return Err(IRGenerationError {
+                        err: IRGenerationErrorType::IncompatibleTypes(
+                            target_type.clone(),
+                            rhs_type,
+                        ),
+                        span,
+                    });
+                }
+
+                return Err(IRGenerationError {
+                    err: IRGenerationErrorType::TODOComplexInitializers,
+                    span,
+                });
             }
             (
                 CType::Array(_inner_type, _size) | CType::ImmediateArray(_inner_type, _size),
@@ -1500,10 +1519,11 @@ impl TopLevelBuilder<'_> {
             }
 
             (_, InitializerInfo::Single((rhs, rhs_type), span)) => {
-                vec![
+                vec![(
                     self.convert_to((rhs, rhs_type), target_type)
                         .map_err(|err| IRGenerationError { err, span })?,
-                ]
+                    target_type.sizeof(&self.scope),
+                )]
             }
 
             (
@@ -1522,7 +1542,7 @@ impl TopLevelBuilder<'_> {
                         },
                     });
                 }
-                let mut out: Vec<IRValue> = vec![];
+                let mut out = vec![];
                 for init_info in init_list {
                     let x = self.flatten_and_type_check_initializer_info(init_info, inner_type)?;
                     out.extend(x);
@@ -1546,7 +1566,7 @@ impl TopLevelBuilder<'_> {
                         },
                     });
                 }
-                let mut out: Vec<IRValue> = vec![];
+                let mut out = vec![];
                 let mut struct_fields = struct_data.fields.iter();
                 for (init_info, (_field_name, (ctype, offset))) in
                     init_list.iter().zip(&mut struct_fields)
@@ -1560,7 +1580,12 @@ impl TopLevelBuilder<'_> {
                 }
                 out
             }
-            a => panic!("{a:?} (TODO: better handle invalid init)"),
+            (_, InitializerInfo::Compound(_init_list, span)) => {
+                return Err(IRGenerationError {
+                    err: IRGenerationErrorType::TODOScalarInitializers,
+                    span,
+                });
+            }
         })
     }
 
@@ -1685,11 +1710,12 @@ impl TopLevelBuilder<'_> {
                     let init_info = builder.parse_initializer(init)?;
                     builder.flatten_and_type_check_initializer_info(init_info, &ctype)?
                 } else {
-                    vec![IRValue::Immediate(0)]
+                    vec![(IRValue::Immediate(0), 1)]
                 };
 
                 for (i, init) in inits.into_iter().enumerate() {
-                    builder.push(IROp::CopyToOffset(init, loc.clone(), i));
+                    assert!(init.1 == 1);
+                    builder.push(IROp::CopyToOffset(init.0, loc.clone(), i));
                 }
 
                 // FIXME: bad bad bad, just have a seperate global counter
@@ -1708,13 +1734,14 @@ impl TopLevelBuilder<'_> {
                     let init_info = self.parse_initializer(init)?;
                     self.flatten_and_type_check_initializer_info(init_info, &ctype)?
                 } else if self.is_const {
-                    vec![IRValue::Immediate(0)]
+                    vec![(IRValue::Immediate(0), 1)]
                 } else {
                     return Ok(());
                 };
 
                 for (i, init) in inits.into_iter().enumerate() {
-                    self.push(IROp::CopyToOffset(init, loc.clone(), i));
+                    assert!(init.1 == 1);
+                    self.push(IROp::CopyToOffset(init.0, loc.clone(), i));
                 }
             }
         }

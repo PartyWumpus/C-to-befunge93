@@ -20,33 +20,36 @@ pub fn int_to_befunge_str(num: u64) -> String {
             let mut len = usize::MAX;
             let mut best = None;
 
-            for i in -9..=9 {
-                let x = with_offset(num, i, sqrt);
-                if let Some(x) = x {
-                    return x;
-                }
-            }
-
-            if let Some(n) = find_nearby_square(num) {
-                return n;
-            }
-
-            for i in -9..=9 {
-                let x = with_offset(num, i, factors);
-                if let Some(x) = x
-                    && x.chars().count() < len
-                {
-                    len = x.chars().count();
-                    best = Some(x);
-                }
-            }
-
-            if best.is_none() {
-                // TODO: investigate some smarter search
-                for i in -1000..=-10 {
-                    let x = with_offset(num, i, factors);
+            // TODO: enable with flag
+            if false {
+                for i in -9..=9 {
+                    let x = with_offset(num, i, sqrt);
                     if let Some(x) = x {
                         return x;
+                    }
+                }
+
+                if let Some(n) = find_nearby_square(num) {
+                    return n;
+                }
+
+                for i in -9..=9 {
+                    let x = with_offset(num, i, factors);
+                    if let Some(x) = x
+                        && x.chars().count() < len
+                    {
+                        len = x.chars().count();
+                        best = Some(x);
+                    }
+                }
+
+                if best.is_none() {
+                    // TODO: investigate some smarter search
+                    for i in -1000..=-10 {
+                        let x = with_offset(num, i, factors);
+                        if let Some(x) = x {
+                            return x;
+                        }
                     }
                 }
             }

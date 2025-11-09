@@ -103,14 +103,9 @@ impl CodeGen {
                 IROp::Return(val) => {
                     self.builder.return_(val);
                 }
-                IROp::Cast(irtype, (val, original_irtype), output) => {
-                    assert!(matches!(
-                        original_irtype,
-                        IRType::Signed(..) | IRType::Unsigned(..)
-                    ));
-                    assert!(matches!(irtype, IRType::Signed(..) | IRType::Unsigned(..)));
+                IROp::Cast(irtype, (val, _original_irtype), output) => {
                     self.builder.constrain_to_range(val, *irtype, false);
-                    self.builder.copy(&IRValue::BefungeStack, output);
+                    self.builder.copy(&IRValue::BefungeStack, output, 1);
                 }
                 IROp::Label(label) => self.builder.label(label.to_owned()),
                 IROp::InlineBefunge(lines) => self.builder.insert_inline_befunge(lines),
@@ -121,12 +116,10 @@ impl CodeGen {
                 IROp::AlwaysBranch(label) => self.builder.unconditional_branch(label.to_owned()),
                 IROp::AddressOf(a, out) => {
                     self.builder.address_of(a);
-                    //self.builder.constrain_to_range(&IRValue::BefungeStack, IRType::Signed(64));
-                    self.builder.copy(&IRValue::BefungeStack, out);
+                    self.builder.copy(&IRValue::BefungeStack, out, 1);
                 }
                 IROp::Copy(a, out, size) => {
-                    assert_eq!(*size, 1);
-                    self.builder.copy(a, out);
+                    self.builder.copy(a, out, *size);
                 }
                 IROp::Store(a, out, size) => {
                     assert_eq!(*size, 1);
@@ -141,7 +134,7 @@ impl CodeGen {
                     }
                     self.builder
                         .constrain_to_range(&IRValue::BefungeStack, *irtype, false);
-                    self.builder.copy(&IRValue::BefungeStack, out);
+                    self.builder.copy(&IRValue::BefungeStack, out, 1);
                 }
                 IROp::Two(op, a, b, out, irtype) => {
                     match op {
@@ -170,7 +163,7 @@ impl CodeGen {
                     }
                     self.builder
                         .constrain_to_range(&IRValue::BefungeStack, *irtype, false);
-                    self.builder.copy(&IRValue::BefungeStack, out);
+                    self.builder.copy(&IRValue::BefungeStack, out, 1);
                 }
                 IROp::CopyToOffset(source, location, offset) => {
                     self.builder.copy_with_offset(source, location, *offset);
@@ -180,7 +173,7 @@ impl CodeGen {
                 }
                 IROp::AddPtr(ptr, b, out, size) => {
                     self.builder.add_ptr(ptr, b, *size);
-                    self.builder.copy(&IRValue::BefungeStack, out);
+                    self.builder.copy(&IRValue::BefungeStack, out, 1);
                 }
             }
             self.builder.add_space();

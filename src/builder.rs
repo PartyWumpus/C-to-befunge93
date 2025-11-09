@@ -603,9 +603,39 @@ impl OpBuilder {
         }
     }
 
-    pub fn copy(&mut self, a: &IRValue, b: &IRValue) {
-        self.load_val(a);
-        self.put_val(b);
+    pub fn copy(&mut self, a: &IRValue, b: &IRValue, size: usize) {
+        assert_ne!(size, 0);
+        if size == 1 {
+            self.load_val(a);
+            self.put_val(b);
+        } else {
+            for offset in 0..size {
+                match a {
+                    IRValue::Stack(position) => self.load_stack_val(*position + offset),
+                    IRValue::Data(position) => self.load_data_val(*position + offset),
+                    IRValue::Register(..) => panic!("Cannot copy with offset into a register"),
+                    IRValue::BefungeStack => {
+                        panic!("Cannot copy with offset into the befunge stack")
+                    }
+                    IRValue::Immediate(_) => panic!("Immediate value as output location"),
+                    IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
+                        panic!("Psuedo registers should be removed by befunge generation time")
+                    }
+                }
+                match b {
+                    IRValue::Stack(position) => self.set_stack_val(*position + offset),
+                    IRValue::Data(position) => self.set_data_val(*position + offset),
+                    IRValue::Register(..) => panic!("Cannot copy with offset into a register"),
+                    IRValue::BefungeStack => {
+                        panic!("Cannot copy with offset into the befunge stack")
+                    }
+                    IRValue::Immediate(_) => panic!("Immediate value as output location"),
+                    IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
+                        panic!("Psuedo registers should be removed by befunge generation time")
+                    }
+                }
+            }
+        }
     }
 
     pub fn copy_with_offset(&mut self, a: &IRValue, b: &IRValue, offset: usize) {

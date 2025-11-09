@@ -92,6 +92,7 @@ pub enum IROp {
     AlwaysBranch(String),
     CondBranch(BranchType, String, IRValue),
     AddressOf(IRValue, IRValue),
+    // do i need a source and destination offset?
     Copy(IRValue, IRValue, usize),
     Store(IRValue, IRValue, usize),
     One(UnaryOp, IRValue, IRValue, IRType),
