@@ -275,6 +275,6 @@ impl CodeGen {
             self.builder.add_space();
         }
 
-        self.builder.finalize_function()
+        self.builder.finalize_function(&func.name)
     }
 }

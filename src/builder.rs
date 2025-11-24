@@ -465,9 +465,17 @@ impl OpBuilder {
 
     //// Finalize
 
-    pub fn finalize_function(&self) -> Vec<String> {
+    pub fn finalize_function(&self, name: &str) -> Vec<String> {
         let row_length = self.ops.len();
         let mut rows: Vec<Vec<char>> = vec![];
+        let mut title_row = vec![' '; 8];
+        title_row.append(&mut vec!['@'; 4]);
+        title_row.append(&mut vec![' '; 2]);
+        title_row.append(&mut name.to_string().chars().collect());
+        if self.is_function {
+            title_row.append(&mut vec!['(', ')']);
+        }
+        rows.push(title_row);
 
         if self.is_function {
             let mut entry_row = vec![' ', '>', '1', '-', ':', 'v'];
@@ -639,6 +647,7 @@ impl OpBuilder {
     }
 
     pub fn copy_with_offset(&mut self, a: &IRValue, b: &IRValue, offset: usize) {
+        // TODO: optimize here when loading an immediate value
         self.load_val(a);
         match b {
             IRValue::Stack(position) => self.set_stack_val(*position + offset),

@@ -48,7 +48,9 @@ There's also a static memory space used for globals.
 
 ### Current Limitations
 None of these are full architectural failures so will eventually be resolved.
-- No floats/doubles, chars, unions or enums
+- No unions or enums
+- No typedef
+- Doubles can only be created and pointed to
 - Overflow is incorrectly handled for ints and unsigned longs (correct for all chars and signed longs though)
 - No string literals
 - No var args
