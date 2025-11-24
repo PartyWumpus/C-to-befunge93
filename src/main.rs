@@ -80,20 +80,20 @@ fn main() {
 
     // TODO: add caching so the entire lib isn't compiled every time
     for entry in BEFUNGE_LIBC.files() {
-        if let Some(ext) = entry.path().extension() {
-            if ext == "c" {
-                files.push(
-                    match FileBuilder::parse_c(entry.contents(), entry.path().to_str().unwrap()) {
-                        Err(err) => {
-                            if !ARGS.silent {
-                                err.print();
-                            }
-                            process::exit(1);
+        if let Some(ext) = entry.path().extension()
+            && ext == "c"
+        {
+            files.push(
+                match FileBuilder::parse_c(entry.contents(), entry.path().to_str().unwrap()) {
+                    Err(err) => {
+                        if !ARGS.silent {
+                            err.print();
                         }
-                        Ok(x) => x,
-                    },
-                );
-            }
+                        process::exit(1);
+                    }
+                    Ok(x) => x,
+                },
+            );
         }
     }
 

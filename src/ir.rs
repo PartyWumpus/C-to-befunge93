@@ -25,11 +25,21 @@ pub enum IRValue {
     BefungeStack,
 }
 
+impl IRValue {
+    pub const fn int(int: usize) -> Self {
+        Self::Immediate(int)
+    }
+
+    pub const fn float(float: f64) -> Self {
+        Self::Immediate(float.to_bits() as usize)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub enum IRType {
     Signed(u8),
     Unsigned(u8),
-    Float,
+    Double,
 }
 
 #[derive(Error, Debug)]
@@ -52,6 +62,8 @@ impl IRType {
             CType::UnsignedLong => Self::Unsigned(64),
             CType::SignedLong => Self::Signed(64),
 
+            CType::Double => Self::Double,
+
             CType::Pointer(_) => Self::Signed(64),
             CType::Array(..) | CType::ImmediateArray(..) => panic!("Arrays cannot be irtypes"),
             CType::Struct(tag_id) => panic!("Structs cannot be irtypes"),
@@ -72,7 +84,8 @@ impl CType {
             | Self::SignedLong
             | Self::UnsignedChar
             | Self::UnsignedInt
-            | Self::UnsignedLong => 1,
+            | Self::UnsignedLong
+            | Self::Double => 1,
             Self::Array(inner_type, size) | Self::ImmediateArray(inner_type, size) => {
                 inner_type.sizeof(scope) * size
             }

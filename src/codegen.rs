@@ -125,46 +125,142 @@ impl CodeGen {
                     assert_eq!(*size, 1);
                     self.builder.store(a, out);
                 }
-                IROp::One(op, a, out, irtype) => {
-                    match op {
-                        UnaryOp::Minus => self.builder.unary_minus(a),
-                        UnaryOp::Complement => self.builder.bitwise_complement(a),
-                        UnaryOp::BooleanNegate => self.builder.boolean_negate(a),
-                        UnaryOp::Dereference => self.builder.dereference(a),
-                    }
-                    self.builder
-                        .constrain_to_range(&IRValue::BefungeStack, *irtype, false);
-                    self.builder.copy(&IRValue::BefungeStack, out, 1);
-                }
-                IROp::Two(op, a, b, out, irtype) => {
-                    match op {
-                        BinOp::Add => self.builder.add(a, b),
-                        BinOp::Sub => self.builder.sub(a, b),
-                        BinOp::Mult => self.builder.multiply(a, b),
-                        BinOp::Div => self.builder.divide(a, b),
-                        BinOp::Mod => self.builder.modulo(a, b),
-                        BinOp::Equal => self.builder.is_equal(a, b),
-                        BinOp::NotEqual => self.builder.is_not_equal(a, b),
-                        BinOp::LessThan => self.builder.is_less_than(a, b),
-                        BinOp::LessOrEqual => self.builder.is_less_or_equal(a, b),
-                        BinOp::GreaterThan => self.builder.is_greater_than(a, b),
-                        BinOp::GreaterOrEqual => self.builder.is_greater_or_equal(a, b),
-
-                        BinOp::BitwiseAnd => self.builder.bit_and(a, b),
-                        BinOp::BitwiseOr => self.builder.bit_or(a, b),
-                        BinOp::BitwiseXor => self.builder.bit_xor(a, b),
-
-                        BinOp::ShiftLeft => {
-                            self.builder.bitshift_left(a, b);
+                IROp::One(op, a, out, irtype) => match irtype {
+                    IRType::Signed(..) | IRType::Unsigned(..) => {
+                        match op {
+                            UnaryOp::Minus => self.builder.unary_minus(a),
+                            UnaryOp::Complement => self.builder.bitwise_complement(a),
+                            UnaryOp::BooleanNegate => self.builder.boolean_negate(a),
+                            UnaryOp::Dereference => self.builder.dereference(a),
                         }
-                        BinOp::ShiftRight => {
-                            self.builder.bitshift_right(a, b);
-                        }
+                        self.builder
+                            .constrain_to_range(&IRValue::BefungeStack, *irtype, false);
+                        self.builder.copy(&IRValue::BefungeStack, out, 1);
                     }
-                    self.builder
-                        .constrain_to_range(&IRValue::BefungeStack, *irtype, false);
-                    self.builder.copy(&IRValue::BefungeStack, out, 1);
-                }
+                    IRType::Double => {
+                        todo!("floats");
+                        match op {
+                            UnaryOp::Minus => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_unary_minus"],
+                                &[(a.clone(), 1)],
+                            ),
+                            UnaryOp::Complement => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_bitwise_complement"],
+                                &[(a.clone(), 1)],
+                            ),
+                            UnaryOp::BooleanNegate => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_boolean_negate"],
+                                &[(a.clone(), 1)],
+                            ),
+                            UnaryOp::Dereference => panic!("cannot dereference floats"),
+                        }
+                        self.builder.copy(&IRValue::BefungeStack, out, 1);
+                    }
+                },
+                IROp::Two(op, a, b, out, irtype) => match irtype {
+                    IRType::Signed(..) | IRType::Unsigned(..) => {
+                        match op {
+                            BinOp::Add => self.builder.add(a, b),
+                            BinOp::Sub => self.builder.sub(a, b),
+                            BinOp::Mult => self.builder.multiply(a, b),
+                            BinOp::Div => self.builder.divide(a, b),
+                            BinOp::Mod => self.builder.modulo(a, b),
+                            BinOp::Equal => self.builder.is_equal(a, b),
+                            BinOp::NotEqual => self.builder.is_not_equal(a, b),
+                            BinOp::LessThan => self.builder.is_less_than(a, b),
+                            BinOp::LessOrEqual => self.builder.is_less_or_equal(a, b),
+                            BinOp::GreaterThan => self.builder.is_greater_than(a, b),
+                            BinOp::GreaterOrEqual => self.builder.is_greater_or_equal(a, b),
+
+                            BinOp::BitwiseAnd => self.builder.bit_and(a, b),
+                            BinOp::BitwiseOr => self.builder.bit_or(a, b),
+                            BinOp::BitwiseXor => self.builder.bit_xor(a, b),
+
+                            BinOp::ShiftLeft => {
+                                self.builder.bitshift_left(a, b);
+                            }
+                            BinOp::ShiftRight => {
+                                self.builder.bitshift_right(a, b);
+                            }
+                        }
+                        self.builder
+                            .constrain_to_range(&IRValue::BefungeStack, *irtype, false);
+                        self.builder.copy(&IRValue::BefungeStack, out, 1);
+                    }
+                    IRType::Double => {
+                        todo!("floats");
+                        assert!(!func.is_initializer, "Floats can't yet be used in init");
+                        match op {
+                            BinOp::Add => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_add"],
+                                &[(a.clone(), 1), (b.clone(), 1)],
+                            ),
+                            BinOp::Sub => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_sub"],
+                                &[(a.clone(), 1), (b.clone(), 1)],
+                            ),
+                            BinOp::Mult => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_multiply"],
+                                &[(a.clone(), 1), (b.clone(), 1)],
+                            ),
+                            BinOp::Div => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_divide"],
+                                &[(a.clone(), 1), (b.clone(), 1)],
+                            ),
+                            BinOp::Mod => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_modulo"],
+                                &[(a.clone(), 1), (b.clone(), 1)],
+                            ),
+                            BinOp::Equal => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_is_equal"],
+                                &[(a.clone(), 1), (b.clone(), 1)],
+                            ),
+                            BinOp::NotEqual => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_is_not_equal"],
+                                &[(a.clone(), 1), (b.clone(), 1)],
+                            ),
+                            BinOp::LessThan => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_is_less_than"],
+                                &[(a.clone(), 1), (b.clone(), 1)],
+                            ),
+                            BinOp::LessOrEqual => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_is_less_or_equal"],
+                                &[(a.clone(), 1), (b.clone(), 1)],
+                            ),
+                            BinOp::GreaterThan => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_is_greater_than"],
+                                &[(a.clone(), 1), (b.clone(), 1)],
+                            ),
+                            BinOp::GreaterOrEqual => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_is_greater_or_equal"],
+                                &[(a.clone(), 1), (b.clone(), 1)],
+                            ),
+
+                            BinOp::BitwiseAnd => panic!("cannot bit_and floats"),
+                            BinOp::BitwiseOr => panic!("cannot bit_or floats"),
+                            BinOp::BitwiseXor => panic!("cannot bit_xor floats"),
+
+                            BinOp::ShiftLeft => panic!("cannot bitshift_left floats"),
+                            BinOp::ShiftRight => panic!("cannot bitshift_right floats"),
+                        }
+
+                        self.builder.copy(&IRValue::Register(0), out, 1);
+                    }
+                },
                 IROp::CopyToOffset(source, location, offset) => {
                     self.builder.copy_with_offset(source, location, *offset);
                 }

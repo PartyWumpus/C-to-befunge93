@@ -23,12 +23,12 @@ use lang_c::{
         ArrayDeclarator, ArraySize, AsmStatement, BinaryOperator, BinaryOperatorExpression,
         BlockItem, CallExpression, CastExpression, ConditionalExpression, Constant, Declaration,
         DeclarationSpecifier, Declarator, DeclaratorKind, DerivedDeclarator, DoWhileStatement,
-        Ellipsis, Expression, ExternalDeclaration, ForInitializer, ForStatement,
-        FunctionDefinition, GnuAsmOperand, Identifier, IfStatement, Initializer, Integer,
-        IntegerBase, IntegerSize, IntegerSuffix, Label, LabeledStatement, MemberExpression,
-        MemberOperator, SizeOfTy, SizeOfVal, SpecifierQualifier, Statement, StorageClassSpecifier,
-        StructDeclaration, StructKind, SwitchStatement, TypeName, TypeSpecifier, UnaryOperator,
-        UnaryOperatorExpression, WhileStatement,
+        Ellipsis, Expression, ExternalDeclaration, Float, FloatBase, FloatFormat, FloatSuffix,
+        ForInitializer, ForStatement, FunctionDefinition, GnuAsmOperand, Identifier, IfStatement,
+        Initializer, Integer, IntegerBase, IntegerSize, IntegerSuffix, Label, LabeledStatement,
+        MemberExpression, MemberOperator, SizeOfTy, SizeOfVal, SpecifierQualifier, Statement,
+        StorageClassSpecifier, StructDeclaration, StructKind, SwitchStatement, TypeName,
+        TypeSpecifier, UnaryOperator, UnaryOperatorExpression, WhileStatement,
     },
     driver::{Flavor, parse_preprocessed},
     span::{Node, Span},
@@ -62,6 +62,8 @@ pub enum IRGenerationErrorType {
     PointerSubtraction,
     #[error("Unknown identifier")]
     UnknownIdentifier,
+    #[error("Unknown function identifier")]
+    UnknownFunction,
     #[error("Non-integer array length")]
     NonIntegerArrayLength,
     #[error("Arrays must be initialized with an initializer list or string literal")]
@@ -99,8 +101,6 @@ pub enum IRGenerationErrorType {
     TODOImaginary,
     #[error("Given type suffix is not yet implemented")]
     TODOTypeSuffix,
-    #[error("Floats are not yet supported")]
-    TODOFloats,
     #[error("Ellipsis are not yet supported.")]
     TODOEllipsis,
     #[error("Case ranges are not yet supported")]
@@ -282,10 +282,15 @@ pub enum CType {
     UnsignedChar,
     SignedChar,
     Char,
+
     SignedInt,
     SignedLong,
+
     UnsignedInt,
     UnsignedLong,
+
+    Double,
+
     Void,
     Pointer(Box<CType>),
     // A fancy pointer
@@ -318,7 +323,10 @@ impl CType {
             | Self::UnsignedChar
             | Self::UnsignedInt
             | Self::UnsignedLong => {
-                vec![(IRValue::Immediate(0), 1)]
+                vec![(IRValue::int(0), 1)]
+            }
+            Self::Double => {
+                vec![(IRValue::float(0.0), 1)]
             }
             Self::Array(inner_type, length) | Self::ImmediateArray(inner_type, length) => {
                 let mut out = vec![];
@@ -650,7 +658,7 @@ impl FileBuilder {
         let name = parse_declarator_name(&func.node.declarator)?;
         let param_count = builder.parse_func_declarator(&func.node.declarator)?.len();
         builder.parse_statement(&func.node.statement)?;
-        builder.push(IROp::Return(IRValue::Immediate(0)));
+        builder.push(IROp::Return(IRValue::int(0)));
 
         // FIXME: bad bad bad, just have a seperate global counter
         builder.file_builder.count = builder.count;
@@ -773,6 +781,7 @@ impl CType {
                 TypeSpecifier::Int,
             ] => Self::UnsignedLong,
 
+            [TypeSpecifier::Double] => Self::Double,
             [TypeSpecifier::Void] => Self::Void,
             [TypeSpecifier::Struct(struct_data)] => {
                 assert_eq!(struct_data.node.kind.node, StructKind::Struct);
@@ -1149,7 +1158,7 @@ impl TopLevelBuilder<'_> {
                     self.push(IROp::Return(out));
                 } else {
                     // return type check not needed, as this is only reachable via UB
-                    self.push(IROp::Return(IRValue::Immediate(0)));
+                    self.push(IROp::Return(IRValue::int(0)));
                 }
             }
             Statement::Compound(blocks) => {
@@ -1710,7 +1719,7 @@ impl TopLevelBuilder<'_> {
                     let init_info = builder.parse_initializer(init)?;
                     builder.flatten_and_type_check_initializer_info(init_info, &ctype)?
                 } else {
-                    vec![(IRValue::Immediate(0), 1)]
+                    vec![(IRValue::int(0), 1)]
                 };
 
                 for (i, init) in inits.into_iter().enumerate() {
@@ -1734,7 +1743,7 @@ impl TopLevelBuilder<'_> {
                     let init_info = self.parse_initializer(init)?;
                     self.flatten_and_type_check_initializer_info(init_info, &ctype)?
                 } else if self.is_const {
-                    vec![(IRValue::Immediate(0), 1)]
+                    vec![(IRValue::int(0), 1)]
                 } else {
                     return Ok(());
                 };
@@ -1900,7 +1909,7 @@ impl TopLevelBuilder<'_> {
                             let out = self.generate_pseudo(1);
                             self.push(IROp::AddPtr(
                                 val.clone(),
-                                IRValue::Immediate(*member_offset),
+                                IRValue::int(*member_offset),
                                 out.clone(),
                                 1,
                             ));
@@ -1934,7 +1943,7 @@ impl TopLevelBuilder<'_> {
                             let out = self.generate_pseudo(1);
                             self.push(IROp::AddPtr(
                                 base.clone(),
-                                IRValue::Immediate(*member_offset),
+                                IRValue::int(*member_offset),
                                 out.clone(),
                                 1,
                             ));
@@ -1946,7 +1955,7 @@ impl TopLevelBuilder<'_> {
                             let out = self.generate_pseudo(1);
                             self.push(IROp::AddPtr(
                                 ptr,
-                                IRValue::Immediate(*member_offset),
+                                IRValue::int(*member_offset),
                                 out.clone(),
                                 1,
                             ));
@@ -1963,7 +1972,7 @@ impl TopLevelBuilder<'_> {
                             let out = self.generate_pseudo(1);
                             self.push(IROp::AddPtr(
                                 ptr,
-                                IRValue::Immediate(*member_offset),
+                                IRValue::int(*member_offset),
                                 out.clone(),
                                 1,
                             ));
@@ -2010,7 +2019,7 @@ impl TopLevelBuilder<'_> {
         let size = ctype.sizeof(&self.scope);
         let out = self.generate_pseudo(CType::UnsignedInt.sizeof(&self.scope));
         self.ops.push(IROp::Copy(
-            IRValue::Immediate(size),
+            IRValue::int(size),
             out.clone(),
             CType::SignedInt.sizeof(&self.scope),
         ));
@@ -2038,7 +2047,7 @@ impl TopLevelBuilder<'_> {
         let size = ctype.sizeof(&self.scope);
         let out = self.generate_pseudo(CType::UnsignedInt.sizeof(&self.scope));
         self.ops.push(IROp::Copy(
-            IRValue::Immediate(size),
+            IRValue::int(size),
             out.clone(),
             CType::SignedInt.sizeof(&self.scope),
         ));
@@ -2092,7 +2101,7 @@ impl TopLevelBuilder<'_> {
                 let name = ident.node.name.clone();
                 match self.scope.var_map.get(&name).cloned() {
                     None => Err(IRGenerationError {
-                        err: IRGenerationErrorType::UnknownIdentifier,
+                        err: IRGenerationErrorType::UnknownFunction,
                         span: ident.span,
                     })?,
                     Some((Some(_), CType::Function(..))) => unreachable!(),
@@ -2169,7 +2178,7 @@ impl TopLevelBuilder<'_> {
                     self.push(IROp::AddressOf(base, out.clone()));
                     self.push(IROp::AddPtr(
                         out.clone(),
-                        IRValue::Immediate(offset),
+                        IRValue::int(offset),
                         out.clone(),
                         1,
                     ));
@@ -2248,7 +2257,7 @@ impl TopLevelBuilder<'_> {
                 self.push(IROp::Two(
                     BinOp::Add,
                     val.clone(),
-                    IRValue::Immediate(1),
+                    IRValue::int(1),
                     val.clone(),
                     IRType::from_ctype(&val_type, &self.scope),
                 ));
@@ -2259,7 +2268,7 @@ impl TopLevelBuilder<'_> {
                 self.push(IROp::Two(
                     BinOp::Sub,
                     val.clone(),
-                    IRValue::Immediate(1),
+                    IRValue::int(1),
                     val.clone(),
                     IRType::from_ctype(&val_type, &self.scope),
                 ));
@@ -2276,7 +2285,7 @@ impl TopLevelBuilder<'_> {
                 self.push(IROp::Two(
                     BinOp::Add,
                     val.clone(),
-                    IRValue::Immediate(1),
+                    IRValue::int(1),
                     val,
                     IRType::from_ctype(&val_type, &self.scope),
                 ));
@@ -2291,7 +2300,7 @@ impl TopLevelBuilder<'_> {
                 self.push(IROp::Two(
                     BinOp::Sub,
                     val.clone(),
-                    IRValue::Immediate(1),
+                    IRValue::int(1),
                     val,
                     IRType::from_ctype(&val_type, &self.scope),
                 ));
@@ -2325,7 +2334,7 @@ impl TopLevelBuilder<'_> {
             self.push(IROp::CondBranch(BranchType::Zero, skip_label_str, rhs));
             let out = self.generate_pseudo(CType::SignedInt.sizeof(&self.scope));
             self.ops.push(IROp::Copy(
-                IRValue::Immediate(1),
+                IRValue::int(1),
                 out.clone(),
                 CType::SignedInt.sizeof(&self.scope),
             ));
@@ -2333,7 +2342,7 @@ impl TopLevelBuilder<'_> {
             self.push(IROp::AlwaysBranch(end_label_str));
             self.push(skip_label);
             self.ops.push(IROp::Copy(
-                IRValue::Immediate(0),
+                IRValue::int(0),
                 out.clone(),
                 CType::SignedInt.sizeof(&self.scope),
             ));
@@ -2356,7 +2365,7 @@ impl TopLevelBuilder<'_> {
             self.push(IROp::CondBranch(BranchType::NonZero, skip_label_str, rhs));
             let out = self.generate_pseudo(CType::SignedInt.sizeof(&self.scope));
             self.ops.push(IROp::Copy(
-                IRValue::Immediate(0),
+                IRValue::int(0),
                 out.clone(),
                 CType::SignedInt.sizeof(&self.scope),
             ));
@@ -2364,7 +2373,7 @@ impl TopLevelBuilder<'_> {
             self.push(IROp::AlwaysBranch(end_label_str));
             self.push(skip_label);
             self.ops.push(IROp::Copy(
-                IRValue::Immediate(1),
+                IRValue::int(1),
                 out.clone(),
                 CType::SignedInt.sizeof(&self.scope),
             ));
@@ -2588,7 +2597,7 @@ impl TopLevelBuilder<'_> {
                     IROp::Two(
                         BinOp::Div,
                         difference,
-                        IRValue::Immediate(inner_l.sizeof(&self.scope)),
+                        IRValue::int(inner_l.sizeof(&self.scope)),
                         out.clone(),
                         IRType::from_ctype(&out_type, &self.scope),
                     )
@@ -2795,7 +2804,7 @@ impl TopLevelBuilder<'_> {
                     err,
                     span: val.span,
                 })?;
-                Ok((IRValue::Immediate(x), ctype))
+                Ok((IRValue::int(x), ctype))
             }
             Constant::Character(str) => {
                 let x = char_constant_to_usize(str).map_err(|err| IRGenerationError {
@@ -2803,12 +2812,15 @@ impl TopLevelBuilder<'_> {
                     span: val.span,
                 })?;
                 // NOTE: This is not a typo, char literals are ints.
-                Ok((IRValue::Immediate(x), CType::SignedInt))
+                Ok((IRValue::int(x), CType::SignedInt))
             }
-            Constant::Float(_) => Err(IRGenerationError {
-                err: IRGenerationErrorType::TODOFloats,
-                span: val.span,
-            }),
+            Constant::Float(float) => {
+                let x = float_constant_to_value(float).map_err(|err| IRGenerationError {
+                    err,
+                    span: val.span,
+                })?;
+                Ok((x, CType::Double))
+            }
         }
     }
 
@@ -2942,6 +2954,23 @@ fn integer_constant_to_usize(int: &Integer) -> usize {
         IntegerBase::Hexadecimal => usize::from_str_radix(&int.number, 16).unwrap(),
         IntegerBase::Binary => usize::from_str_radix(&int.number, 2).unwrap(),
     }
+}
+
+fn float_constant_to_value(float: &Float) -> Result<IRValue, IRGenerationErrorType> {
+    assert!(float.suffix.format == FloatFormat::Double);
+    if float.suffix.imaginary {
+        return Err(IRGenerationErrorType::TODOImaginary);
+    }
+
+    Ok(match float.base {
+        FloatBase::Decimal => IRValue::float(
+            float
+                .number
+                .parse()
+                .expect("lang c should only provide valid doubles here"),
+        ),
+        FloatBase::Hexadecimal => todo!("hex floats"),
+    })
 }
 
 // minimal error handling is required here, because lang-c validates the literal

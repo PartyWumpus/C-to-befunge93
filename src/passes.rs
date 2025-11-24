@@ -157,11 +157,7 @@ fn stack_size_recalculator(func: &mut IRTopLevel) -> usize {
     if ARGS.zero_stack_before_use {
         let mut new_ops = vec![];
         for i in func.parameters..out {
-            new_ops.push(IROp::CopyToOffset(
-                IRValue::Immediate(0),
-                IRValue::Stack(1),
-                i,
-            ));
+            new_ops.push(IROp::CopyToOffset(IRValue::int(0), IRValue::Stack(1), i));
         }
         new_ops.extend(func.ops.iter().cloned());
         func.ops = new_ops;

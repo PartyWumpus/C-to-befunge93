@@ -21,7 +21,7 @@ pub fn int_to_befunge_str(num: u64) -> String {
             let mut best = None;
 
             // TODO: enable with flag
-            if false {
+            if true {
                 for i in -9..=9 {
                     let x = with_offset(num, i, sqrt);
                     if let Some(x) = x {

@@ -427,7 +427,7 @@ impl OpBuilder {
                     }
                 }
             }
-            _ => panic!(),
+            IRType::Double => panic!(),
         }
     }
 
@@ -700,8 +700,8 @@ impl OpBuilder {
                 // TODO: fix load number so this just works
                 //self.load_number(0b001 * 2_usize.pow(61) + *position);
                 self.add(
-                    &IRValue::Immediate(2_usize.pow(61)),
-                    &IRValue::Immediate(*position),
+                    &IRValue::int(2_usize.pow(61)),
+                    &IRValue::int(*position + 31),
                 );
             }
             IRValue::Register(_)
