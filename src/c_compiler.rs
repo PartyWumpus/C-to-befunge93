@@ -24,11 +24,12 @@ use lang_c::{
         BlockItem, CallExpression, CastExpression, ConditionalExpression, Constant, Declaration,
         DeclarationSpecifier, Declarator, DeclaratorKind, DerivedDeclarator, DoWhileStatement,
         Ellipsis, Expression, ExternalDeclaration, Float, FloatBase, FloatFormat, FloatSuffix,
-        ForInitializer, ForStatement, FunctionDefinition, GnuAsmOperand, Identifier, IfStatement,
-        Initializer, Integer, IntegerBase, IntegerSize, IntegerSuffix, Label, LabeledStatement,
-        MemberExpression, MemberOperator, SizeOfTy, SizeOfVal, SpecifierQualifier, Statement,
-        StorageClassSpecifier, StructDeclaration, StructKind, SwitchStatement, TypeName,
-        TypeSpecifier, UnaryOperator, UnaryOperatorExpression, WhileStatement,
+        ForInitializer, ForStatement, FunctionDefinition, FunctionSpecifier, GnuAsmOperand,
+        Identifier, IfStatement, Initializer, Integer, IntegerBase, IntegerSize, IntegerSuffix,
+        Label, LabeledStatement, MemberExpression, MemberOperator, SizeOfTy, SizeOfVal,
+        SpecifierQualifier, Statement, StorageClassSpecifier, StructDeclaration, StructKind,
+        SwitchStatement, TypeName, TypeSpecifier, UnaryOperator, UnaryOperatorExpression,
+        WhileStatement,
     },
     driver::{Flavor, parse_preprocessed},
     span::{Node, Span},
@@ -115,6 +116,14 @@ pub enum IRGenerationErrorType {
     TODOComplexInitializers,
     #[error("Scalar initializers are not yet supported")]
     TODOScalarInitializers,
+    #[error("Typedef is not yet supported")]
+    TODOTypedef,
+    #[error("Auto is not yet supported")]
+    TODOAuto,
+    #[error("Inline is not yet supported")]
+    TODOInline,
+    #[error("Noreturn is not yet supported")]
+    TODONoreturn,
 
     // switch case errors
     #[error("Breaks can only appear inside loops or switch case statements")]
@@ -279,6 +288,8 @@ pub struct StructData {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum CType {
+    Bool,
+
     UnsignedChar,
     SignedChar,
     Char,
@@ -316,6 +327,7 @@ impl CType {
     pub fn zero_init(&self) -> Vec<(IRValue, usize)> {
         match self {
             Self::Pointer(..)
+            | Self::Bool
             | Self::Char
             | Self::SignedChar
             | Self::SignedInt
@@ -782,6 +794,7 @@ impl CType {
             ] => Self::UnsignedLong,
 
             [TypeSpecifier::Double] => Self::Double,
+            [TypeSpecifier::Bool] => Self::Bool,
             [TypeSpecifier::Void] => Self::Void,
             [TypeSpecifier::Struct(struct_data)] => {
                 assert_eq!(struct_data.node.kind.node, StructKind::Struct);
@@ -1008,22 +1021,34 @@ impl DeclarationInfo {
         for specifier in specifiers {
             match &specifier.node {
                 DeclarationSpecifier::StorageClass(spec) => match spec.node {
+                    StorageClassSpecifier::Typedef => Err(IRGenerationError {
+                        err: IRGenerationErrorType::TODOTypedef,
+                        span: specifier.span,
+                    })?,
                     StorageClassSpecifier::Extern => duration = StorageDuration::Extern,
                     StorageClassSpecifier::Static => duration = StorageDuration::Static,
-                    _ => {
-                        println!(
-                            "WARNING: Some storage class specifiers are ignored {specifier:?}"
-                        );
-                    }
+                    StorageClassSpecifier::ThreadLocal => println!("_Thread_local is ignored"),
+                    StorageClassSpecifier::Auto => Err(IRGenerationError {
+                        err: IRGenerationErrorType::TODOAuto,
+                        span: specifier.span,
+                    })?,
+                    StorageClassSpecifier::Register => println!("register keyword is ignored"),
                 },
                 DeclarationSpecifier::TypeSpecifier(spec) => c_types.push(spec),
                 // Consider implementing just volatile
                 DeclarationSpecifier::TypeQualifier(_) => {
                     println!("WARNING: All type qualifiers are ignored {specifier:?}");
                 }
-                DeclarationSpecifier::Function(_) => {
-                    panic!("function specifier on variable declaration")
-                }
+                DeclarationSpecifier::Function(spec) => match spec.node {
+                    FunctionSpecifier::Inline => Err(IRGenerationError {
+                        err: IRGenerationErrorType::TODOInline,
+                        span: specifier.span,
+                    })?,
+                    FunctionSpecifier::Noreturn => Err(IRGenerationError {
+                        err: IRGenerationErrorType::TODONoreturn,
+                        span: specifier.span,
+                    })?,
+                },
                 DeclarationSpecifier::Alignment(_) => println!(
                     "WARNING: All declaration alignment specifiers are ignored {specifier:?}"
                 ),
@@ -2133,14 +2158,17 @@ impl TopLevelBuilder<'_> {
                                 .map(|x| (x.0.clone(), x.1.sizeof(&self.scope)))
                                 .collect(),
                         ));
-                        let out = self.generate_pseudo(return_type.sizeof(&self.scope));
-                        self.push(IROp::Copy(
-                            IRValue::Register(0),
-                            out.clone(),
-                            return_type.sizeof(&self.scope),
-                        ));
-
-                        Ok((out, return_type))
+                        if return_type == CType::Void {
+                            Ok((IRValue::int(0), return_type))
+                        } else {
+                            let out = self.generate_pseudo(return_type.sizeof(&self.scope));
+                            self.push(IROp::Copy(
+                                IRValue::Register(0),
+                                out.clone(),
+                                return_type.sizeof(&self.scope),
+                            ));
+                            Ok((out, return_type))
+                        }
                     }
                     _ => Err(IRGenerationError {
                         err: IRGenerationErrorType::CallNonFunction,

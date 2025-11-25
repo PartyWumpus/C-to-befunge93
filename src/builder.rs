@@ -401,6 +401,7 @@ impl OpBuilder {
     pub fn constrain_to_range(&mut self, value: &IRValue, size: IRType, bounded: bool) {
         self.load_val(value);
         match size {
+            // FIXME: handles casts from signed -> unsigned wrong
             IRType::Unsigned(size) => {
                 assert!(size <= 64);
                 // jank alert TODO: FIXME:

@@ -53,6 +53,7 @@ pub enum IRTypeConversionError {
 impl IRType {
     pub fn from_ctype(value: &CType, scope: &ScopeInfo) -> Self {
         match value {
+            CType::Bool => Self::Unsigned(1),
             CType::UnsignedChar => Self::Unsigned(8),
             CType::Char | CType::SignedChar => Self::Signed(8),
 
@@ -85,6 +86,7 @@ impl CType {
             | Self::UnsignedChar
             | Self::UnsignedInt
             | Self::UnsignedLong
+            | Self::Bool
             | Self::Double => 1,
             Self::Array(inner_type, size) | Self::ImmediateArray(inner_type, size) => {
                 inner_type.sizeof(scope) * size
