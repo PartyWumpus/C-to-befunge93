@@ -62,18 +62,18 @@ int lose_art[SIZE] = {
 };
 
 int setupScreen(int height, int width) {
-  __asm__(
+  asm(
     "89g 79g s"
     :
-    : [r96] "=" (width), [r95] "=" (height)
+    : ["r89" (width)], ["r79" (height)]
   );
 }
 
 int setColor(int r, int g, int b) {
-  __asm__(
+  asm(
     "89g 79g 69g f"
     :
-    : [r96] "=" (b), [r95] "=" (g), [r94] "=" (r)
+    : ["r89" (b)], ["r79" (g)], ["r69" (r)]
   );
 }
 
@@ -81,35 +81,35 @@ int draw(void) {
   setColor(100, 100, 100);
   for (int i = 0; i < HEIGHT; i++) {
     for (int j = 0; j < WIDTH; j++) {
-      __asm__(
+      asm(
         "89g 79g x"
         :
-        : [r96] "=" (j), [r95] "=" (i)
+        : ["r89" (j)], ["r79" (i)]
       );
     }
   }
 
   setColor(0, 150, 0);
   for (int i = snakeStart; i != snakeEnd; i = (i+1)%MAX_TAIL_LENGTH) {
-    __asm__(
+    asm(
       "89g 79g x"
       :
-      : [r96] "=" (snakeTailX[i]), [r95] "=" (snakeTailY[i])
+      : ["r89" (snakeTailX[i])], ["r79" (snakeTailY[i])]
     );
   }
 
   setColor(0, 255, 0);
-  __asm__(
+  asm(
     "89g 79g x"
     :
-    : [r96] "=" (x), [r95] "=" (y)
+    : ["r89" (x)], ["r79" (y)]
   );
 
   setColor(255, 0, 0);
-  __asm__(
+  asm(
     "89g 79g x"
     :
-    : [r96] "=" (fruitx), [r95] "=" (fruity)
+    : ["r89" (fruitx)], ["r79" (fruity)]
   );
 }
 
@@ -118,10 +118,10 @@ int drawWin(void) {
     for (int j = 0; j < HEIGHT; j++) {
       int color = win_art[i+j*WIDTH];
       setColor((color/32) *36, ((color/4)%8) * 36, (color%4) * 85);
-      __asm__(
+      asm(
         "89g 79g x"
         :
-        : [r96] "=" (i), [r95] "=" (j)
+        : ["r89" (i)], ["r79" (j)]
       );
     }
   }
@@ -132,10 +132,10 @@ int drawLose(void) {
     for (int j = 0; j < HEIGHT; j++) {
       int color = lose_art[i+j*WIDTH];
       setColor((color/32) *36, ((color/4)%8) * 36, (color%4) * 85);
-      __asm__(
+      asm(
         "89g 79g x"
         :
-        : [r96] "=" (i), [r95] "=" (j)
+        : ["r89" (i)], ["r79" (j)]
       );
     }
   }

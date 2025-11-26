@@ -286,7 +286,7 @@ pub struct StructData {
     pub size: usize,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq)]
 pub enum CType {
     Bool,
 
@@ -310,6 +310,41 @@ pub enum CType {
     ImmediateArray(Box<CType>, usize),
     Function(Box<[CType]>, Box<CType>),
     Struct(TagID),
+}
+
+// this makes me unhappy
+#[allow(clippy::match_same_arms)]
+impl PartialEq for CType {
+    fn eq(&self, other: &Self) -> bool {
+
+        match (self, other) {
+            (Self::Bool, Self::Bool) => true,
+
+            (Self::UnsignedChar, Self::UnsignedChar) => true,
+            (Self::SignedChar, Self::SignedChar) => true,
+            (Self::Char, Self::Char) => true,
+
+            (Self::SignedInt, Self::SignedInt) => true,
+            (Self::SignedLong, Self::SignedLong) => true,
+
+            (Self::UnsignedInt, Self::UnsignedInt) => true,
+            (Self::UnsignedLong, Self::UnsignedLong) => true,
+
+            (Self::Double, Self::Double) => true,
+
+            (Self::Void, Self::Void) => true,
+            (Self::Pointer(a), Self::Pointer(b)) => a == b,
+            (
+                Self::Array(a,size_a) | Self::ImmediateArray(a,size_a),
+                Self::Array(b, size_b) | Self::ImmediateArray(b, size_b),
+            ) => (a == b) && (size_a == size_b),
+            (Self::Function(args_a, return_a), Self::Function(args_b, return_b)) => {
+                (args_a == args_b) && (return_a == return_b)
+            }
+            (Self::Struct(a), Self::Struct(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 impl CType {
@@ -1364,15 +1399,13 @@ impl TopLevelBuilder<'_> {
         op: &Node<GnuAsmOperand>,
         input: bool,
     ) -> Result<(), IRGenerationError> {
-        if let Some(output_name) = &op.node.symbolic_name {
-            let (c_value, ctype) = self.parse_expression(&op.node.variable_name)?;
-            let asm_value = Self::parse_asm_symbolic(&output_name.node.name)
-                .map_err(|err| IRGenerationError { err, span: op.span })?;
-            if input {
-                self.push(IROp::Copy(c_value, asm_value, ctype.sizeof(&self.scope)));
-            } else {
-                self.push(IROp::Copy(asm_value, c_value, ctype.sizeof(&self.scope)));
-            }
+        let (c_value, ctype) = self.parse_expression(&op.node.value)?;
+        let asm_value = Self::parse_asm_symbolic(&op.node.asm_location)
+            .map_err(|err| IRGenerationError { err, span: op.span })?;
+        if input {
+            self.push(IROp::Copy(c_value, asm_value, ctype.sizeof(&self.scope)));
+        } else {
+            self.push(IROp::Copy(asm_value, c_value, ctype.sizeof(&self.scope)));
         }
         Ok(())
     }
@@ -2177,7 +2210,7 @@ impl TopLevelBuilder<'_> {
                         } else {
                             let out = self.generate_pseudo(return_type.sizeof(&self.scope));
                             self.push(IROp::Copy(
-                                IRValue::Register(0),
+                                IRValue::Register(20),
                                 out.clone(),
                                 return_type.sizeof(&self.scope),
                             ));

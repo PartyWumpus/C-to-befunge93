@@ -118,26 +118,26 @@ As well as registers with `[r1]` to `[r97]`, you can use `[bstack]`, which will 
 int main(void) {
  int a = 10;
  __asm__(
-  // read value from register 2, add 5, and write back to register 2
-  "40g 5+ 40p"
+  // read value from register 34, add 5, and write back to register 34
+  "34g 5+ 34p"
   "befunge93!"
-  : [r2] "" (a) // (outputs) copy register 2 into a
-  : [r2] "" (a) // (inputs) copy a into register 2
+  : ["r34" (a)] // (outputs) copy register 34 into a
+  : ["r34"  (a)] // (inputs) copy a into register 34
  );
  return a; // Returns 15
 }
 ```
 ->
 ```
-19+00g1-1p 00g1-1g40p 40g 5+ 40p 40g00g1-1p 00g1-1g20p00g1-00p10g1-:2g\1-:2g\10p^ 
+19+00g1-1p 00g1-1g34p 34g 5+ 34p 34g00g1-1p 00g1-1g20p00g1-00p10g1-:2g\1-:2g\10p^
                       befunge93!
 ```
 Just to make it super clear exactly what is going on, here's the generated IR, with a copy to r2 before, and a copy from r2 after.
 ```
 One(Copy, Immediate(10), Psuedo("a.1"))
-One(Copy, Psuedo("a.1"), Register(2))
-InlineBefunge(["40g 5+ 40p", "befunge93!"])
-One(Copy, Register(2), Psuedo("a.1"))
+One(Copy, Psuedo("a.1"), Register(34))
+InlineBefunge(["34g 5+ 40p", "befunge93!"])
+One(Copy, Register(34), Psuedo("a.1"))
 Return(Psuedo("a.1"))
 ```
 
@@ -146,7 +146,7 @@ This does the same as the example above, but writes and reads from the bstack in
 ```c
 int main(void) {
  int a = 10;
- __asm__("5+": [bstack] "" (a): [bstack] "" (a));
+ __asm__("5+": ["bstack" (a)]: ["bstack" (a)]);
  return a;
 }
 ```
@@ -155,7 +155,7 @@ int main(void) {
 ##### Printing
 ```c
 int print_int(int a, int b) {
-  __asm__("." : : [bstack] "" (a));
+  __asm__("." : : ["bstack" (a)]);
   return 0;
 }
 ```

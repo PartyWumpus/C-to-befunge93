@@ -270,7 +270,7 @@ impl CodeGen {
                             BinOp::ShiftRight => panic!("cannot bitshift_right floats"),
                         }
 
-                        self.builder.copy(&IRValue::Register(0), out, 1);
+                        self.builder.copy(&IRValue::Register(20), out, 1);
                     }
                 },
                 IROp::CopyToOffset(source, location, offset) => {

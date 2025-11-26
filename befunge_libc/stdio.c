@@ -1,9 +1,9 @@
 int putchar(int _char) {
-  __asm__("89g," : : [r96] "=" (_char));
+  asm("76g," : : ["r76" (_char)]);
 }
 
 int getchar(void) {
   int a;
-  __asm__("~89p" : [r96] "=" (a) :);
+  asm("~76p" : ["r76" (a)] :);
   return a;
 }

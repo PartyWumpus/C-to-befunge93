@@ -97,9 +97,8 @@ impl OpBuilder {
     }
 
     fn index_register(&mut self, id: usize) {
-        let id = id + 2;
-        assert!(id < 99, "attempt to index register > 99");
-        self.str(&format!("{}{}", id % 10, id / 10));
+        assert!(id <= 99, "attempt to index register > 99");
+        self.str(&format!("{}{}", id / 10, id % 10));
         self.current_stack_size += 2;
     }
 

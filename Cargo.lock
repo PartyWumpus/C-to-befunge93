@@ -236,7 +236,7 @@ dependencies = [
 [[package]]
 name = "lang-c"
 version = "0.15.1"
-source = "git+https://github.com/PartyWumpus/lang-c.git?branch=sauce#1cf68dd630ee61ea41949c127c5c9248f4d48da5"
+source = "git+https://github.com/PartyWumpus/lang-c.git?branch=sauce#b9b08f4e4b1b6587dae2b19ba8512b0e1c2b5224"
 
 [[package]]
 name = "libc"
