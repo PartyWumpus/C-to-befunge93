@@ -197,7 +197,7 @@ fn find_nearby_square(num: u64) -> Option<String> {
     let isqrt = num.isqrt();
     let (lower, higher) = (isqrt * isqrt, (isqrt + 1) * (isqrt + 1));
     if (num - lower) < MAX
-        && let Some(x) = with_offset(num, (lower - num) as isize, sqrt)
+        && let Some(x) = with_offset(num, (num - lower) as isize, sqrt)
     {
         return Some(x);
     }

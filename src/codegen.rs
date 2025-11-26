@@ -138,7 +138,15 @@ impl CodeGen {
                         self.builder.copy(&IRValue::BefungeStack, out, 1);
                     }
                     IRType::Double => {
-                        todo!("floats");
+                        // FIXME: TEMPORARY
+                        match op {
+                            UnaryOp::Dereference => {
+                                self.builder.dereference(a);
+                                self.builder.copy(&IRValue::BefungeStack, out, 1);
+                            }
+                            _ => panic!("floats"),
+                        }
+                        /*
                         match op {
                             UnaryOp::Minus => self.builder.call(
                                 self.function_map[&func.name],
@@ -155,9 +163,13 @@ impl CodeGen {
                                 self.function_map["_bf_double_boolean_negate"],
                                 &[(a.clone(), 1)],
                             ),
-                            UnaryOp::Dereference => panic!("cannot dereference floats"),
+                            UnaryOp::Dereference => {
+                                self.builder.dereference(a);
+                                self.builder.copy(&IRValue::BefungeStack, out, 1);
+                            }
                         }
                         self.builder.copy(&IRValue::BefungeStack, out, 1);
+                        */
                     }
                 },
                 IROp::Two(op, a, b, out, irtype) => match irtype {

@@ -26,10 +26,10 @@ use lang_c::{
         Ellipsis, Expression, ExternalDeclaration, Float, FloatBase, FloatFormat, FloatSuffix,
         ForInitializer, ForStatement, FunctionDefinition, FunctionSpecifier, GnuAsmOperand,
         Identifier, IfStatement, Initializer, Integer, IntegerBase, IntegerSize, IntegerSuffix,
-        Label, LabeledStatement, MemberExpression, MemberOperator, SizeOfTy, SizeOfVal,
-        SpecifierQualifier, Statement, StorageClassSpecifier, StructDeclaration, StructKind,
-        SwitchStatement, TypeName, TypeSpecifier, UnaryOperator, UnaryOperatorExpression,
-        WhileStatement,
+        Label, LabeledStatement, MemberExpression, MemberOperator, PointerDeclarator, SizeOfTy,
+        SizeOfVal, SpecifierQualifier, Statement, StorageClassSpecifier, StructDeclaration,
+        StructKind, SwitchStatement, TypeName, TypeSpecifier, UnaryOperator,
+        UnaryOperatorExpression, WhileStatement,
     },
     driver::{Flavor, parse_preprocessed},
     span::{Node, Span},
@@ -93,7 +93,7 @@ pub enum IRGenerationErrorType {
     LongCharLiteral,
 
     #[error("INTERNAL: A non func declarator in the func declarator parser? type: {0:?}")]
-    INTERNALNonFuncDeclaratorInFuncDeclaratorParser(DerivedDeclarator),
+    INTERNALNonFuncDeclaratorInFuncDeclaratorParser(PointerDeclarator),
 
     // todos
     #[error("GNU block types are not supported")]
@@ -449,6 +449,7 @@ struct TagData {
     tag_type: TagType,
 }
 
+// TODO: did i already do this?? i feel like this comment isn't true anymore but idk
 // TODO: scope system will need a bit of a refactor to make unshadowing of globals possible
 #[derive(Debug, Clone, Default)]
 pub struct ScopeInfo {
@@ -919,19 +920,23 @@ impl CType {
         let mut out = base_type.clone();
         let mut param_list = None;
 
-        match &declarator.node.kind.node {
-            DeclaratorKind::Identifier(_) | DeclaratorKind::Abstract => (),
-            DeclaratorKind::Declarator(nested_decl) => {
-                out = Self::from_declarator(nested_decl, &out, scope)?;
+        for modifier in &declarator.node.pointer {
+            match &modifier.node {
+                PointerDeclarator::Pointer(qualifiers) => {
+                    assert_eq!(qualifiers.len(), 0, "Pointer qualifiers not yet supported");
+                    out = Self::Pointer(Box::new(out));
+                }
+                PointerDeclarator::Block(_) => {
+                    return Err(IRGenerationError {
+                        err: IRGenerationErrorType::TODOBlockTypes,
+                        span: modifier.span,
+                    });
+                }
             }
         }
 
         for modifier in declarator.node.derived.iter().rev() {
             match &modifier.node {
-                DerivedDeclarator::Pointer(qualifiers) => {
-                    assert_eq!(qualifiers.len(), 0, "Pointer qualifiers not yet supported");
-                    out = Self::Pointer(Box::new(out));
-                }
                 DerivedDeclarator::Array(array_decl) => {
                     let size = parse_array_length(array_decl)?;
                     out = Self::Array(Box::new(out), size);
@@ -965,12 +970,13 @@ impl CType {
                         span: modifier.span,
                     });
                 }
-                DerivedDeclarator::Block(_) => {
-                    return Err(IRGenerationError {
-                        err: IRGenerationErrorType::TODOBlockTypes,
-                        span: modifier.span,
-                    });
-                }
+            }
+        }
+
+        match &declarator.node.kind.node {
+            DeclaratorKind::Identifier(_) | DeclaratorKind::Abstract => (),
+            DeclaratorKind::Declarator(nested_decl) => {
+                out = Self::from_declarator(nested_decl, &out, scope)?;
             }
         }
 
@@ -1105,15 +1111,22 @@ impl TopLevelBuilder<'_> {
                         span: node.span,
                     });
                 }
-                DerivedDeclarator::Pointer(qualifiers) => {
-                    assert_eq!(qualifiers.len(), 0, "Pointer qualifiers not yet supported");
-                    self.return_type = CType::Pointer(Box::new(self.return_type.clone()));
-                }
+
                 DerivedDeclarator::Array(array_decl) => {
+                    // TODO: does this make sense?
                     let size = parse_array_length(array_decl)?;
                     self.return_type = CType::Array(Box::new(self.return_type.clone()), size);
                 }
-                DerivedDeclarator::Block(..) => {
+            }
+        }
+
+        for node in &decl.node.pointer {
+            match &node.node {
+                PointerDeclarator::Pointer(qualifiers) => {
+                    assert_eq!(qualifiers.len(), 0, "Pointer qualifiers not yet supported");
+                    self.return_type = CType::Pointer(Box::new(self.return_type.clone()));
+                }
+                PointerDeclarator::Block(..) => {
                     return Err(IRGenerationError {
                         err: IRGenerationErrorType::INTERNALNonFuncDeclaratorInFuncDeclaratorParser(
                             node.node.clone(),
@@ -2025,6 +2038,7 @@ impl TopLevelBuilder<'_> {
         cast: &Node<CastExpression>,
     ) -> Result<(IRValue, CType), IRGenerationError> {
         let (expr, expr_type) = self.parse_expression(&cast.node.expression)?;
+        let (expr, expr_type) = self.attempt_array_decay((expr, expr_type));
         let out_type = self.parse_type_name(&cast.node.type_name)?;
         let out = self.generate_pseudo(out_type.sizeof(&self.scope));
 
@@ -2633,7 +2647,7 @@ impl TopLevelBuilder<'_> {
                 (CType::Pointer(inner) | CType::Array(inner, _), _) => {
                     let negated = self.generate_pseudo(CType::UnsignedInt.sizeof(&self.scope));
                     self.push(IROp::One(
-                        UnaryOp::Complement,
+                        UnaryOp::Minus,
                         rhs,
                         negated.clone(),
                         IRType::from_ctype(&out_type, &self.scope),
@@ -2862,6 +2876,8 @@ impl TopLevelBuilder<'_> {
             Ok(input.0)
         } else {
             let out = self.generate_pseudo(ctype.sizeof(&self.scope));
+            let input = self.attempt_array_decay(input);
+
             // TODO: check cast is valid
             self.push(IROp::Cast(
                 IRType::from_ctype(ctype, &self.scope),

@@ -428,7 +428,7 @@ impl OpBuilder {
                     }
                 }
             }
-            IRType::Double => panic!(),
+            IRType::Double => todo!("floats"),
         }
     }
 
