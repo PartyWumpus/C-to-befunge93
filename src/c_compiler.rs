@@ -23,13 +23,13 @@ use lang_c::{
         ArrayDeclarator, ArraySize, AsmStatement, BinaryOperator, BinaryOperatorExpression,
         BlockItem, CallExpression, CastExpression, ConditionalExpression, Constant, Declaration,
         DeclarationSpecifier, Declarator, DeclaratorKind, DerivedDeclarator, DoWhileStatement,
-        Ellipsis, Expression, ExternalDeclaration, Float, FloatBase, FloatFormat, FloatSuffix,
-        ForInitializer, ForStatement, FunctionDefinition, FunctionSpecifier, GnuAsmOperand,
-        Identifier, IfStatement, Initializer, Integer, IntegerBase, IntegerSize, IntegerSuffix,
-        Label, LabeledStatement, MemberExpression, MemberOperator, PointerDeclarator, SizeOfTy,
-        SizeOfVal, SpecifierQualifier, Statement, StorageClassSpecifier, StructDeclaration,
-        StructKind, SwitchStatement, TypeName, TypeSpecifier, UnaryOperator,
-        UnaryOperatorExpression, WhileStatement,
+        Ellipsis, Expression, ExternalDeclaration, Float, FloatBase, FloatFormat, ForInitializer,
+        ForStatement, FunctionDefinition, FunctionSpecifier, GnuAsmOperand, Identifier,
+        IfStatement, Initializer, Integer, IntegerBase, IntegerSize, IntegerSuffix, Label,
+        LabeledStatement, MemberExpression, MemberOperator, PointerDeclarator, SizeOfTy, SizeOfVal,
+        SpecifierQualifier, Statement, StorageClassSpecifier, StructDeclaration, StructKind,
+        SwitchStatement, TypeName, TypeSpecifier, UnaryOperator, UnaryOperatorExpression,
+        WhileStatement,
     },
     driver::{Flavor, parse_preprocessed},
     span::{Node, Span},
@@ -45,12 +45,12 @@ use crate::{
 pub enum IRGenerationErrorType {
     #[error(transparent)]
     IRTypeConversionError(#[from] IRTypeConversionError),
-    #[error(transparent)]
-    InvalidCoercion(#[from] InvalidCoercionError),
+    #[error("Invalid coersion between {0} and {1}")]
+    InvalidCoercion(Box<str>, Box<str>),
     #[error("Unknown type: {0:?}")]
     InvalidType(Box<[TypeSpecifier]>),
-    #[error("Unknown struct: {0:?}")]
-    InvalidStructType(String),
+    #[error("Unknown struct: {0}")]
+    InvalidStructType(Box<str>),
     #[error("Cannot dereference non-pointers")]
     DereferenceNonPointer,
     #[error("Cannot index pointers with pointers")]
@@ -86,7 +86,7 @@ pub enum IRGenerationErrorType {
     #[error("Non static expression in static block")]
     NonStaticInStaticBlock,
     #[error("Invalid ASM symbol '{0}'")]
-    InvalidASMSymbol(String),
+    InvalidASMSymbol(Box<str>),
     #[error("Excess elements in array initializer")]
     ExcessElementsInInitializer,
     #[error("Char literals must be one character (or an escape sequence)")]
@@ -136,20 +136,20 @@ pub enum IRGenerationErrorType {
     DefaultNotInSwitch,
 
     // struct errors
-    #[error("Type {0:?} is a struct, use '.' instead of '->'")]
-    AttemptToAccessStructWithArrow(CType),
-    #[error("Type {0:?} is a pointer to a struct, use '->' instead of '.'")]
-    AttemptToAccessPointerToStructWithDot(CType),
-    #[error("Attempt to access non struct type: {0:?}")]
-    AttemptToAccessNonStruct(CType),
-    #[error("'{0}' is not a member of struct {1:?}")]
-    InvalidStructMember(String, CType),
+    #[error("Type '{0}' is a struct, use '.' instead of '->'")]
+    AttemptToAccessStructWithArrow(Box<str>),
+    #[error("Type '{0}' is a pointer to a struct, use '->' instead of '.'")]
+    AttemptToAccessPointerToStructWithDot(Box<str>),
+    #[error("Attempt to access member '{0}' non struct type: '{1}'")]
+    AttemptToAccessNonStruct(Box<str>, Box<str>),
+    #[error("'{0}' is not a member of '{1}'")]
+    InvalidStructMember(Box<str>, Box<str>),
 
     // TODO: store the span of the location of the first declaration!
-    #[error("Type {0:?} does not match earlier defined {1:?}")]
-    NonMatchingDeclarations(CType, CType),
-    #[error("Type {0:?} is not compatible with {1:?}")]
-    IncompatibleTypes(CType, CType),
+    #[error("Type '{0}' does not match earlier defined '{1}'")]
+    NonMatchingDeclarations(Box<str>, Box<str>),
+    #[error("Type '{0}' is not compatible with '{1}'")]
+    IncompatibleTypes(Box<str>, Box<str>),
 }
 
 #[derive(Error, Debug)]
@@ -252,7 +252,7 @@ impl CompilerError {
                 err: lang_c::driver::Error::PreprocessorError(err),
                 ..
             } => Diagnostic::error()
-                .with_message("Preprocessor error")
+                .with_message("Preprocessor (gcc) error")
                 .with_note(err),
             Self::IRGenerationError { err, span, .. } => Diagnostic::error()
                 .with_message(err)
@@ -280,10 +280,21 @@ enum AssignmentStatus {
     AssigningToSubObject(IRValue, usize),
 }
 
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct StructData {
+    pub name: String,
     pub fields: IndexMap<String, (CType, usize)>,
     pub size: usize,
+}
+
+impl StructData {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            fields: IndexMap::new(),
+            size: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq)]
@@ -316,7 +327,6 @@ pub enum CType {
 #[allow(clippy::match_same_arms)]
 impl PartialEq for CType {
     fn eq(&self, other: &Self) -> bool {
-
         match (self, other) {
             (Self::Bool, Self::Bool) => true,
 
@@ -335,7 +345,7 @@ impl PartialEq for CType {
             (Self::Void, Self::Void) => true,
             (Self::Pointer(a), Self::Pointer(b)) => a == b,
             (
-                Self::Array(a,size_a) | Self::ImmediateArray(a,size_a),
+                Self::Array(a, size_a) | Self::ImmediateArray(a, size_a),
                 Self::Array(b, size_b) | Self::ImmediateArray(b, size_b),
             ) => (a == b) && (size_a == size_b),
             (Self::Function(args_a, return_a), Self::Function(args_b, return_b)) => {
@@ -388,7 +398,7 @@ impl CType {
         }
     }
 
-    pub fn get_common(type1: &Self, type2: &Self) -> Result<Self, InvalidCoercionError> {
+    pub fn get_common<'a>(type1: &'a Self, type2: &'a Self) -> Result<Self, (&'a Self, &'a Self)> {
         // If the same, no conversions are needed
         if type1 == type2 {
             return Ok(type1.clone());
@@ -401,7 +411,7 @@ impl CType {
             return if type2.is_integer() {
                 Ok(type1.clone())
             } else {
-                Err(InvalidCoercionError(type1.clone(), type2.clone()))
+                Err((type1, type2))
             };
         }
 
@@ -409,19 +419,62 @@ impl CType {
             return if type1.is_integer() {
                 Ok(type2.clone())
             } else {
-                Err(InvalidCoercionError(type1.clone(), type2.clone()))
+                Err((type1, type2))
             };
         }
 
         Ok(Self::SignedLong)
     }
-}
 
-#[derive(Error, Debug)]
-pub struct InvalidCoercionError(CType, CType);
-impl Display for InvalidCoercionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Invalid coersion between {:?} and {:?}", self.0, self.1)
+    fn display_type_inner(&self, scope: &ScopeInfo, inner: &str) -> String {
+        match self {
+            Self::Bool => format!("_Bool {inner}"),
+
+            Self::UnsignedChar => format!("unsigned char {inner}"),
+            Self::SignedChar => format!("signed char {inner}"),
+            Self::Char => format!("char {inner}"),
+
+            Self::SignedInt => format!("int {inner}"),
+            Self::SignedLong => format!("long {inner}"),
+
+            Self::UnsignedInt => format!("unsigned int {inner}"),
+            Self::UnsignedLong => format!("unsigned long {inner}"),
+
+            Self::Double => format!("double {inner}"),
+
+            Self::Void => format!("void {inner}"),
+            Self::Pointer(inner_type) => match inner_type {
+                Self::Array(..) | Self::ImmediateArray(..) | Self::Function(..) => {
+                    inner_type.display_type_inner(scope, &format!("(*{inner})"))
+                }
+                _ => inner_type.display_type_inner(scope, &format!("*{inner}")),
+            },
+            Self::Array(inner_type, len) | Self::ImmediateArray(inner_type, len) => {
+                inner_type.display_type_inner(scope, &format!("{inner}[{len}]"))
+            }
+            Self::Function(args, return_type) => {
+                let args = if args.is_empty() {
+                    "void"
+                } else {
+                    &args
+                        .iter()
+                        .map(|a| a.display_type(scope))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                return_type.display_type_inner(scope, &format!("{inner}({args})",))
+            }
+            Self::Struct(tag_id) => {
+                let tag_data = scope.get_struct_by_id(*tag_id);
+                format!("struct {} {inner}", tag_data.name)
+            }
+        }
+        .trim()
+        .to_string()
+    }
+
+    pub fn display_type(&self, scope: &ScopeInfo) -> Box<str> {
+        self.display_type_inner(scope, "").into()
     }
 }
 
@@ -586,12 +639,13 @@ fn preprocess(config: &lang_c::driver::Config, source: &[u8]) -> io::Result<Stri
     let mut cmd = Command::new(&config.cpp_command);
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
 
     for item in &config.cpp_options {
         cmd.arg(item);
     }
 
-    let mut cmd = cmd.spawn().expect("Failed to spawn child process");
+    let mut cmd = cmd.spawn().expect("Failed to spawn gcc");
 
     let mut stdin = cmd.stdin.take().expect("Failed to open stdin");
     let source = source.to_vec(); // pointless clone :(
@@ -637,7 +691,11 @@ impl FileBuilder {
                 "-".into(),
             ],
         };
-        let preproccessed = preprocess(&config, source).unwrap();
+        let preproccessed =
+            preprocess(&config, source).map_err(|err| CompilerError::ParseError {
+                err: lang_c::driver::Error::PreprocessorError(err),
+                filename: filename.to_string(),
+            })?;
 
         if ARGS.verbose {
             println!("-- C SOURCE (post preprocessor)");
@@ -852,7 +910,7 @@ impl CType {
                                 scope.insert_incomplete_struct(name)
                             } else {
                                 return Err(IRGenerationError {
-                                    err: IRGenerationErrorType::InvalidStructType(name.clone()),
+                                    err: IRGenerationErrorType::InvalidStructType(name.into()),
                                     span: struct_data.span,
                                 });
                             }
@@ -873,8 +931,8 @@ impl CType {
                     },
                     // it's a definition
                     Some(decls) => {
-                        assert_ne!(decls.len(), 0);
-                        let mut struct_data = StructData::default();
+                        assert_ne!(decls.len(), 0, "struct with no fields");
+                        let mut struct_data = StructData::new(name.clone());
                         for decl in decls {
                             match &decl.node {
                                 StructDeclaration::StaticAssert(..) => {
@@ -1008,6 +1066,17 @@ impl CType {
             }
         }
 
+        out = if let Some(params) = param_list {
+            let params = if matches!(params, [Self::Void]) {
+                vec![]
+            } else {
+                params
+            };
+            Self::Function(params.into(), Box::new(out))
+        } else {
+            out
+        };
+
         match &declarator.node.kind.node {
             DeclaratorKind::Identifier(_) | DeclaratorKind::Abstract => (),
             DeclaratorKind::Declarator(nested_decl) => {
@@ -1015,16 +1084,7 @@ impl CType {
             }
         }
 
-        if let Some(params) = param_list {
-            let params = if matches!(params, [Self::Void]) {
-                vec![]
-            } else {
-                params
-            };
-            Ok(Self::Function(params.into(), Box::new(out)))
-        } else {
-            Ok(out)
-        }
+        Ok(out)
     }
 }
 
@@ -1416,7 +1476,7 @@ impl TopLevelBuilder<'_> {
         } else if str == "bstack" {
             Ok(IRValue::BefungeStack)
         } else {
-            Err(IRGenerationErrorType::InvalidASMSymbol(str.to_string()))
+            Err(IRGenerationErrorType::InvalidASMSymbol(str.into()))
         }
     }
 
@@ -1576,8 +1636,8 @@ impl TopLevelBuilder<'_> {
                 if *target_type != rhs_type {
                     return Err(IRGenerationError {
                         err: IRGenerationErrorType::IncompatibleTypes(
-                            target_type.clone(),
-                            rhs_type,
+                            target_type.display_type(&self.scope),
+                            rhs_type.display_type(&self.scope),
                         ),
                         span,
                     });
@@ -1687,8 +1747,8 @@ impl TopLevelBuilder<'_> {
                     if *prev_ctype != ctype {
                         return Err(IRGenerationError {
                             err: IRGenerationErrorType::NonMatchingDeclarations(
-                                ctype,
-                                prev_ctype.clone(),
+                                ctype.display_type(&self.scope),
+                                prev_ctype.display_type(&self.scope),
                             ),
                             span: decl.span,
                         });
@@ -1732,8 +1792,8 @@ impl TopLevelBuilder<'_> {
                                     if *stored_ctype != ctype {
                                         return Err(IRGenerationError {
                                             err: IRGenerationErrorType::NonMatchingDeclarations(
-                                                ctype,
-                                                stored_ctype.clone(),
+                                                ctype.display_type(&self.scope),
+                                                stored_ctype.display_type(&self.scope),
                                             ),
                                             span: decl.node.declarator.span,
                                         });
@@ -1951,16 +2011,17 @@ impl TopLevelBuilder<'_> {
             | Out::Dereferenced((_, ctype))
             | Out::SubObject { subtype: ctype, .. } => ctype,
         };
+        let field_name = &expr.node.identifier.node.name;
+
         if let CType::Struct(tag_id) = base_type {
             let struct_data = self.scope.get_struct_by_id(*tag_id);
-            let field_name = &expr.node.identifier.node.name;
             let field = struct_data.fields.get(field_name);
 
             match field {
                 None => Err(IRGenerationError {
                     err: IRGenerationErrorType::InvalidStructMember(
-                        field_name.clone(),
-                        base_type.clone(),
+                        field_name.clone().into(),
+                        base_type.display_type(&self.scope),
                     ),
                     span: expr.node.identifier.span,
                 }),
@@ -1989,7 +2050,7 @@ impl TopLevelBuilder<'_> {
                     }),
                     MemberOperator::Indirect => Err(IRGenerationError {
                         err: IRGenerationErrorType::AttemptToAccessStructWithArrow(
-                            base_type.clone(),
+                            base_type.display_type(&self.scope),
                         ),
                         span: expr.span,
                     }),
@@ -1997,14 +2058,13 @@ impl TopLevelBuilder<'_> {
             }
         } else if let CType::Pointer(CType::Struct(tag_id)) = base_type {
             let struct_data = self.scope.get_struct_by_id(*tag_id);
-            let field_name = &expr.node.identifier.node.name;
             let field = struct_data.fields.get(field_name);
 
             match field {
                 None => Err(IRGenerationError {
                     err: IRGenerationErrorType::InvalidStructMember(
-                        field_name.clone(),
-                        base_type.clone(),
+                        field_name.clone().into(),
+                        base_type.display_type(&self.scope),
                     ),
                     span: expr.node.identifier.span,
                 }),
@@ -2052,7 +2112,7 @@ impl TopLevelBuilder<'_> {
                     }),
                     MemberOperator::Direct => Err(IRGenerationError {
                         err: IRGenerationErrorType::AttemptToAccessPointerToStructWithDot(
-                            base_type.clone(),
+                            base_type.display_type(&self.scope),
                         ),
                         span: expr.span,
                     }),
@@ -2060,7 +2120,10 @@ impl TopLevelBuilder<'_> {
             }
         } else {
             Err(IRGenerationError {
-                err: IRGenerationErrorType::AttemptToAccessNonStruct(base_type.clone()),
+                err: IRGenerationErrorType::AttemptToAccessNonStruct(
+                    field_name.clone().into(),
+                    base_type.display_type(&self.scope),
+                ),
                 span: expr.span,
             })
         }
@@ -2543,7 +2606,10 @@ impl TopLevelBuilder<'_> {
 
                     let common_type = CType::get_common(&lhs_type, &rhs_type).map_err(|err| {
                         IRGenerationError {
-                            err: err.into(),
+                            err: IRGenerationErrorType::InvalidCoercion(
+                                err.0.display_type(&self.scope),
+                                err.1.display_type(&self.scope),
+                            ),
                             span: expr.span,
                         }
                     })?;

@@ -146,10 +146,10 @@ fn stack_size_recalculator(func: &mut IRTopLevel) -> usize {
     let mut counter = 0;
     let mut check = |val: &mut IRValue| {
         // TODO: take into account sized values
-        if let IRValue::Stack(val) = val {
-            if *val > counter {
-                counter = *val;
-            }
+        if let IRValue::Stack(val) = val
+            && *val > counter
+        {
+            counter = *val;
         }
     };
     apply_to_all_ir_values(func, &mut check);

@@ -6,8 +6,8 @@ use clap::Parser;
 use codegen::CodeGen;
 use include_dir::{Dir, include_dir};
 use ir::print_ir;
-use std::process;
 use std::sync::LazyLock;
+use std::{fs, process};
 
 mod builder;
 mod c_compiler;
@@ -55,7 +55,13 @@ struct Args {
 }
 
 fn main() {
-    let c_source = std::fs::read_to_string(&ARGS.filename).expect("Unable to read input file");
+    let c_source = match fs::read_to_string(&ARGS.filename) {
+        Err(err) => {
+            eprintln!("File '{}' failed to open: {}", ARGS.filename, err);
+            process::exit(1);
+        }
+        Ok(a) => a,
+    };
     if ARGS.verbose {
         println!("-- C SOURCE (pre preprocessor)");
         println!("{c_source}\n");
