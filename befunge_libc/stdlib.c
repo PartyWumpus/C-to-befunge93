@@ -1,3 +1,8 @@
+void exit(int status) {
+  // this should match the POST_INIT_PRELUDE
+  asm("55+ , 20g . @" : : ["r20" (status)]);
+}
+
 // dumb stupid idiot malloc
 void *malloc(int size) {
   static int position = '!';

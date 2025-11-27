@@ -1919,9 +1919,7 @@ impl TopLevelBuilder<'_> {
                 let inits = if let Some(init) = &decl.node.initializer {
                     let init_info = self.parse_initializer(init)?;
                     self.flatten_and_type_check_initializer_info(init_info, &ctype)?
-                } else if self.is_const
-                    && !matches!(info.duration, StorageDuration::Extern)
-                {
+                } else if self.is_const && !matches!(info.duration, StorageDuration::Extern) {
                     ctype.zero_init()
                 } else {
                     return Ok(());
