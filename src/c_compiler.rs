@@ -369,6 +369,10 @@ impl CType {
         matches!(self, Self::Pointer(..) | Self::Array(..))
     }
 
+    pub const fn is_function_pointer(&self) -> bool {
+        matches!(self, Self::Pointer(Self::Function(..)))
+    }
+
     pub fn zero_init(&self) -> Vec<(IRValue, usize)> {
         match self {
             Self::Pointer(..)
@@ -428,7 +432,7 @@ impl CType {
 
     fn display_type_inner(&self, scope: &ScopeInfo, inner: &str) -> String {
         match self {
-            Self::Bool => format!("_Bool {inner}"),
+            Self::Bool => format!("bool {inner}"),
 
             Self::UnsignedChar => format!("unsigned char {inner}"),
             Self::SignedChar => format!("signed char {inner}"),
@@ -872,19 +876,40 @@ impl CType {
                 TypeSpecifier::Long,
                 TypeSpecifier::Int,
             ] => Self::SignedLong,
-            [TypeSpecifier::Unsigned] | [TypeSpecifier::Unsigned, TypeSpecifier::Int] => {
-                Self::UnsignedInt
-            }
+            [TypeSpecifier::Unsigned]
+            | [TypeSpecifier::Unsigned, TypeSpecifier::Int]
+            | [TypeSpecifier::Int, TypeSpecifier::Unsigned] => Self::UnsignedInt,
             [TypeSpecifier::Unsigned, TypeSpecifier::Long]
+            | [TypeSpecifier::Long, TypeSpecifier::Unsigned]
             | [
                 TypeSpecifier::Long,
                 TypeSpecifier::Int,
                 TypeSpecifier::Unsigned,
             ]
             | [
+                TypeSpecifier::Long,
+                TypeSpecifier::Unsigned,
+                TypeSpecifier::Int,
+            ]
+            | [
                 TypeSpecifier::Unsigned,
                 TypeSpecifier::Long,
                 TypeSpecifier::Int,
+            ]
+            | [
+                TypeSpecifier::Unsigned,
+                TypeSpecifier::Int,
+                TypeSpecifier::Long,
+            ]
+            | [
+                TypeSpecifier::Int,
+                TypeSpecifier::Long,
+                TypeSpecifier::Unsigned,
+            ]
+            | [
+                TypeSpecifier::Int,
+                TypeSpecifier::Unsigned,
+                TypeSpecifier::Long,
             ] => Self::UnsignedLong,
 
             [TypeSpecifier::Double] => Self::Double,
@@ -1783,6 +1808,7 @@ impl TopLevelBuilder<'_> {
                         if self.file_builder.scope.var_map.contains_key(&name) {
                             let var = self.file_builder.scope.var_map.get(&name).unwrap();
                             match var {
+                                // FIXME: this should now be doable, look inside parse_identifier
                                 (None, CType::Function(..)) => Err(IRGenerationError {
                                     err: IRGenerationErrorType::FunctionUsedAsVariable,
                                     span: decl.node.declarator.span,
@@ -1959,22 +1985,7 @@ impl TopLevelBuilder<'_> {
             Expression::Constant(constant) => Out::Plain(self.parse_constant(constant)?),
             Expression::UnaryOperator(unary_expr) => self.parse_unary_expression(unary_expr)?,
             Expression::BinaryOperator(binary_expr) => self.parse_binary_expression(binary_expr)?,
-            Expression::Identifier(ident) => match self.scope.var_map.get(&ident.node.name) {
-                None => {
-                    return Err(IRGenerationError {
-                        err: IRGenerationErrorType::UnknownIdentifier,
-                        span: ident.span,
-                    });
-                }
-                Some((Some(loc), ctype)) => Out::Plain((loc.clone(), ctype.clone())),
-                Some((None, CType::Function(_, _))) => {
-                    return Err(IRGenerationError {
-                        err: IRGenerationErrorType::FunctionUsedAsVariable,
-                        span: ident.span,
-                    });
-                }
-                Some((None, _)) => unreachable!(),
-            },
+            Expression::Identifier(ident) => Out::Plain(self.parse_identifier(ident)?),
             Expression::Call(call_expr) => Out::Plain(self.parse_call(call_expr)?),
 
             // Type stuff
@@ -2301,6 +2312,10 @@ impl TopLevelBuilder<'_> {
         match expr.node.operator.node {
             UnaryOperator::Address => match self.parse_expression_inner(&expr.node.operand)? {
                 Out::Plain((val, ctype)) => {
+                    if ctype.is_function_pointer() {
+                        return Ok(Out::Plain((val, ctype)));
+                    }
+
                     let ptrtype = CType::Pointer(Box::new(ctype));
                     let out = self.generate_pseudo(ptrtype.sizeof(&self.scope));
                     self.push(IROp::AddressOf(val, out.clone()));
@@ -2312,6 +2327,14 @@ impl TopLevelBuilder<'_> {
                     subtype,
                     offset,
                 } => {
+                    if subtype.is_function_pointer() {
+                        return Ok(Out::SubObject {
+                            base,
+                            subtype,
+                            offset,
+                        });
+                    }
+
                     let out = self.generate_pseudo(subtype.sizeof(&self.scope));
                     self.push(IROp::AddressOf(base, out.clone()));
                     self.push(IROp::AddPtr(
@@ -2325,6 +2348,10 @@ impl TopLevelBuilder<'_> {
             },
             UnaryOperator::Indirection => {
                 let (val, val_type) = self.parse_expression(&expr.node.operand)?;
+                if val_type.is_function_pointer() {
+                    return Ok(Out::Plain((val, val_type)));
+                }
+
                 match val_type {
                     CType::Pointer(pointee_type) | CType::Array(pointee_type, _) => {
                         // will be dereferenced laterTM
@@ -2898,6 +2925,27 @@ impl TopLevelBuilder<'_> {
             }
         }
         Ok(ExpressionOutput::Plain((out, out_type)))
+    }
+
+    fn parse_identifier(
+        &mut self,
+        ident: &Node<Identifier>,
+    ) -> Result<(IRValue, CType), IRGenerationError> {
+        let x = self.scope.var_map.get(&ident.node.name);
+        match x {
+            None => Err(IRGenerationError {
+                err: IRGenerationErrorType::UnknownIdentifier,
+                span: ident.span,
+            }),
+            Some((Some(loc), ctype)) => Ok((loc.clone(), ctype.clone())),
+            Some((None, ctype @ CType::Function(..))) => {
+                let ctype = ctype.clone();
+                let out = self.generate_pseudo(1);
+                self.push(IROp::GetIdOfFunction(ident.node.name.clone(), out.clone()));
+                Ok((out, CType::Pointer(Box::new(ctype))))
+            }
+            Some((None, _)) => unreachable!(),
+        }
     }
 
     #[expect(clippy::match_same_arms)]

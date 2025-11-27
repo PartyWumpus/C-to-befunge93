@@ -16,6 +16,7 @@ fn apply_to_all_ir_values(ops: &mut IRTopLevel, func: &mut impl FnMut(&mut IRVal
     for i in 0..ops.ops.len() {
         match &mut ops.ops[i] {
             IROp::Return(o) => func(o),
+            IROp::GetIdOfFunction(_, out) => func(out),
             IROp::Call(_, ops) => ops.iter_mut().for_each(|x| func(&mut x.0)),
             IROp::CondBranch(_, _, a) => func(a),
             IROp::AddressOf(a, out) => {

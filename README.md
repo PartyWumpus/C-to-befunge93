@@ -57,6 +57,7 @@ None of these are full architectural failures so will eventually be resolved.
 - Errors containing types do not use the canonical names (`Pointer(Int)` instead of `int *`)
 - Struct support is very incomplete
 - Some invalid lvalues are incorrectly allowed (stuff like `func().a = 5`)
+- Function pointers can't be used (but can be constructed)
 - Type qualifiers like `const`, `volatile` and `restrict` are not supported
 - Bitshifts and bitwise operations are wrong (i think?) for negative values
 - `malloc` is just a dumb linear allocator with `free()` being a no-op

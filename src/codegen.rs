@@ -100,6 +100,14 @@ impl CodeGen {
                     self.builder
                         .call(self.function_map[&func.name], *called_func, vals);
                 }
+                IROp::GetIdOfFunction(called_func_name, out) => {
+                    // TODO: improve error on unknown func call
+                    let Some(called_func) = self.function_map.get(called_func_name) else {
+                        panic!("Function '{called_func_name}' not found");
+                    };
+
+                    self.builder.copy(&IRValue::int(called_func.id), out, 1);
+                }
                 IROp::Return(val) => {
                     self.builder.return_(val);
                 }
