@@ -28,8 +28,8 @@ use lang_c::{
         IfStatement, Initializer, Integer, IntegerBase, IntegerSize, IntegerSuffix, Label,
         LabeledStatement, MemberExpression, MemberOperator, PointerDeclarator, SizeOfTy, SizeOfVal,
         SpecifierQualifier, Statement, StorageClassSpecifier, StructDeclaration, StructKind,
-        SwitchStatement, TypeName, TypeSpecifier, UnaryOperator, UnaryOperatorExpression,
-        WhileStatement,
+        StructType, SwitchStatement, TypeName, TypeSpecifier, UnaryOperator,
+        UnaryOperatorExpression, WhileStatement,
     },
     driver::{Flavor, parse_preprocessed},
     span::{Node, Span},
@@ -47,8 +47,10 @@ pub enum IRGenerationErrorType {
     IRTypeConversionError(#[from] IRTypeConversionError),
     #[error("Invalid coersion between {0} and {1}")]
     InvalidCoercion(Box<str>, Box<str>),
-    #[error("Unknown type: {0:?}")]
-    InvalidType(Box<[TypeSpecifier]>),
+    #[error("Unknown type")]
+    TODOUnknownType,
+    #[error("Invalid declaration specifier combination")]
+    InvalidTypeSpecifier,
     #[error("Unknown struct: {0}")]
     InvalidStructType(Box<str>),
     #[error("Cannot dereference non-pointers")]
@@ -124,6 +126,10 @@ pub enum IRGenerationErrorType {
     TODOInline,
     #[error("Noreturn is not yet supported")]
     TODONoreturn,
+    #[error("Typeof is not yet supported")]
+    TODOTypeof,
+    #[error("Anonymous structs are not yet supported")]
+    TODOAnonymousStructs,
 
     // switch case errors
     #[error("Breaks can only appear inside loops or switch case statements")]
@@ -144,6 +150,8 @@ pub enum IRGenerationErrorType {
     AttemptToAccessNonStruct(Box<str>, Box<str>),
     #[error("'{0}' is not a member of '{1}'")]
     InvalidStructMember(Box<str>, Box<str>),
+    #[error("Struct has no members")]
+    StructWithoutMembers,
 
     // TODO: store the span of the location of the first declaration!
     #[error("Type '{0}' does not match earlier defined '{1}'")]
@@ -853,180 +861,220 @@ fn parse_declarator_name(decl: &Node<Declarator>) -> Result<String, IRGeneration
     }
 }
 
+enum IntType {
+    Char,
+    Int,
+    Long,
+    LongLong,
+}
+
+enum Sign {
+    Unsigned,
+    Signed,
+    None,
+}
+
 impl CType {
-    // TODO: okay so this is stupid
+    #[expect(clippy::match_same_arms)]
     fn from_specifiers(
-        types: &[&Node<TypeSpecifier>],
+        ctypes: &[&Node<TypeSpecifier>],
         scope: &mut ScopeInfo,
         is_statement: bool,
     ) -> Result<Self, IRGenerationError> {
-        let ctypes = types.iter().map(|x| x.node.clone()).collect::<Vec<_>>();
-        Ok(match &ctypes[..] {
-            [] => unreachable!("No type specifiers?"),
-            [TypeSpecifier::Signed, TypeSpecifier::Char]
-            | [TypeSpecifier::Char, TypeSpecifier::Signed] => Self::SignedChar,
-            [TypeSpecifier::Unsigned, TypeSpecifier::Char]
-            | [TypeSpecifier::Char, TypeSpecifier::Unsigned] => Self::UnsignedChar,
-            [TypeSpecifier::Char] => Self::Char,
+        assert!(!ctypes.is_empty());
 
-            [TypeSpecifier::Int | TypeSpecifier::Signed]
-            | [TypeSpecifier::Int, TypeSpecifier::Signed]
-            | [TypeSpecifier::Signed, TypeSpecifier::Int] => Self::SignedInt,
-            [TypeSpecifier::Long]
-            | [TypeSpecifier::Long, TypeSpecifier::Int]
-            | [TypeSpecifier::Signed, TypeSpecifier::Long]
-            | [TypeSpecifier::Long, TypeSpecifier::Signed]
-            | [
-                TypeSpecifier::Int | TypeSpecifier::Signed,
-                TypeSpecifier::Long,
-            ]
-            | [
-                TypeSpecifier::Long,
-                TypeSpecifier::Int,
-                TypeSpecifier::Signed,
-            ]
-            | [
-                TypeSpecifier::Long,
-                TypeSpecifier::Signed,
-                TypeSpecifier::Int,
-            ]
-            | [
-                TypeSpecifier::Signed,
-                TypeSpecifier::Long,
-                TypeSpecifier::Int,
-            ] => Self::SignedLong,
-
-            [TypeSpecifier::Unsigned]
-            | [TypeSpecifier::Unsigned, TypeSpecifier::Int]
-            | [TypeSpecifier::Int, TypeSpecifier::Unsigned] => Self::UnsignedInt,
-            [TypeSpecifier::Unsigned, TypeSpecifier::Long]
-            | [TypeSpecifier::Long, TypeSpecifier::Unsigned]
-            | [
-                TypeSpecifier::Long,
-                TypeSpecifier::Int,
-                TypeSpecifier::Unsigned,
-            ]
-            | [
-                TypeSpecifier::Long,
-                TypeSpecifier::Unsigned,
-                TypeSpecifier::Int,
-            ]
-            | [
-                TypeSpecifier::Unsigned,
-                TypeSpecifier::Long,
-                TypeSpecifier::Int,
-            ]
-            | [
-                TypeSpecifier::Unsigned,
-                TypeSpecifier::Int,
-                TypeSpecifier::Long,
-            ]
-            | [
-                TypeSpecifier::Int,
-                TypeSpecifier::Long,
-                TypeSpecifier::Unsigned,
-            ]
-            | [
-                TypeSpecifier::Int,
-                TypeSpecifier::Unsigned,
-                TypeSpecifier::Long,
-            ] => Self::UnsignedLong,
-
-            [TypeSpecifier::Double] => Self::Double,
-            [TypeSpecifier::Bool] => Self::Bool,
-            [TypeSpecifier::Void] => Self::Void,
-            [TypeSpecifier::Struct(struct_data)] => {
-                assert_eq!(struct_data.node.kind.node, StructKind::Struct);
-
-                let name = struct_data
-                    .node
-                    .identifier
-                    .clone()
-                    .expect("no anon structs for now")
-                    .node
-                    .name;
-
-                Self::Struct(match &struct_data.node.declarations {
-                    // means it's just a definition not a declaration
-                    None => match scope.tag_map.get(&name) {
-                        // if it has not been declared yet then just insert
-                        None => {
-                            if is_statement {
-                                scope.insert_incomplete_struct(name)
-                            } else {
-                                return Err(IRGenerationError {
-                                    err: IRGenerationErrorType::InvalidStructType(name.into()),
-                                    span: struct_data.span,
-                                });
-                            }
-                        }
-                        Some(TagData {
-                            source_depth,
-                            tag_type,
-                            tag_id,
-                        }) => {
-                            // it has been declared earlier, but in a higher scope, so overwrite
-                            if is_statement && *source_depth != scope.depth {
-                                scope.insert_incomplete_struct(name)
-                            } else {
-                                assert_eq!(*tag_type, TagType::Struct);
-                                *tag_id
-                            }
-                        }
-                    },
-                    // it's a definition
-                    Some(decls) => {
-                        assert_ne!(decls.len(), 0, "struct with no fields");
-                        let mut struct_data = StructData::new(name.clone());
-                        for decl in decls {
-                            match &decl.node {
-                                StructDeclaration::StaticAssert(..) => {
-                                    return Err(IRGenerationError {
-                                        err: IRGenerationErrorType::TODOAbstractDeclarator,
-                                        span: decl.span,
-                                    });
-                                }
-                                StructDeclaration::Field(field) => {
-                                    let ctype =
-                                        Self::from_qualifiers(&field.node.specifiers, scope)?;
-                                    assert_eq!(field.node.declarators.len(), 1);
-                                    assert!(field.node.declarators[0].node.bit_width.is_none());
-                                    let declarator =
-                                        &field.node.declarators[0].node.declarator.clone().unwrap();
-                                    let mut ctype =
-                                        Self::from_declarator(declarator, &ctype, scope)?;
-                                    if let Self::Array(inner, length) = ctype {
-                                        ctype = Self::ImmediateArray(inner, length);
-                                    }
-                                    let sizeof = ctype.sizeof(scope);
-                                    struct_data.fields.insert(
-                                        parse_declarator_name(declarator)?,
-                                        (ctype, struct_data.size),
-                                    );
-                                    struct_data.size += sizeof;
-                                }
-                            }
-                        }
-                        scope.insert_struct(name, struct_data)
-                    }
-                })
-            }
-            _ => {
-                if types.is_empty() {
-                    unreachable!()
-                } else {
-                    let (start, end) = (types.first().unwrap().span, types.last().unwrap().span);
-                    let span = lang_c::span::Span {
-                        start: start.start,
-                        end: end.end,
-                    };
-                    return Err(IRGenerationError {
-                        err: IRGenerationErrorType::InvalidType(ctypes.into()),
-                        span,
-                    });
+        if ctypes.len() == 1 {
+            return match &ctypes[0].node {
+                TypeSpecifier::Void => Ok(Self::Void),
+                TypeSpecifier::Char => Ok(Self::Char),
+                TypeSpecifier::Short => Err(IRGenerationErrorType::TODOUnknownType),
+                TypeSpecifier::Int => Ok(Self::SignedInt),
+                TypeSpecifier::Long => Ok(Self::SignedLong),
+                TypeSpecifier::Float => Err(IRGenerationErrorType::TODOUnknownType),
+                TypeSpecifier::Double => Ok(Self::Double),
+                TypeSpecifier::Signed => Ok(Self::SignedInt),
+                TypeSpecifier::Unsigned => Ok(Self::UnsignedInt),
+                TypeSpecifier::Bool => Ok(Self::Bool),
+                TypeSpecifier::Complex => Err(IRGenerationErrorType::TODOImaginary),
+                TypeSpecifier::Atomic(..) => Err(IRGenerationErrorType::TODOUnknownType),
+                TypeSpecifier::Enum(..) => Err(IRGenerationErrorType::TODOUnknownType),
+                TypeSpecifier::TypedefName(..) => Err(IRGenerationErrorType::TODOTypedef),
+                TypeSpecifier::TypeOf(..) => Err(IRGenerationErrorType::TODOTypeof),
+                TypeSpecifier::TS18661Float(..) => Err(IRGenerationErrorType::TODOUnknownType),
+                TypeSpecifier::Struct(struct_data) => {
+                    Ok(Self::parse_struct_data(struct_data, scope, is_statement)?)
                 }
             }
+            .map_err(|err| IRGenerationError {
+                err,
+                span: ctypes[0].span,
+            });
+        }
+        // it's an integer or invalid
+
+        let mut int_type = None;
+        let mut sign = Sign::None;
+        let mut int_count = 0;
+
+        for x in ctypes {
+            match &x.node {
+                TypeSpecifier::Char => match int_type {
+                    None => {
+                        int_type = Some(IntType::Char);
+                        Ok(())
+                    }
+                    Some(_) => Err(IRGenerationErrorType::InvalidTypeSpecifier),
+                },
+                TypeSpecifier::Short => Err(IRGenerationErrorType::TODOUnknownType),
+                TypeSpecifier::Int => {
+                    int_count += 1;
+                    assert!(int_count <= 1);
+                    match int_type {
+                        None => {
+                            int_type = Some(IntType::Int);
+                            Ok(())
+                        }
+                        Some(IntType::Int) => Err(IRGenerationErrorType::InvalidTypeSpecifier),
+                        Some(ty) => {
+                            int_type = Some(ty);
+                            Ok(())
+                        }
+                    }
+                }
+                TypeSpecifier::Long => match int_type {
+                    None | Some(IntType::Int) => {
+                        int_type = Some(IntType::Long);
+                        Ok(())
+                    }
+                    Some(IntType::Long) => {
+                        int_type = Some(IntType::LongLong);
+                        Ok(())
+                    }
+                    Some(_) => Err(IRGenerationErrorType::InvalidTypeSpecifier),
+                },
+                TypeSpecifier::Signed => match sign {
+                    Sign::None => {
+                        sign = Sign::Signed;
+                        Ok(())
+                    }
+                    _ => Err(IRGenerationErrorType::InvalidTypeSpecifier),
+                },
+                TypeSpecifier::Unsigned => match sign {
+                    Sign::None => {
+                        sign = Sign::Unsigned;
+                        Ok(())
+                    }
+                    _ => Err(IRGenerationErrorType::InvalidTypeSpecifier),
+                },
+
+                TypeSpecifier::Complex => Err(IRGenerationErrorType::TODOImaginary),
+                _ => Err(IRGenerationErrorType::InvalidTypeSpecifier),
+            }
+            .map_err(|err| IRGenerationError { err, span: x.span })?;
+        }
+
+        Ok(match (int_type.unwrap_or(IntType::Int), sign) {
+            (IntType::Char, Sign::None) => Self::Char,
+            (IntType::Char, Sign::Unsigned) => Self::UnsignedChar,
+            (IntType::Char, Sign::Signed) => Self::SignedChar,
+
+            (IntType::Int, Sign::Unsigned) => Self::UnsignedInt,
+            (IntType::Int, Sign::Signed | Sign::None) => Self::SignedInt,
+
+            (IntType::Long, Sign::Unsigned) => Self::UnsignedLong,
+            (IntType::Long, Sign::Signed | Sign::None) => Self::SignedLong,
+
+            (IntType::LongLong, Sign::Unsigned) => todo!(),
+            (IntType::LongLong, Sign::Signed | Sign::None) => todo!(),
         })
+    }
+
+    fn parse_struct_data(
+        struct_data: &Node<StructType>,
+        scope: &mut ScopeInfo,
+        is_statement: bool,
+    ) -> Result<Self, IRGenerationError> {
+        assert_eq!(struct_data.node.kind.node, StructKind::Struct);
+
+        let name: &str = &struct_data
+            .node
+            .identifier
+            .as_ref()
+            .ok_or(IRGenerationError {
+                err: IRGenerationErrorType::TODOAnonymousStructs,
+                span: struct_data.span,
+            })?
+            .node
+            .name;
+
+        let tag_id = match &struct_data.node.declarations {
+            // means it's just a definition not a declaration
+            None => match scope.tag_map.get(name) {
+                // if it has not been declared yet then just insert
+                None => {
+                    if is_statement {
+                        scope.insert_incomplete_struct(name.to_string())
+                    } else {
+                        return Err(IRGenerationError {
+                            err: IRGenerationErrorType::InvalidStructType(name.into()),
+                            span: struct_data.span,
+                        });
+                    }
+                }
+                Some(TagData {
+                    source_depth,
+                    tag_type,
+                    tag_id,
+                }) => {
+                    // it has been declared earlier, but in a higher scope, so overwrite
+                    if is_statement && *source_depth != scope.depth {
+                        scope.insert_incomplete_struct(name.to_string())
+                    } else {
+                        assert_eq!(*tag_type, TagType::Struct);
+                        *tag_id
+                    }
+                }
+            },
+            // it's a definition
+            Some(decls) => {
+                if decls.is_empty() {
+                    return Err(IRGenerationError {
+                        err: IRGenerationErrorType::StructWithoutMembers,
+                        span: struct_data.span,
+                    });
+                }
+                let mut struct_data = StructData::new(name.to_string());
+                for decl in decls {
+                    match &decl.node {
+                        StructDeclaration::StaticAssert(..) => {
+                            return Err(IRGenerationError {
+                                err: IRGenerationErrorType::TODOAbstractDeclarator,
+                                span: decl.span,
+                            });
+                        }
+                        StructDeclaration::Field(field) => {
+                            let ctype = Self::from_qualifiers(&field.node.specifiers, scope)?;
+                            assert_eq!(field.node.declarators.len(), 1);
+                            assert!(field.node.declarators[0].node.bit_width.is_none());
+                            let declarator =
+                                &field.node.declarators[0].node.declarator.clone().unwrap();
+                            let mut ctype = Self::from_declarator(declarator, &ctype, scope)?;
+                            if let Self::Array(inner, length) = ctype {
+                                ctype = Self::ImmediateArray(inner, length);
+                            }
+                            let sizeof = ctype.sizeof(scope);
+                            struct_data.fields.insert(
+                                parse_declarator_name(declarator)?,
+                                (ctype, struct_data.size),
+                            );
+                            struct_data.size += sizeof;
+                        }
+                    }
+                }
+                scope.insert_struct(name.to_string(), struct_data)
+            }
+        };
+        Ok(Self::Struct(tag_id))
     }
 
     fn from_qualifiers(
