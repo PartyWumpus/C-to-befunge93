@@ -361,7 +361,13 @@ impl CType {
     pub const fn is_integer(&self) -> bool {
         matches!(
             self,
-            Self::SignedInt | Self::SignedLong | Self::UnsignedInt | Self::UnsignedLong
+            Self::SignedInt
+                | Self::SignedLong
+                | Self::SignedChar
+                | Self::UnsignedInt
+                | Self::UnsignedLong
+                | Self::UnsignedChar
+                | Self::Char
         )
     }
 
@@ -408,6 +414,13 @@ impl CType {
             return Ok(type1.clone());
         }
 
+        match (type1, type2) {
+            (Self::Pointer(Self::Void), Self::Pointer(..))
+            | (Self::Pointer(..), Self::Pointer(Self::Void)) => {
+                return Ok(Self::Pointer(Box::new(Self::Void)));
+            }
+            _ => (),
+        }
         // TODO: array types!
 
         // If one is a pointer, they must be the same (already checked) or one must be an integer
@@ -841,6 +854,7 @@ fn parse_declarator_name(decl: &Node<Declarator>) -> Result<String, IRGeneration
 }
 
 impl CType {
+    // TODO: okay so this is stupid
     fn from_specifiers(
         types: &[&Node<TypeSpecifier>],
         scope: &mut ScopeInfo,
@@ -849,14 +863,19 @@ impl CType {
         let ctypes = types.iter().map(|x| x.node.clone()).collect::<Vec<_>>();
         Ok(match &ctypes[..] {
             [] => unreachable!("No type specifiers?"),
-            [TypeSpecifier::Signed, TypeSpecifier::Char] => Self::SignedChar,
-            [TypeSpecifier::Unsigned, TypeSpecifier::Char] => Self::UnsignedChar,
+            [TypeSpecifier::Signed, TypeSpecifier::Char]
+            | [TypeSpecifier::Char, TypeSpecifier::Signed] => Self::SignedChar,
+            [TypeSpecifier::Unsigned, TypeSpecifier::Char]
+            | [TypeSpecifier::Char, TypeSpecifier::Unsigned] => Self::UnsignedChar,
             [TypeSpecifier::Char] => Self::Char,
 
             [TypeSpecifier::Int | TypeSpecifier::Signed]
+            | [TypeSpecifier::Int, TypeSpecifier::Signed]
             | [TypeSpecifier::Signed, TypeSpecifier::Int] => Self::SignedInt,
             [TypeSpecifier::Long]
             | [TypeSpecifier::Long, TypeSpecifier::Int]
+            | [TypeSpecifier::Signed, TypeSpecifier::Long]
+            | [TypeSpecifier::Long, TypeSpecifier::Signed]
             | [
                 TypeSpecifier::Int | TypeSpecifier::Signed,
                 TypeSpecifier::Long,
@@ -876,6 +895,7 @@ impl CType {
                 TypeSpecifier::Long,
                 TypeSpecifier::Int,
             ] => Self::SignedLong,
+
             [TypeSpecifier::Unsigned]
             | [TypeSpecifier::Unsigned, TypeSpecifier::Int]
             | [TypeSpecifier::Int, TypeSpecifier::Unsigned] => Self::UnsignedInt,
@@ -1876,7 +1896,7 @@ impl TopLevelBuilder<'_> {
                     let init_info = builder.parse_initializer(init)?;
                     builder.flatten_and_type_check_initializer_info(init_info, &ctype)?
                 } else {
-                    vec![(IRValue::int(0), 1)]
+                    ctype.zero_init()
                 };
 
                 for (i, init) in inits.into_iter().enumerate() {
@@ -1899,8 +1919,10 @@ impl TopLevelBuilder<'_> {
                 let inits = if let Some(init) = &decl.node.initializer {
                     let init_info = self.parse_initializer(init)?;
                     self.flatten_and_type_check_initializer_info(init_info, &ctype)?
-                } else if self.is_const {
-                    vec![(IRValue::int(0), 1)]
+                } else if self.is_const
+                    && !matches!(info.duration, StorageDuration::Extern)
+                {
+                    ctype.zero_init()
                 } else {
                     return Ok(());
                 };
@@ -2240,7 +2262,10 @@ impl TopLevelBuilder<'_> {
             .arguments
             .iter()
             .map(|expr| self.parse_expression(expr))
-            .collect::<Result<Vec<(IRValue, CType)>, _>>()?;
+            .collect::<Result<Vec<(IRValue, CType)>, _>>()?
+            .into_iter()
+            .map(|val| self.attempt_array_decay(val))
+            .collect::<Vec<_>>();
 
         match &expr.node.callee.node {
             Expression::Identifier(ident) => {
