@@ -448,7 +448,7 @@ impl CType {
             };
         }
 
-        Ok(Self::SignedLong)
+        Ok(Self::SignedInt)
     }
 
     fn display_type_inner(&self, scope: &ScopeInfo, inner: &str) -> String {
@@ -2215,13 +2215,13 @@ impl TopLevelBuilder<'_> {
         let (expr, expr_type) = self.parse_expression(&cast.node.expression)?;
         let (expr, expr_type) = self.attempt_array_decay((expr, expr_type));
         let out_type = self.parse_type_name(&cast.node.type_name)?;
-        let out = self.generate_pseudo(out_type.sizeof(&self.scope));
 
-        self.push(IROp::Cast(
-            IRType::from_ctype(&out_type, &self.scope),
-            (expr, IRType::from_ctype(&expr_type, &self.scope)),
-            out.clone(),
-        ));
+        let out = self
+            .convert_to((expr, expr_type), &out_type)
+            .map_err(|err| IRGenerationError {
+                span: cast.span,
+                err,
+            })?;
         Ok((out, out_type))
     }
 
@@ -3091,19 +3091,24 @@ impl TopLevelBuilder<'_> {
         ctype: &CType,
     ) -> Result<IRValue, IRGenerationErrorType> {
         if input.1 == *ctype {
-            Ok(input.0)
-        } else {
-            let out = self.generate_pseudo(ctype.sizeof(&self.scope));
-            let input = self.attempt_array_decay(input);
-
-            // TODO: check cast is valid
-            self.push(IROp::Cast(
-                IRType::from_ctype(ctype, &self.scope),
-                (input.0, IRType::from_ctype(&input.1, &self.scope)),
-                out.clone(),
-            ));
-            Ok(out)
+            return Ok(input.0);
         }
+
+        if matches!(ctype, CType::Void) {
+            // NOTE: this is a garbage value
+            return Ok(input.0);
+        }
+
+        let out = self.generate_pseudo(ctype.sizeof(&self.scope));
+        let input = self.attempt_array_decay(input);
+
+        // TODO: check cast is valid
+        self.push(IROp::Cast(
+            IRType::from_ctype(ctype, &self.scope),
+            (input.0, IRType::from_ctype(&input.1, &self.scope)),
+            out.clone(),
+        ));
+        Ok(out)
     }
 
     fn attempt_array_decay(&mut self, val: (IRValue, CType)) -> (IRValue, CType) {
