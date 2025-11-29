@@ -57,6 +57,9 @@ impl IRType {
             CType::UnsignedChar => Self::Unsigned(8),
             CType::Char | CType::SignedChar => Self::Signed(8),
 
+            CType::UnsignedShort => Self::Unsigned(16),
+            CType::SignedShort => Self::Signed(16),
+
             CType::UnsignedInt => Self::Unsigned(32),
             CType::SignedInt => Self::Signed(32),
 
@@ -81,9 +84,11 @@ impl CType {
             Self::Pointer(..)
             | Self::Char
             | Self::SignedChar
+            | Self::SignedShort
             | Self::SignedInt
             | Self::SignedLong
             | Self::UnsignedChar
+            | Self::UnsignedShort
             | Self::UnsignedInt
             | Self::UnsignedLong
             | Self::Bool

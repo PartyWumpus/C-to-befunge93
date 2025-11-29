@@ -93,6 +93,8 @@ pub enum IRGenerationErrorType {
     ExcessElementsInInitializer,
     #[error("Char literals must be one character (or an escape sequence)")]
     LongCharLiteral,
+    #[error("Cannot specify multiple storage classes")]
+    MultipleStorageClasses,
 
     #[error("INTERNAL: A non func declarator in the func declarator parser? type: {0:?}")]
     INTERNALNonFuncDeclaratorInFuncDeclaratorParser(PointerDeclarator),
@@ -313,9 +315,11 @@ pub enum CType {
     SignedChar,
     Char,
 
+    SignedShort,
     SignedInt,
     SignedLong,
 
+    UnsignedShort,
     UnsignedInt,
     UnsignedLong,
 
@@ -342,9 +346,11 @@ impl PartialEq for CType {
             (Self::SignedChar, Self::SignedChar) => true,
             (Self::Char, Self::Char) => true,
 
+            (Self::SignedShort, Self::SignedShort) => true,
             (Self::SignedInt, Self::SignedInt) => true,
             (Self::SignedLong, Self::SignedLong) => true,
 
+            (Self::UnsignedShort, Self::UnsignedShort) => true,
             (Self::UnsignedInt, Self::UnsignedInt) => true,
             (Self::UnsignedLong, Self::UnsignedLong) => true,
 
@@ -393,9 +399,11 @@ impl CType {
             | Self::Bool
             | Self::Char
             | Self::SignedChar
+            | Self::SignedShort
             | Self::SignedInt
             | Self::SignedLong
             | Self::UnsignedChar
+            | Self::UnsignedShort
             | Self::UnsignedInt
             | Self::UnsignedLong => {
                 vec![(IRValue::int(0), 1)]
@@ -459,9 +467,11 @@ impl CType {
             Self::SignedChar => format!("signed char {inner}"),
             Self::Char => format!("char {inner}"),
 
+            Self::SignedShort => format!("short {inner}"),
             Self::SignedInt => format!("int {inner}"),
             Self::SignedLong => format!("long {inner}"),
 
+            Self::UnsignedShort => format!("unsigned short {inner}"),
             Self::UnsignedInt => format!("unsigned int {inner}"),
             Self::UnsignedLong => format!("unsigned long {inner}"),
 
@@ -496,6 +506,21 @@ impl CType {
         }
         .trim()
         .to_string()
+    }
+
+    pub fn function<I: IntoIterator<Item = Self>>(args: I, return_type: Self) -> Self {
+        Self::Function(
+            args.into_iter()
+                // decay arrays in args into pointers
+                .map(|ctype| match ctype {
+                    Self::Array(inner, _) => *inner,
+                    //Self::ImmediateArray(..) => panic!("immediate array in function args"),
+                    //Self::Void => panic!("void in function args"),
+                    ctype => ctype,
+                })
+                .collect(),
+            Box::new(return_type),
+        )
     }
 
     pub fn display_type(&self, scope: &ScopeInfo) -> Box<str> {
@@ -863,6 +888,7 @@ fn parse_declarator_name(decl: &Node<Declarator>) -> Result<String, IRGeneration
 
 enum IntType {
     Char,
+    Short,
     Int,
     Long,
     LongLong,
@@ -887,7 +913,7 @@ impl CType {
             return match &ctypes[0].node {
                 TypeSpecifier::Void => Ok(Self::Void),
                 TypeSpecifier::Char => Ok(Self::Char),
-                TypeSpecifier::Short => Err(IRGenerationErrorType::TODOUnknownType),
+                TypeSpecifier::Short => Ok(Self::SignedShort),
                 TypeSpecifier::Int => Ok(Self::SignedInt),
                 TypeSpecifier::Long => Ok(Self::SignedLong),
                 TypeSpecifier::Float => Err(IRGenerationErrorType::TODOUnknownType),
@@ -925,7 +951,13 @@ impl CType {
                     }
                     Some(_) => Err(IRGenerationErrorType::InvalidTypeSpecifier),
                 },
-                TypeSpecifier::Short => Err(IRGenerationErrorType::TODOUnknownType),
+                TypeSpecifier::Short => match int_type {
+                    None | Some(IntType::Int) => {
+                        int_type = Some(IntType::Short);
+                        Ok(())
+                    }
+                    Some(_) => Err(IRGenerationErrorType::InvalidTypeSpecifier),
+                },
                 TypeSpecifier::Int => {
                     int_count += 1;
                     assert!(int_count <= 1);
@@ -977,6 +1009,9 @@ impl CType {
             (IntType::Char, Sign::None) => Self::Char,
             (IntType::Char, Sign::Unsigned) => Self::UnsignedChar,
             (IntType::Char, Sign::Signed) => Self::SignedChar,
+
+            (IntType::Short, Sign::Unsigned) => Self::UnsignedShort,
+            (IntType::Short, Sign::Signed | Sign::None) => Self::SignedShort,
 
             (IntType::Int, Sign::Unsigned) => Self::UnsignedInt,
             (IntType::Int, Sign::Signed | Sign::None) => Self::SignedInt,
@@ -1165,7 +1200,7 @@ impl CType {
             } else {
                 params
             };
-            Self::Function(params.into(), Box::new(out))
+            Self::function(params, out)
         } else {
             out
         };
@@ -1194,12 +1229,6 @@ struct DeclarationInfo {
     duration: StorageDuration,
 }
 
-#[derive(Debug)]
-struct FunctionDeclarationInfo {
-    return_type: CType,
-    parameters: Box<[CType]>,
-}
-
 impl DeclarationInfo {
     fn from_decl(
         specifiers: &[Node<DeclarationSpecifier>],
@@ -1207,27 +1236,32 @@ impl DeclarationInfo {
         is_statement: bool,
     ) -> Result<Self, IRGenerationError> {
         let mut c_types = vec![];
-        let mut duration: StorageDuration = StorageDuration::Default;
-        // this allows for loads of invalid code, like
-        // `signed extern int x = 5;` because we don't validate that all types appear
-        // sequentially without breaks
-        // And extern static x will be accepted as static x
+        let mut duration = None;
+
         for specifier in specifiers {
             match &specifier.node {
-                DeclarationSpecifier::StorageClass(spec) => match spec.node {
-                    StorageClassSpecifier::Typedef => Err(IRGenerationError {
-                        err: IRGenerationErrorType::TODOTypedef,
-                        span: specifier.span,
-                    })?,
-                    StorageClassSpecifier::Extern => duration = StorageDuration::Extern,
-                    StorageClassSpecifier::Static => duration = StorageDuration::Static,
-                    StorageClassSpecifier::ThreadLocal => println!("_Thread_local is ignored"),
-                    StorageClassSpecifier::Auto => Err(IRGenerationError {
-                        err: IRGenerationErrorType::TODOAuto,
-                        span: specifier.span,
-                    })?,
-                    StorageClassSpecifier::Register => println!("register keyword is ignored"),
-                },
+                DeclarationSpecifier::StorageClass(spec) => {
+                    if duration.is_some() {
+                        return Err(IRGenerationError {
+                            err: IRGenerationErrorType::MultipleStorageClasses,
+                            span: specifier.span,
+                        });
+                    }
+                    match spec.node {
+                        StorageClassSpecifier::Typedef => Err(IRGenerationError {
+                            err: IRGenerationErrorType::TODOTypedef,
+                            span: specifier.span,
+                        })?,
+                        StorageClassSpecifier::Extern => duration = Some(StorageDuration::Extern),
+                        StorageClassSpecifier::Static => duration = Some(StorageDuration::Static),
+                        StorageClassSpecifier::ThreadLocal => println!("_Thread_local is ignored"),
+                        StorageClassSpecifier::Auto => Err(IRGenerationError {
+                            err: IRGenerationErrorType::TODOAuto,
+                            span: specifier.span,
+                        })?,
+                        StorageClassSpecifier::Register => println!("register keyword is ignored"),
+                    }
+                }
                 DeclarationSpecifier::TypeSpecifier(spec) => c_types.push(spec),
                 // Consider implementing just volatile
                 DeclarationSpecifier::TypeQualifier(_) => {
@@ -1253,7 +1287,7 @@ impl DeclarationInfo {
         }
 
         Ok(Self {
-            duration,
+            duration: duration.unwrap_or(StorageDuration::Default),
             c_type: CType::from_specifiers(&c_types, scope, is_statement)?,
         })
     }
@@ -1337,9 +1371,9 @@ impl TopLevelBuilder<'_> {
             name.clone(),
             (
                 None,
-                CType::Function(
-                    params.iter().cloned().map(|(_, ctype)| ctype).collect(),
-                    Box::new(self.return_type.clone()),
+                CType::function(
+                    params.iter().map(|(_, ctype)| ctype).cloned(),
+                    self.return_type.clone(),
                 ),
             ),
         );
@@ -1347,9 +1381,9 @@ impl TopLevelBuilder<'_> {
             name,
             (
                 None,
-                CType::Function(
-                    params.iter().cloned().map(|(_, ctype)| ctype).collect(),
-                    Box::new(self.return_type.clone()),
+                CType::function(
+                    params.iter().map(|(_, ctype)| ctype).cloned(),
+                    self.return_type.clone(),
                 ),
             ),
         );
