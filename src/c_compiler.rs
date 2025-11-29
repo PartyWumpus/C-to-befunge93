@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 
 use std::{
     collections::HashMap,
-    fmt::{Debug, Display},
+    fmt::{self, Debug, Display},
     io::{self, Write},
     mem,
     process::{Command, Stdio},
@@ -65,6 +65,10 @@ pub enum IRGenerationErrorType {
     PointerSubtraction,
     #[error("Unknown identifier")]
     UnknownIdentifier,
+    #[error("Typedef is invalid in this location")]
+    InvalidTypedefLocation,
+    #[error("Typedef is missing declarator")]
+    TypedefMissingDeclarator,
     #[error("Unknown function identifier")]
     UnknownFunction,
     #[error("Non-integer array length")]
@@ -93,8 +97,8 @@ pub enum IRGenerationErrorType {
     ExcessElementsInInitializer,
     #[error("Char literals must be one character (or an escape sequence)")]
     LongCharLiteral,
-    #[error("Cannot specify multiple storage classes")]
-    MultipleStorageClasses,
+    #[error("Cannot combine with previous {0}")]
+    MultipleStorageClasses(StorageDuration),
 
     #[error("INTERNAL: A non func declarator in the func declarator parser? type: {0:?}")]
     INTERNALNonFuncDeclaratorInFuncDeclaratorParser(PointerDeclarator),
@@ -587,12 +591,20 @@ struct TagData {
     tag_type: TagType,
 }
 
-// TODO: did i already do this?? i feel like this comment isn't true anymore but idk
-// TODO: scope system will need a bit of a refactor to make unshadowing of globals possible
+// TODO: make the invariants in here specified in type system
+#[derive(Debug, Clone)]
+enum Var {
+    // CType is never function hopefully
+    Variable(IRValue, CType),
+    // CType is always function hopefully
+    Function(CType),
+    //Typedef(CType)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ScopeInfo {
     // IRValue is only None when CType is Function
-    var_map: HashMap<String, (Option<IRValue>, CType)>,
+    var_map: HashMap<String, Var>,
     tag_map: HashMap<String, TagData>,
     structs: Arc<Mutex<Vec<Option<StructData>>>>,
     depth: usize,
@@ -798,7 +810,8 @@ impl FileBuilder {
         &mut self,
         func: &Node<FunctionDefinition>,
     ) -> Result<IRTopLevel, IRGenerationError> {
-        let info = DeclarationInfo::from_decl(&func.node.specifiers, &mut self.scope, false)?;
+        let info =
+            SimpleDeclarationInfo::from_decl_specifiers(&func.node.specifiers, &mut self.scope)?;
         let mut builder = TopLevelBuilder {
             ops: vec![],
             count: self.count,
@@ -1172,9 +1185,10 @@ impl CType {
                     assert!(param_list.is_none());
                     param_list = Some(vec![]);
                     for param in &func_decl.node.parameters {
-                        // FIXME:
-                        let info =
-                            DeclarationInfo::from_decl(&param.node.specifiers, scope, false)?;
+                        let info = SimpleDeclarationInfo::from_decl_specifiers(
+                            &param.node.specifiers,
+                            scope,
+                        )?;
                         let ctype = if let Some(decl) = &param.node.declarator {
                             Self::from_declarator(decl, &info.c_type, scope)?
                         } else {
@@ -1217,41 +1231,88 @@ impl CType {
 }
 
 #[derive(Debug)]
-enum StorageDuration {
+pub enum StorageDuration {
     Default,
     Extern,
     Static,
+}
+
+impl fmt::Display for StorageDuration {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Self::Default => write!(f, "default"),
+            Self::Extern => write!(f, "extern"),
+            Self::Static => write!(f, "static"),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SimpleDeclarationInfo {
+    c_type: CType,
+    duration: StorageDuration,
 }
 
 #[derive(Debug)]
 struct DeclarationInfo {
     c_type: CType,
     duration: StorageDuration,
+    typedef: bool,
+}
+
+impl SimpleDeclarationInfo {
+    fn from_decl_specifiers(
+        specifiers: &[Node<DeclarationSpecifier>],
+        scope: &mut ScopeInfo,
+    ) -> Result<Self, IRGenerationError> {
+        let info = DeclarationInfo::from_decl_specifiers(specifiers, scope, false, false)?;
+        assert!(!info.typedef);
+        Ok(Self {
+            duration: info.duration,
+            c_type: info.c_type,
+        })
+    }
 }
 
 impl DeclarationInfo {
-    fn from_decl(
+    fn from_decl_specifiers(
         specifiers: &[Node<DeclarationSpecifier>],
         scope: &mut ScopeInfo,
         is_statement: bool,
+        has_declarator: bool,
     ) -> Result<Self, IRGenerationError> {
         let mut c_types = vec![];
         let mut duration = None;
+        let mut typedef = false;
 
         for specifier in specifiers {
             match &specifier.node {
                 DeclarationSpecifier::StorageClass(spec) => {
-                    if duration.is_some() {
+                    if let Some(duration) = duration {
                         return Err(IRGenerationError {
-                            err: IRGenerationErrorType::MultipleStorageClasses,
+                            err: IRGenerationErrorType::MultipleStorageClasses(duration),
                             span: specifier.span,
                         });
                     }
                     match spec.node {
-                        StorageClassSpecifier::Typedef => Err(IRGenerationError {
-                            err: IRGenerationErrorType::TODOTypedef,
-                            span: specifier.span,
-                        })?,
+                        StorageClassSpecifier::Typedef => {
+                            // jank, just to ban other storage durations
+                            duration = Some(StorageDuration::Default);
+                            // typedef only allowed when in a statement
+                            if has_declarator {
+                                typedef = true;
+                            } else if is_statement {
+                                return Err(IRGenerationError {
+                                    err: IRGenerationErrorType::TypedefMissingDeclarator,
+                                    span: spec.span,
+                                });
+                            } else {
+                                return Err(IRGenerationError {
+                                    err: IRGenerationErrorType::InvalidTypedefLocation,
+                                    span: spec.span,
+                                });
+                            }
+                        }
                         StorageClassSpecifier::Extern => duration = Some(StorageDuration::Extern),
                         StorageClassSpecifier::Static => duration = Some(StorageDuration::Static),
                         StorageClassSpecifier::ThreadLocal => println!("_Thread_local is ignored"),
@@ -1289,6 +1350,7 @@ impl DeclarationInfo {
         Ok(Self {
             duration: duration.unwrap_or(StorageDuration::Default),
             c_type: CType::from_specifiers(&c_types, scope, is_statement)?,
+            typedef,
         })
     }
 }
@@ -1313,10 +1375,9 @@ impl TopLevelBuilder<'_> {
                         });
                     }
                     for param in &func_decl.node.parameters {
-                        let info = DeclarationInfo::from_decl(
+                        let info = SimpleDeclarationInfo::from_decl_specifiers(
                             &param.node.specifiers,
                             &mut self.scope,
-                            false,
                         )?;
 
                         if let Some(decl) = param.node.declarator.clone() {
@@ -1369,23 +1430,17 @@ impl TopLevelBuilder<'_> {
 
         self.scope.var_map.insert(
             name.clone(),
-            (
-                None,
-                CType::function(
-                    params.iter().map(|(_, ctype)| ctype).cloned(),
-                    self.return_type.clone(),
-                ),
-            ),
+            Var::Function(CType::function(
+                params.iter().map(|(_, ctype)| ctype).cloned(),
+                self.return_type.clone(),
+            )),
         );
         self.file_builder.scope.var_map.insert(
             name,
-            (
-                None,
-                CType::function(
-                    params.iter().map(|(_, ctype)| ctype).cloned(),
-                    self.return_type.clone(),
-                ),
-            ),
+            Var::Function(CType::function(
+                params.iter().map(|(_, ctype)| ctype).cloned(),
+                self.return_type.clone(),
+            )),
         );
 
         let mut i = 1;
@@ -1393,7 +1448,7 @@ impl TopLevelBuilder<'_> {
             let size = ctype.sizeof(&self.scope);
             self.scope
                 .var_map
-                .insert(name, (Some(IRValue::Stack(i)), ctype));
+                .insert(name, Var::Variable(IRValue::Stack(i), ctype));
             i += size;
         }
         Ok(params)
@@ -1857,11 +1912,20 @@ impl TopLevelBuilder<'_> {
     }
 
     fn parse_declarations(&mut self, decls: &Node<Declaration>) -> Result<(), IRGenerationError> {
-        let info = DeclarationInfo::from_decl(
+        let info = DeclarationInfo::from_decl_specifiers(
             &decls.node.specifiers,
             &mut self.scope,
             decls.node.declarators.is_empty(),
+            !decls.node.declarators.is_empty(),
         )?;
+
+        if info.typedef {
+            return Err(IRGenerationError {
+                err: IRGenerationErrorType::TODOTypedef,
+                span: decls.span,
+            });
+        }
+
         // FIXME: this is horrific.
         // TODO: use type info
         for decl in &decls.node.declarators {
@@ -1870,7 +1934,7 @@ impl TopLevelBuilder<'_> {
                 CType::from_declarator(&decl.node.declarator, &info.c_type, &mut self.scope)?;
 
             if let CType::Function(..) = ctype {
-                if let Some((_, prev_ctype @ CType::Function(..))) = self.scope.var_map.get(&name) {
+                if let Some(Var::Function(prev_ctype)) = self.scope.var_map.get(&name) {
                     if *prev_ctype != ctype {
                         return Err(IRGenerationError {
                             err: IRGenerationErrorType::NonMatchingDeclarations(
@@ -1881,7 +1945,7 @@ impl TopLevelBuilder<'_> {
                         });
                     }
                 } else {
-                    self.scope.var_map.insert(name, (None, ctype));
+                    self.scope.var_map.insert(name, Var::Function(ctype));
                 }
                 continue;
             }
@@ -1911,12 +1975,11 @@ impl TopLevelBuilder<'_> {
                             let var = self.file_builder.scope.var_map.get(&name).unwrap();
                             match var {
                                 // FIXME: this should now be doable, look inside parse_identifier
-                                (None, CType::Function(..)) => Err(IRGenerationError {
+                                Var::Function(_) => Err(IRGenerationError {
                                     err: IRGenerationErrorType::FunctionUsedAsVariable,
                                     span: decl.node.declarator.span,
                                 })?,
-                                (None, _) => unreachable!(),
-                                (Some(loc), stored_ctype) => {
+                                Var::Variable(loc, stored_ctype) => {
                                     if *stored_ctype != ctype {
                                         return Err(IRGenerationError {
                                             err: IRGenerationErrorType::NonMatchingDeclarations(
@@ -1944,7 +2007,7 @@ impl TopLevelBuilder<'_> {
                             self.file_builder
                                 .scope
                                 .var_map
-                                .insert(name.clone(), (Some(j.clone()), ctype.clone()));
+                                .insert(name.clone(), Var::Variable(j.clone(), ctype.clone()));
                             j
                         }
                     }
@@ -1960,7 +2023,7 @@ impl TopLevelBuilder<'_> {
 
             self.scope
                 .var_map
-                .insert(name, (Some(loc.clone()), ctype.clone()));
+                .insert(name, Var::Variable(loc.clone(), ctype.clone()));
 
             if !self.is_const && matches!(info.duration, StorageDuration::Static) {
                 let mut builder = TopLevelBuilder {
@@ -2355,8 +2418,7 @@ impl TopLevelBuilder<'_> {
                         err: IRGenerationErrorType::UnknownFunction,
                         span: ident.span,
                     })?,
-                    Some((Some(_), CType::Function(..))) => unreachable!(),
-                    Some((None, CType::Function(expected_args, return_type))) => {
+                    Some(Var::Function(CType::Function(expected_args, return_type))) => {
                         let return_type = *return_type;
                         if expected_args.len() != args.len()
                             && !(matches!(expected_args[..], [CType::Void]) && args.is_empty())
@@ -3042,14 +3104,13 @@ impl TopLevelBuilder<'_> {
                 err: IRGenerationErrorType::UnknownIdentifier,
                 span: ident.span,
             }),
-            Some((Some(loc), ctype)) => Ok((loc.clone(), ctype.clone())),
-            Some((None, ctype @ CType::Function(..))) => {
+            Some(Var::Variable(loc, ctype)) => Ok((loc.clone(), ctype.clone())),
+            Some(Var::Function(ctype)) => {
                 let ctype = ctype.clone();
                 let out = self.generate_pseudo(1);
                 self.push(IROp::GetIdOfFunction(ident.node.name.clone(), out.clone()));
                 Ok((out, CType::Pointer(Box::new(ctype))))
             }
-            Some((None, _)) => unreachable!(),
         }
     }
 
