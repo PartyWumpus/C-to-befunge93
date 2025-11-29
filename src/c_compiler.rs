@@ -65,8 +65,10 @@ pub enum IRGenerationErrorType {
     PointerSubtraction,
     #[error("Unknown identifier")]
     UnknownIdentifier,
-    #[error("Typedef is invalid in this location")]
+    #[error("Typedef keyword is invalid in this location")]
     InvalidTypedefLocation,
+    #[error("Typedef name used as variable name")]
+    TypedefUsedAsVariable,
     #[error("Typedef is missing declarator")]
     TypedefMissingDeclarator,
     #[error("Unknown function identifier")]
@@ -598,7 +600,15 @@ enum Var {
     Variable(IRValue, CType),
     // CType is always function hopefully
     Function(CType),
-    //Typedef(CType)
+    Typedef(CType),
+}
+
+impl Var {
+    const fn ctype(&self) -> &CType {
+        match self {
+            Self::Variable(_, ctype) | Self::Function(ctype) | Self::Typedef(ctype) => ctype,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -937,7 +947,13 @@ impl CType {
                 TypeSpecifier::Complex => Err(IRGenerationErrorType::TODOImaginary),
                 TypeSpecifier::Atomic(..) => Err(IRGenerationErrorType::TODOUnknownType),
                 TypeSpecifier::Enum(..) => Err(IRGenerationErrorType::TODOUnknownType),
-                TypeSpecifier::TypedefName(..) => Err(IRGenerationErrorType::TODOTypedef),
+                TypeSpecifier::TypedefName(ident) => {
+                    match scope.var_map.get(&ident.node.name) {
+                        Some(Var::Typedef(ctype)) => Ok(ctype.clone()),
+                        // lang_c should make this impossible
+                        Some(_) | None => unreachable!("{:?}", scope),
+                    }
+                }
                 TypeSpecifier::TypeOf(..) => Err(IRGenerationErrorType::TODOTypeof),
                 TypeSpecifier::TS18661Float(..) => Err(IRGenerationErrorType::TODOUnknownType),
                 TypeSpecifier::Struct(struct_data) => {
@@ -1920,32 +1936,38 @@ impl TopLevelBuilder<'_> {
         )?;
 
         if info.typedef {
-            return Err(IRGenerationError {
-                err: IRGenerationErrorType::TODOTypedef,
-                span: decls.span,
-            });
+            for decl in &decls.node.declarators {
+                let name = parse_declarator_name(&decl.node.declarator)?;
+                let ctype =
+                    CType::from_declarator(&decl.node.declarator, &info.c_type, &mut self.scope)?;
+                self.scope.var_map.insert(name, Var::Typedef(ctype));
+            }
+            return Ok(());
         }
 
         // FIXME: this is horrific.
-        // TODO: use type info
+        // TODO: sort out repeated declarations
         for decl in &decls.node.declarators {
             let name = parse_declarator_name(&decl.node.declarator)?;
             let mut ctype =
                 CType::from_declarator(&decl.node.declarator, &info.c_type, &mut self.scope)?;
 
             if let CType::Function(..) = ctype {
-                if let Some(Var::Function(prev_ctype)) = self.scope.var_map.get(&name) {
-                    if *prev_ctype != ctype {
-                        return Err(IRGenerationError {
-                            err: IRGenerationErrorType::NonMatchingDeclarations(
-                                ctype.display_type(&self.scope),
-                                prev_ctype.display_type(&self.scope),
-                            ),
-                            span: decl.span,
-                        });
+                match self.scope.var_map.get(&name) {
+                    Some(Var::Function(prev_ctype)) => {
+                        if *prev_ctype != ctype {
+                            return Err(IRGenerationError {
+                                err: IRGenerationErrorType::NonMatchingDeclarations(
+                                    ctype.display_type(&self.scope),
+                                    prev_ctype.display_type(&self.scope),
+                                ),
+                                span: decl.span,
+                            });
+                        }
                     }
-                } else {
-                    self.scope.var_map.insert(name, Var::Function(ctype));
+                    _ => {
+                        self.scope.var_map.insert(name, Var::Function(ctype));
+                    }
                 }
                 continue;
             }
@@ -1974,6 +1996,10 @@ impl TopLevelBuilder<'_> {
                         if self.file_builder.scope.var_map.contains_key(&name) {
                             let var = self.file_builder.scope.var_map.get(&name).unwrap();
                             match var {
+                                Var::Typedef(..) => Err(IRGenerationError {
+                                    err: IRGenerationErrorType::TypedefUsedAsVariable,
+                                    span: decl.node.declarator.span,
+                                })?,
                                 // FIXME: this should now be doable, look inside parse_identifier
                                 Var::Function(_) => Err(IRGenerationError {
                                     err: IRGenerationErrorType::FunctionUsedAsVariable,
@@ -2458,6 +2484,10 @@ impl TopLevelBuilder<'_> {
                             Ok((out, return_type))
                         }
                     }
+                    Some(Var::Typedef(..)) => Err(IRGenerationError {
+                        err: IRGenerationErrorType::TypedefUsedAsVariable,
+                        span: ident.span,
+                    })?,
                     _ => Err(IRGenerationError {
                         err: IRGenerationErrorType::CallNonFunction,
                         span: ident.span,
@@ -3104,6 +3134,10 @@ impl TopLevelBuilder<'_> {
                 err: IRGenerationErrorType::UnknownIdentifier,
                 span: ident.span,
             }),
+            Some(Var::Typedef(..)) => Err(IRGenerationError {
+                err: IRGenerationErrorType::TypedefUsedAsVariable,
+                span: ident.span,
+            })?,
             Some(Var::Variable(loc, ctype)) => Ok((loc.clone(), ctype.clone())),
             Some(Var::Function(ctype)) => {
                 let ctype = ctype.clone();
