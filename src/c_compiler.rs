@@ -15,7 +15,7 @@ use std::{
     io::{self, Write},
     mem,
     process::{Command, Stdio},
-    sync::Arc,
+    rc::Rc,
 };
 
 use lang_c::{
@@ -126,8 +126,6 @@ pub enum IRGenerationErrorType {
     TODOComplexInitializers,
     #[error("Scalar initializers are not yet supported")]
     TODOScalarInitializers,
-    #[error("Typedef is not yet supported")]
-    TODOTypedef,
     #[error("Auto is not yet supported")]
     TODOAuto,
     #[error("Inline is not yet supported")]
@@ -160,6 +158,8 @@ pub enum IRGenerationErrorType {
     InvalidStructMember(Box<str>, Box<str>),
     #[error("Struct has no members")]
     StructWithoutMembers,
+    #[error("Cannot redefine existing struct in same scope")]
+    StructRedefinition,
 
     // TODO: store the span of the location of the first declaration!
     #[error("Type '{0}' does not match earlier defined '{1}'")]
@@ -557,7 +557,6 @@ enum BreakTypes {
 #[derive(Clone)]
 struct SwitchCaseInfo {
     id: usize,
-    // FIXME: will also need to express ranges :)
     cases: Vec<Node<Expression>>,
     has_default: bool,
 }
@@ -595,7 +594,7 @@ struct TagData {
 
 // TODO: make the invariants in here specified in type system
 #[derive(Debug, Clone)]
-enum Var {
+enum VarData {
     // CType is never function hopefully
     Variable(IRValue, CType),
     // CType is always function hopefully
@@ -603,7 +602,7 @@ enum Var {
     Typedef(CType),
 }
 
-impl Var {
+impl VarData {
     const fn ctype(&self) -> &CType {
         match self {
             Self::Variable(_, ctype) | Self::Function(ctype) | Self::Typedef(ctype) => ctype,
@@ -614,9 +613,9 @@ impl Var {
 #[derive(Debug, Clone, Default)]
 pub struct ScopeInfo {
     // IRValue is only None when CType is Function
-    var_map: HashMap<String, Var>,
+    var_map: HashMap<String, VarData>,
     tag_map: HashMap<String, TagData>,
-    structs: Arc<Mutex<Vec<Option<StructData>>>>,
+    structs: Rc<Mutex<Vec<Option<StructData>>>>,
     depth: usize,
 }
 
@@ -627,7 +626,7 @@ impl ScopeInfo {
         scope
     }
 
-    fn generate_struct_id(&mut self, name: &str) -> (TagID, bool) {
+    fn generate_struct_id(&self, name: &str) -> (TagID, bool) {
         match self.tag_map.get(name) {
             // if it has not been declared yet then just insert
             None => (self.structs.lock().len(), true),
@@ -665,33 +664,25 @@ impl ScopeInfo {
         id
     }
 
-    fn insert_struct(&mut self, name: String, struct_data: StructData) -> TagID {
+    fn insert_struct(
+        &mut self,
+        name: String,
+        struct_data: StructData,
+    ) -> Result<TagID, IRGenerationErrorType> {
         let (id, new) = self.generate_struct_id(&name);
-        if new {
-            let mut structs = self.structs.lock();
-            self.tag_map.insert(
-                name,
-                TagData {
-                    source_depth: self.depth,
-                    tag_id: id,
-                    tag_type: TagType::Struct,
-                },
-            );
-            structs.push(Some(struct_data));
-            id
-        } else {
-            assert!(self.structs.lock()[id].is_none(), "cannot redefine structs");
-            self.tag_map.insert(
-                name,
-                TagData {
-                    source_depth: self.depth,
-                    tag_id: id,
-                    tag_type: TagType::Struct,
-                },
-            );
-            self.structs.lock()[id] = Some(struct_data);
-            id
+        if !new && self.structs.lock()[id].is_some() {
+            return Err(IRGenerationErrorType::StructRedefinition);
         }
+        self.structs.lock().push(Some(struct_data));
+        self.tag_map.insert(
+            name,
+            TagData {
+                source_depth: self.depth,
+                tag_id: id,
+                tag_type: TagType::Struct,
+            },
+        );
+        Ok(id)
     }
 
     pub fn get_struct_by_id(&self, id: TagID) -> StructData {
@@ -949,7 +940,7 @@ impl CType {
                 TypeSpecifier::Enum(..) => Err(IRGenerationErrorType::TODOUnknownType),
                 TypeSpecifier::TypedefName(ident) => {
                     match scope.var_map.get(&ident.node.name) {
-                        Some(Var::Typedef(ctype)) => Ok(ctype.clone()),
+                        Some(VarData::Typedef(ctype)) => Ok(ctype.clone()),
                         // lang_c should make this impossible
                         Some(_) | None => unreachable!("{:?}", scope),
                     }
@@ -1054,24 +1045,24 @@ impl CType {
     }
 
     fn parse_struct_data(
-        struct_data: &Node<StructType>,
+        struct_type: &Node<StructType>,
         scope: &mut ScopeInfo,
         is_statement: bool,
     ) -> Result<Self, IRGenerationError> {
-        assert_eq!(struct_data.node.kind.node, StructKind::Struct);
+        assert_eq!(struct_type.node.kind.node, StructKind::Struct);
 
-        let name: &str = &struct_data
+        let name: &str = &struct_type
             .node
             .identifier
             .as_ref()
             .ok_or(IRGenerationError {
                 err: IRGenerationErrorType::TODOAnonymousStructs,
-                span: struct_data.span,
+                span: struct_type.span,
             })?
             .node
             .name;
 
-        let tag_id = match &struct_data.node.declarations {
+        let tag_id = match &struct_type.node.declarations {
             // means it's just a definition not a declaration
             None => match scope.tag_map.get(name) {
                 // if it has not been declared yet then just insert
@@ -1081,7 +1072,7 @@ impl CType {
                     } else {
                         return Err(IRGenerationError {
                             err: IRGenerationErrorType::InvalidStructType(name.into()),
-                            span: struct_data.span,
+                            span: struct_type.span,
                         });
                     }
                 }
@@ -1104,7 +1095,7 @@ impl CType {
                 if decls.is_empty() {
                     return Err(IRGenerationError {
                         err: IRGenerationErrorType::StructWithoutMembers,
-                        span: struct_data.span,
+                        span: struct_type.span,
                     });
                 }
                 let mut struct_data = StructData::new(name.to_string());
@@ -1135,7 +1126,12 @@ impl CType {
                         }
                     }
                 }
-                scope.insert_struct(name.to_string(), struct_data)
+                scope
+                    .insert_struct(name.to_string(), struct_data)
+                    .map_err(|err| IRGenerationError {
+                        span: struct_type.span,
+                        err,
+                    })?
             }
         };
         Ok(Self::Struct(tag_id))
@@ -1446,14 +1442,14 @@ impl TopLevelBuilder<'_> {
 
         self.scope.var_map.insert(
             name.clone(),
-            Var::Function(CType::function(
+            VarData::Function(CType::function(
                 params.iter().map(|(_, ctype)| ctype).cloned(),
                 self.return_type.clone(),
             )),
         );
         self.file_builder.scope.var_map.insert(
             name,
-            Var::Function(CType::function(
+            VarData::Function(CType::function(
                 params.iter().map(|(_, ctype)| ctype).cloned(),
                 self.return_type.clone(),
             )),
@@ -1464,7 +1460,7 @@ impl TopLevelBuilder<'_> {
             let size = ctype.sizeof(&self.scope);
             self.scope
                 .var_map
-                .insert(name, Var::Variable(IRValue::Stack(i), ctype));
+                .insert(name, VarData::Variable(IRValue::Stack(i), ctype));
             i += size;
         }
         Ok(params)
@@ -1940,7 +1936,7 @@ impl TopLevelBuilder<'_> {
                 let name = parse_declarator_name(&decl.node.declarator)?;
                 let ctype =
                     CType::from_declarator(&decl.node.declarator, &info.c_type, &mut self.scope)?;
-                self.scope.var_map.insert(name, Var::Typedef(ctype));
+                self.scope.var_map.insert(name, VarData::Typedef(ctype));
             }
             return Ok(());
         }
@@ -1954,7 +1950,7 @@ impl TopLevelBuilder<'_> {
 
             if let CType::Function(..) = ctype {
                 match self.scope.var_map.get(&name) {
-                    Some(Var::Function(prev_ctype)) => {
+                    Some(VarData::Function(prev_ctype)) => {
                         if *prev_ctype != ctype {
                             return Err(IRGenerationError {
                                 err: IRGenerationErrorType::NonMatchingDeclarations(
@@ -1966,7 +1962,7 @@ impl TopLevelBuilder<'_> {
                         }
                     }
                     _ => {
-                        self.scope.var_map.insert(name, Var::Function(ctype));
+                        self.scope.var_map.insert(name, VarData::Function(ctype));
                     }
                 }
                 continue;
@@ -1996,16 +1992,16 @@ impl TopLevelBuilder<'_> {
                         if self.file_builder.scope.var_map.contains_key(&name) {
                             let var = self.file_builder.scope.var_map.get(&name).unwrap();
                             match var {
-                                Var::Typedef(..) => Err(IRGenerationError {
+                                VarData::Typedef(..) => Err(IRGenerationError {
                                     err: IRGenerationErrorType::TypedefUsedAsVariable,
                                     span: decl.node.declarator.span,
                                 })?,
                                 // FIXME: this should now be doable, look inside parse_identifier
-                                Var::Function(_) => Err(IRGenerationError {
+                                VarData::Function(_) => Err(IRGenerationError {
                                     err: IRGenerationErrorType::FunctionUsedAsVariable,
                                     span: decl.node.declarator.span,
                                 })?,
-                                Var::Variable(loc, stored_ctype) => {
+                                VarData::Variable(loc, stored_ctype) => {
                                     if *stored_ctype != ctype {
                                         return Err(IRGenerationError {
                                             err: IRGenerationErrorType::NonMatchingDeclarations(
@@ -2033,7 +2029,7 @@ impl TopLevelBuilder<'_> {
                             self.file_builder
                                 .scope
                                 .var_map
-                                .insert(name.clone(), Var::Variable(j.clone(), ctype.clone()));
+                                .insert(name.clone(), VarData::Variable(j.clone(), ctype.clone()));
                             j
                         }
                     }
@@ -2049,7 +2045,7 @@ impl TopLevelBuilder<'_> {
 
             self.scope
                 .var_map
-                .insert(name, Var::Variable(loc.clone(), ctype.clone()));
+                .insert(name, VarData::Variable(loc.clone(), ctype.clone()));
 
             if !self.is_const && matches!(info.duration, StorageDuration::Static) {
                 let mut builder = TopLevelBuilder {
@@ -2392,6 +2388,7 @@ impl TopLevelBuilder<'_> {
         Ok((out, CType::UnsignedInt))
     }
 
+    // TODO: check and coerce types properly here
     fn parse_ternary(
         &mut self,
         expr: &Node<ConditionalExpression>,
@@ -2444,7 +2441,7 @@ impl TopLevelBuilder<'_> {
                         err: IRGenerationErrorType::UnknownFunction,
                         span: ident.span,
                     })?,
-                    Some(Var::Function(CType::Function(expected_args, return_type))) => {
+                    Some(VarData::Function(CType::Function(expected_args, return_type))) => {
                         let return_type = *return_type;
                         if expected_args.len() != args.len()
                             && !(matches!(expected_args[..], [CType::Void]) && args.is_empty())
@@ -2484,7 +2481,7 @@ impl TopLevelBuilder<'_> {
                             Ok((out, return_type))
                         }
                     }
-                    Some(Var::Typedef(..)) => Err(IRGenerationError {
+                    Some(VarData::Typedef(..)) => Err(IRGenerationError {
                         err: IRGenerationErrorType::TypedefUsedAsVariable,
                         span: ident.span,
                     })?,
@@ -2611,7 +2608,7 @@ impl TopLevelBuilder<'_> {
                 return Ok(Out::Plain((out, CType::SignedInt)));
             }
             UnaryOperator::Plus => {
-                self.push(IROp::Copy(val, out.clone(), val_type.sizeof(&self.scope)))
+                self.push(IROp::Copy(val, out.clone(), val_type.sizeof(&self.scope)));
             } // silly
 
             // ++x, increment and evaluate to x+1
@@ -3134,12 +3131,12 @@ impl TopLevelBuilder<'_> {
                 err: IRGenerationErrorType::UnknownIdentifier,
                 span: ident.span,
             }),
-            Some(Var::Typedef(..)) => Err(IRGenerationError {
+            Some(VarData::Typedef(..)) => Err(IRGenerationError {
                 err: IRGenerationErrorType::TypedefUsedAsVariable,
                 span: ident.span,
             })?,
-            Some(Var::Variable(loc, ctype)) => Ok((loc.clone(), ctype.clone())),
-            Some(Var::Function(ctype)) => {
+            Some(VarData::Variable(loc, ctype)) => Ok((loc.clone(), ctype.clone())),
+            Some(VarData::Function(ctype)) => {
                 let ctype = ctype.clone();
                 let out = self.generate_pseudo(1);
                 self.push(IROp::GetIdOfFunction(ident.node.name.clone(), out.clone()));
