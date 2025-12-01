@@ -68,7 +68,11 @@ fn main() {
     }
 
     // TODO: support multiple user files?
-    let program = match FileBuilder::parse_c(c_source.as_bytes(), &ARGS.filename) {
+    let program = match FileBuilder::parse_c(
+        c_source.as_bytes(),
+        &ARGS.filename,
+        &["befunge_libc/stdlib"],
+    ) {
         Err(err) => {
             if !ARGS.silent {
                 err.print();
@@ -85,12 +89,16 @@ fn main() {
     let mut files = vec![program];
 
     // TODO: add caching so the entire lib isn't compiled every time
-    for entry in BEFUNGE_LIBC.files() {
+    for entry in BEFUNGE_LIBC.get_dir("stdlib").expect("stdlib").files() {
         if let Some(ext) = entry.path().extension()
             && ext == "c"
         {
             files.push(
-                match FileBuilder::parse_c(entry.contents(), entry.path().to_str().unwrap()) {
+                match FileBuilder::parse_c(
+                    entry.contents(),
+                    entry.path().to_str().unwrap(),
+                    &["befunge_libc/stdlib"],
+                ) {
                     Err(err) => {
                         if !ARGS.silent {
                             err.print();
@@ -103,6 +111,68 @@ fn main() {
         }
     }
 
+    // TODO: get softfloat library working
+    if false {
+        for entry in BEFUNGE_LIBC
+            .get_dir("softfloat")
+            .expect("softfloat")
+            .files()
+        {
+            if let Some(ext) = entry.path().extension()
+                && ext == "c"
+            {
+                files.push(
+                    match FileBuilder::parse_c(
+                        entry.contents(),
+                        entry.path().to_str().unwrap(),
+                        &[
+                            "befunge_libc/stdlib",
+                            "befunge_libc/softfloat/include",
+                            "befunge_libc/softfloat/8086",
+                        ],
+                    ) {
+                        Err(err) => {
+                            if !ARGS.silent {
+                                err.print();
+                            }
+                            process::exit(1);
+                        }
+                        Ok(x) => x,
+                    },
+                );
+            }
+        }
+
+        for entry in BEFUNGE_LIBC
+            .get_dir("softfloat/8086")
+            .expect("softfloat")
+            .files()
+        {
+            if let Some(ext) = entry.path().extension()
+                && ext == "c"
+            {
+                files.push(
+                    match FileBuilder::parse_c(
+                        entry.contents(),
+                        entry.path().to_str().unwrap(),
+                        &[
+                            "befunge_libc/stdlib",
+                            "befunge_libc/softfloat/include",
+                            "befunge_libc/softfloat/8086",
+                        ],
+                    ) {
+                        Err(err) => {
+                            if !ARGS.silent {
+                                err.print();
+                            }
+                            process::exit(1);
+                        }
+                        Ok(x) => x,
+                    },
+                );
+            }
+        }
+    }
     // TODO: strip out unused functions
     let mut program = passes::the_linkening(files);
 

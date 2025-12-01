@@ -52,8 +52,8 @@ pub enum IRGenerationErrorType {
     TODOUnknownType,
     #[error("Invalid declaration specifier combination")]
     InvalidTypeSpecifier,
-    #[error("Unknown struct: {0}")]
-    InvalidStructType(Box<str>),
+    #[error("Unknown struct")]
+    InvalidStructType,
     #[error("Cannot dereference non-pointers")]
     DereferenceNonPointer,
     #[error("Cannot index pointers with pointers")]
@@ -135,8 +135,6 @@ pub enum IRGenerationErrorType {
     TODONoreturn,
     #[error("Typeof is not yet supported")]
     TODOTypeof,
-    #[error("Anonymous structs are not yet supported")]
-    TODOAnonymousStructs,
 
     // switch case errors
     #[error("Breaks can only appear inside loops or switch case statements")]
@@ -299,13 +297,13 @@ enum AssignmentStatus {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct StructData {
-    pub name: String,
+    pub name: Option<String>,
     pub fields: IndexMap<String, (CType, usize)>,
     pub size: usize,
 }
 
 impl StructData {
-    fn new(name: String) -> Self {
+    fn new(name: Option<String>) -> Self {
         Self {
             name,
             fields: IndexMap::new(),
@@ -508,7 +506,10 @@ impl CType {
             }
             Self::Struct(tag_id) => {
                 let tag_data = scope.get_struct_by_id(*tag_id);
-                format!("struct {} {inner}", tag_data.name)
+                tag_data.name.map_or_else(
+                    || format!("struct ANON {inner}"),
+                    |name| format!("struct {name} {inner}"),
+                )
             }
         }
         .trim()
@@ -582,6 +583,7 @@ pub struct FileBuilder {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TagType {
     Struct,
+    Union,
 }
 
 type TagID = usize;
@@ -627,62 +629,70 @@ impl ScopeInfo {
         scope
     }
 
-    fn generate_struct_id(&self, name: &str) -> (TagID, bool) {
-        match self.tag_map.get(name) {
-            // if it has not been declared yet then just insert
+    fn generate_struct_id(&self, name: Option<&str>) -> (TagID, bool) {
+        match name {
             None => (self.structs.lock().len(), true),
-            Some(TagData {
-                source_depth,
-                tag_type,
-                tag_id,
-            }) => {
-                if *source_depth == self.depth {
-                    assert_eq!(*tag_type, TagType::Struct);
-                    (*tag_id, false)
-                } else {
-                    // it has been declared earlier, but in a higher scope, so overwrite
-                    (self.structs.lock().len(), true)
+            Some(name) => match self.tag_map.get(name) {
+                // if it has not been declared yet then just insert
+                None => (self.structs.lock().len(), true),
+                Some(TagData {
+                    source_depth,
+                    tag_type,
+                    tag_id,
+                }) => {
+                    if *source_depth == self.depth {
+                        assert_eq!(*tag_type, TagType::Struct);
+                        (*tag_id, false)
+                    } else {
+                        // it has been declared earlier, but in a higher scope, so overwrite
+                        (self.structs.lock().len(), true)
+                    }
                 }
-            }
+            },
         }
     }
 
-    fn insert_incomplete_struct(&mut self, name: String) -> TagID {
-        let (id, new) = self.generate_struct_id(&name);
+    fn insert_incomplete_struct(&mut self, name: Option<&str>) -> TagID {
+        let (id, new) = self.generate_struct_id(name);
         if !new {
             return id;
         }
         let mut structs = self.structs.lock();
-        self.tag_map.insert(
-            name,
-            TagData {
-                source_depth: self.depth,
-                tag_id: id,
-                tag_type: TagType::Struct,
-            },
-        );
+        if let Some(name) = name {
+            self.tag_map.insert(
+                name.to_string(),
+                TagData {
+                    source_depth: self.depth,
+                    tag_id: id,
+                    tag_type: TagType::Struct,
+                },
+            );
+        }
         structs.push(OnceCell::new());
         id
     }
 
     fn insert_struct(
         &mut self,
-        name: String,
+        name: Option<&str>,
         struct_data: StructData,
     ) -> Result<TagID, IRGenerationErrorType> {
-        let (id, new) = self.generate_struct_id(&name);
+        let (id, new) = self.generate_struct_id(name);
         if !new && self.structs.lock()[id].get().is_some() {
             return Err(IRGenerationErrorType::StructRedefinition);
         }
         self.structs.lock().push(OnceCell::from(struct_data));
-        self.tag_map.insert(
-            name,
-            TagData {
-                source_depth: self.depth,
-                tag_id: id,
-                tag_type: TagType::Struct,
-            },
-        );
+
+        if let Some(name) = name {
+            self.tag_map.insert(
+                name.to_string(),
+                TagData {
+                    source_depth: self.depth,
+                    tag_id: id,
+                    tag_type: TagType::Struct,
+                },
+            );
+        }
         Ok(id)
     }
 
@@ -733,27 +743,36 @@ fn preprocess(config: &lang_c::driver::Config, source: &[u8]) -> io::Result<Stri
 }
 
 impl FileBuilder {
-    pub fn parse_c(source: &[u8], filename: &str) -> Result<Vec<IRTopLevel>, Box<CompilerError>> {
+    pub fn parse_c(
+        source: &[u8],
+        filename: &str,
+        linked: &[&str],
+    ) -> Result<Vec<IRTopLevel>, Box<CompilerError>> {
         let mut builder = Self {
             count: 0,
             scope: ScopeInfo::default(),
             funcs: vec![],
         };
+
+        let mut command = vec![
+            // don't include normal libc
+            "-nostdinc".into(),
+            // only preprocess
+            "-E".into(),
+            // read c file from stdin
+            "-xc".into(),
+            "-".into(),
+        ];
+
+        for include in linked {
+            command.push("-I".into());
+            command.push((*include).to_string());
+        }
+
         let config = lang_c::driver::Config {
             flavor: Flavor::GnuC11,
             cpp_command: "gcc".into(),
-            cpp_options: vec![
-                // don't include normal libc
-                "-nostdinc".into(),
-                // include custom libc
-                "-I".into(),
-                "befunge_libc".into(),
-                // only preprocess
-                "-E".into(),
-                // read c file from stdin
-                "-xc".into(),
-                "-".into(),
-            ],
+            cpp_options: command,
         };
         let preproccessed =
             preprocess(&config, source).map_err(|err| CompilerError::ParseError {
@@ -1050,47 +1069,48 @@ impl CType {
         scope: &mut ScopeInfo,
         is_statement: bool,
     ) -> Result<Self, IRGenerationError> {
-        assert_eq!(struct_type.node.kind.node, StructKind::Struct);
+        let struct_kind = struct_type.node.kind.node;
 
-        let name: &str = &struct_type
+        let name: Option<String> = struct_type
             .node
             .identifier
-            .as_ref()
-            .ok_or(IRGenerationError {
-                err: IRGenerationErrorType::TODOAnonymousStructs,
-                span: struct_type.span,
-            })?
-            .node
-            .name;
+            .clone()
+            .map(|inner| inner.node.name);
 
         let tag_id = match &struct_type.node.declarations {
             // means it's just a definition not a declaration
-            None => match scope.tag_map.get(name) {
-                // if it has not been declared yet then just insert
-                None => {
-                    if is_statement {
-                        scope.insert_incomplete_struct(name.to_string())
-                    } else {
-                        return Err(IRGenerationError {
-                            err: IRGenerationErrorType::InvalidStructType(name.into()),
-                            span: struct_type.span,
-                        });
+            None => {
+                let j = match name {
+                    Some(ref name) => scope.tag_map.get(name),
+                    None => None,
+                };
+                match j {
+                    // if it has not been declared yet then just insert
+                    None => {
+                        if is_statement {
+                            scope.insert_incomplete_struct(name.as_deref())
+                        } else {
+                            return Err(IRGenerationError {
+                                err: IRGenerationErrorType::InvalidStructType,
+                                span: struct_type.span,
+                            });
+                        }
+                    }
+                    Some(TagData {
+                        source_depth,
+                        tag_type,
+                        tag_id,
+                    }) => {
+                        // it has been declared earlier, but in a higher scope, so overwrite
+                        if is_statement && *source_depth != scope.depth {
+                            scope.insert_incomplete_struct(name.as_deref())
+                        } else {
+                            assert_eq!(*tag_type, TagType::Struct);
+                            *tag_id
+                        }
                     }
                 }
-                Some(TagData {
-                    source_depth,
-                    tag_type,
-                    tag_id,
-                }) => {
-                    // it has been declared earlier, but in a higher scope, so overwrite
-                    if is_statement && *source_depth != scope.depth {
-                        scope.insert_incomplete_struct(name.to_string())
-                    } else {
-                        assert_eq!(*tag_type, TagType::Struct);
-                        *tag_id
-                    }
-                }
-            },
+            }
             // it's a definition
             Some(decls) => {
                 if decls.is_empty() {
@@ -1099,7 +1119,7 @@ impl CType {
                         span: struct_type.span,
                     });
                 }
-                let mut struct_data = StructData::new(name.to_string());
+                let mut struct_data = StructData::new(name.clone());
                 for decl in decls {
                     match &decl.node {
                         StructDeclaration::StaticAssert(..) => {
@@ -1119,16 +1139,21 @@ impl CType {
                                 ctype = Self::ImmediateArray(inner, length);
                             }
                             let sizeof = ctype.sizeof(scope);
-                            struct_data.fields.insert(
-                                parse_declarator_name(declarator)?,
-                                (ctype, struct_data.size),
-                            );
+                            match struct_kind {
+                                StructKind::Struct => struct_data.fields.insert(
+                                    parse_declarator_name(declarator)?,
+                                    (ctype, struct_data.size),
+                                ),
+                                StructKind::Union => struct_data
+                                    .fields
+                                    .insert(parse_declarator_name(declarator)?, (ctype, 0)),
+                            };
                             struct_data.size += sizeof;
                         }
                     }
                 }
                 scope
-                    .insert_struct(name.to_string(), struct_data)
+                    .insert_struct(name.as_deref(), struct_data)
                     .map_err(|err| IRGenerationError {
                         span: struct_type.span,
                         err,
@@ -1342,10 +1367,7 @@ impl DeclarationInfo {
                     println!("WARNING: All type qualifiers are ignored {specifier:?}");
                 }
                 DeclarationSpecifier::Function(spec) => match spec.node {
-                    FunctionSpecifier::Inline => Err(IRGenerationError {
-                        err: IRGenerationErrorType::TODOInline,
-                        span: specifier.span,
-                    })?,
+                    FunctionSpecifier::Inline => eprintln!("WARNING: Inline is ignored"),
                     FunctionSpecifier::Noreturn => Err(IRGenerationError {
                         err: IRGenerationErrorType::TODONoreturn,
                         span: specifier.span,
