@@ -10,6 +10,7 @@ use indexmap::IndexMap;
 use parking_lot::Mutex;
 
 use std::{
+    cell::OnceCell,
     collections::HashMap,
     fmt::{self, Debug, Display},
     io::{self, Write},
@@ -615,7 +616,7 @@ pub struct ScopeInfo {
     // IRValue is only None when CType is Function
     var_map: HashMap<String, VarData>,
     tag_map: HashMap<String, TagData>,
-    structs: Rc<Mutex<Vec<Option<StructData>>>>,
+    structs: Rc<Mutex<Vec<OnceCell<StructData>>>>,
     depth: usize,
 }
 
@@ -660,7 +661,7 @@ impl ScopeInfo {
                 tag_type: TagType::Struct,
             },
         );
-        structs.push(None);
+        structs.push(OnceCell::new());
         id
     }
 
@@ -670,10 +671,10 @@ impl ScopeInfo {
         struct_data: StructData,
     ) -> Result<TagID, IRGenerationErrorType> {
         let (id, new) = self.generate_struct_id(&name);
-        if !new && self.structs.lock()[id].is_some() {
+        if !new && self.structs.lock()[id].get().is_some() {
             return Err(IRGenerationErrorType::StructRedefinition);
         }
-        self.structs.lock().push(Some(struct_data));
+        self.structs.lock().push(OnceCell::from(struct_data));
         self.tag_map.insert(
             name,
             TagData {
@@ -688,7 +689,7 @@ impl ScopeInfo {
     pub fn get_struct_by_id(&self, id: TagID) -> StructData {
         let structs = self.structs.lock();
         // TODO: don't clone here
-        structs[id].as_ref().unwrap().clone()
+        structs[id].get().expect("all tag ids are valid").clone()
     }
 }
 
@@ -1039,8 +1040,8 @@ impl CType {
             (IntType::Long, Sign::Unsigned) => Self::UnsignedLong,
             (IntType::Long, Sign::Signed | Sign::None) => Self::SignedLong,
 
-            (IntType::LongLong, Sign::Unsigned) => todo!(),
-            (IntType::LongLong, Sign::Signed | Sign::None) => todo!(),
+            (IntType::LongLong, Sign::Unsigned) => todo!("unsigned long long"),
+            (IntType::LongLong, Sign::Signed | Sign::None) => todo!("long long"),
         })
     }
 
