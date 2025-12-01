@@ -128,7 +128,7 @@ fn main() {
                         &[
                             "befunge_libc/stdlib",
                             "befunge_libc/softfloat/include",
-                            "befunge_libc/softfloat/8086",
+                            "befunge_libc/softfloat/8086-SSE",
                         ],
                     ) {
                         Err(err) => {
@@ -144,7 +144,7 @@ fn main() {
         }
 
         for entry in BEFUNGE_LIBC
-            .get_dir("softfloat/8086")
+            .get_dir("softfloat/8086-SSE")
             .expect("softfloat")
             .files()
         {
@@ -158,7 +158,7 @@ fn main() {
                         &[
                             "befunge_libc/stdlib",
                             "befunge_libc/softfloat/include",
-                            "befunge_libc/softfloat/8086",
+                            "befunge_libc/softfloat/8086-SSE",
                         ],
                     ) {
                         Err(err) => {

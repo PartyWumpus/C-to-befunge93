@@ -1130,25 +1130,25 @@ impl CType {
                         }
                         StructDeclaration::Field(field) => {
                             let ctype = Self::from_qualifiers(&field.node.specifiers, scope)?;
-                            assert_eq!(field.node.declarators.len(), 1);
                             assert!(field.node.declarators[0].node.bit_width.is_none());
-                            let declarator =
-                                &field.node.declarators[0].node.declarator.clone().unwrap();
-                            let mut ctype = Self::from_declarator(declarator, &ctype, scope)?;
-                            if let Self::Array(inner, length) = ctype {
-                                ctype = Self::ImmediateArray(inner, length);
+                            for declarator in &field.node.declarators {
+                                let declarator = &declarator.node.declarator.clone().unwrap();
+                                let mut ctype = Self::from_declarator(declarator, &ctype, scope)?;
+                                if let Self::Array(inner, length) = ctype {
+                                    ctype = Self::ImmediateArray(inner, length);
+                                }
+                                let sizeof = ctype.sizeof(scope);
+                                match struct_kind {
+                                    StructKind::Struct => struct_data.fields.insert(
+                                        parse_declarator_name(declarator)?,
+                                        (ctype, struct_data.size),
+                                    ),
+                                    StructKind::Union => struct_data
+                                        .fields
+                                        .insert(parse_declarator_name(declarator)?, (ctype, 0)),
+                                };
+                                struct_data.size += sizeof;
                             }
-                            let sizeof = ctype.sizeof(scope);
-                            match struct_kind {
-                                StructKind::Struct => struct_data.fields.insert(
-                                    parse_declarator_name(declarator)?,
-                                    (ctype, struct_data.size),
-                                ),
-                                StructKind::Union => struct_data
-                                    .fields
-                                    .insert(parse_declarator_name(declarator)?, (ctype, 0)),
-                            };
-                            struct_data.size += sizeof;
                         }
                     }
                 }
@@ -2112,7 +2112,7 @@ impl TopLevelBuilder<'_> {
                 } else if self.is_const && !matches!(info.duration, StorageDuration::Extern) {
                     ctype.zero_init()
                 } else {
-                    return Ok(());
+                    continue;
                 };
 
                 for (i, init) in inits.into_iter().enumerate() {
