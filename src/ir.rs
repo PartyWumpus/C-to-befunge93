@@ -105,6 +105,7 @@ pub enum IROp {
     AlwaysBranch(String),
     CondBranch(BranchType, String, IRValue),
     AddressOf(IRValue, IRValue),
+    Dereference(IRValue, IRValue, usize),
     // do i need a source and destination offset?
     Copy(IRValue, IRValue, usize),
     Store(IRValue, IRValue, usize),
@@ -127,7 +128,6 @@ pub enum UnaryOp {
     Minus,
     Complement,
     BooleanNegate,
-    Dereference,
 }
 
 #[derive(Debug, Clone, Copy)]

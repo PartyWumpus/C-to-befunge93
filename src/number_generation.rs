@@ -1,5 +1,7 @@
 use prime_factorization::Factorization;
 
+use crate::ARGS;
+
 const MAX: u64 = 1_114_111;
 const ISIZE_MAX: isize = 1_114_111;
 
@@ -20,8 +22,7 @@ pub fn int_to_befunge_str(num: u64) -> String {
             let mut len = usize::MAX;
             let mut best = None;
 
-            // TODO: enable with flag
-            if true {
+            if ARGS.optimization_level >= 1 {
                 for i in -9..=9 {
                     let x = with_offset(num, i, sqrt);
                     if let Some(x) = x {

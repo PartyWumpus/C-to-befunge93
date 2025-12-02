@@ -126,6 +126,11 @@ impl CodeGen {
                     self.builder.address_of(a);
                     self.builder.copy(&IRValue::BefungeStack, out, 1);
                 }
+                IROp::Dereference(a, out, size) => {
+                    assert!(*size == 1);
+                    self.builder.dereference(a);
+                    self.builder.copy(&IRValue::BefungeStack, out, *size);
+                }
                 IROp::Copy(a, out, size) => {
                     self.builder.copy(a, out, *size);
                 }
@@ -139,21 +144,13 @@ impl CodeGen {
                             UnaryOp::Minus => self.builder.unary_minus(a),
                             UnaryOp::Complement => self.builder.bitwise_complement(a),
                             UnaryOp::BooleanNegate => self.builder.boolean_negate(a),
-                            UnaryOp::Dereference => self.builder.dereference(a),
                         }
                         self.builder
                             .constrain_to_range(&IRValue::BefungeStack, *irtype, false);
                         self.builder.copy(&IRValue::BefungeStack, out, 1);
                     }
                     IRType::Double => {
-                        // FIXME: TEMPORARY
-                        match op {
-                            UnaryOp::Dereference => {
-                                self.builder.dereference(a);
-                                self.builder.copy(&IRValue::BefungeStack, out, 1);
-                            }
-                            _ => panic!("floats"),
-                        }
+                        panic!("floats");
                         /*
                         match op {
                             UnaryOp::Minus => self.builder.call(
@@ -171,10 +168,6 @@ impl CodeGen {
                                 self.function_map["_bf_double_boolean_negate"],
                                 &[(a.clone(), 1)],
                             ),
-                            UnaryOp::Dereference => {
-                                self.builder.dereference(a);
-                                self.builder.copy(&IRValue::BefungeStack, out, 1);
-                            }
                         }
                         self.builder.copy(&IRValue::BefungeStack, out, 1);
                         */

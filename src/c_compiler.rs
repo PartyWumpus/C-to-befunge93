@@ -137,6 +137,8 @@ pub enum IRGenerationErrorType {
     TODONoreturn,
     #[error("Typeof is not yet supported")]
     TODOTypeof,
+    #[error("Dereferencing sized values is not yet supported")]
+    TODODerefSized,
 
     // switch case errors
     #[error("Breaks can only appear inside loops or switch case statements")]
@@ -2236,11 +2238,16 @@ impl TopLevelBuilder<'_> {
             ExpressionOutput::Plain((val, ctype)) => Ok((val, ctype)),
             ExpressionOutput::Dereferenced((ptr, ctype)) => {
                 let out = self.generate_pseudo(ctype.sizeof(&self.scope));
-                self.push(IROp::One(
-                    UnaryOp::Dereference,
+                if ctype.sizeof(&self.scope) > 1 {
+                    return Err(IRGenerationError {
+                        err: IRGenerationErrorType::TODODerefSized,
+                        span: expr.span,
+                    });
+                }
+                self.push(IROp::Dereference(
                     ptr,
                     out.clone(),
-                    IRType::from_ctype(&ctype, &self.scope),
+                    CType::sizeof(&ctype, &self.scope),
                 ));
                 Ok((out, ctype))
             }
@@ -2385,11 +2392,10 @@ impl TopLevelBuilder<'_> {
                         }
                         Out::Dereferenced((val, _)) => {
                             let ptr = self.generate_pseudo(ctype.sizeof(&self.scope));
-                            self.push(IROp::One(
-                                UnaryOp::Dereference,
+                            self.push(IROp::Dereference(
                                 val.clone(),
                                 ptr.clone(),
-                                IRType::from_ctype(ctype, &self.scope),
+                                CType::sizeof(ctype, &self.scope),
                             ));
                             let out = self.generate_pseudo(1);
                             self.push(IROp::AddPtr(

@@ -52,6 +52,9 @@ struct Args {
     /// Disables the use of bitwise operations to speed up startup times
     #[arg(long)]
     disable_bitwise_ops: bool,
+
+    #[arg(short = 'O', default_value = "0")]
+    optimization_level: u8,
 }
 
 fn main() {
