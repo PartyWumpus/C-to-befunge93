@@ -24,12 +24,12 @@ use lang_c::{
         ArrayDeclarator, ArraySize, AsmStatement, BinaryOperator, BinaryOperatorExpression,
         BlockItem, CallExpression, CastExpression, ConditionalExpression, Constant, Declaration,
         DeclarationSpecifier, Declarator, DeclaratorKind, DerivedDeclarator, DoWhileStatement,
-        Ellipsis, Expression, ExternalDeclaration, Float, FloatBase, FloatFormat, ForInitializer,
-        ForStatement, FunctionDefinition, FunctionSpecifier, GnuAsmOperand, Identifier,
-        IfStatement, Initializer, Integer, IntegerBase, IntegerSize, IntegerSuffix, Label,
-        LabeledStatement, MemberExpression, MemberOperator, PointerDeclarator, SizeOfTy, SizeOfVal,
-        SpecifierQualifier, Statement, StorageClassSpecifier, StructDeclaration, StructKind,
-        StructType, SwitchStatement, TypeName, TypeSpecifier, UnaryOperator,
+        Ellipsis, EnumType, Expression, ExternalDeclaration, Float, FloatBase, FloatFormat,
+        ForInitializer, ForStatement, FunctionDefinition, FunctionSpecifier, GnuAsmOperand,
+        Identifier, IfStatement, Initializer, Integer, IntegerBase, IntegerSize, IntegerSuffix,
+        Label, LabeledStatement, MemberExpression, MemberOperator, PointerDeclarator, SizeOfTy,
+        SizeOfVal, SpecifierQualifier, Statement, StorageClassSpecifier, StructDeclaration,
+        StructKind, StructType, SwitchStatement, TypeName, TypeSpecifier, UnaryOperator,
         UnaryOperatorExpression, WhileStatement,
     },
     driver::{Flavor, parse_preprocessed},
@@ -39,13 +39,11 @@ use thiserror::Error;
 
 use crate::{
     ARGS,
-    ir::{BinOp, BranchType, IROp, IRTopLevel, IRType, IRTypeConversionError, IRValue, UnaryOp},
+    ir::{BinOp, BranchType, IROp, IRTopLevel, IRType, IRValue, UnaryOp},
 };
 
 #[derive(Error, Debug)]
 pub enum IRGenerationErrorType {
-    #[error(transparent)]
-    IRTypeConversionError(#[from] IRTypeConversionError),
     #[error("Invalid coersion between {0} and {1}")]
     InvalidCoercion(Box<str>, Box<str>),
     #[error("Unknown type")]
@@ -82,6 +80,10 @@ pub enum IRGenerationErrorType {
         "(TODO) Non trivial array length. VLAs are not supported and neither are constant expressions."
     )]
     TODONonConstantArrayLength,
+    #[error("(TODO) Enumerator value is non-trival, only immediate constants are allowed for now")]
+    TODONonConstantEnumValue,
+    #[error("Enumerator value is not an integer constant.")]
+    NonIntegerEnumValue,
     #[error("(TODO) Array length must be manually specified for now.")]
     TODOUnknownArrayLength,
     #[error("K&R function definitions are not supported.")]
@@ -381,9 +383,11 @@ impl CType {
         matches!(
             self,
             Self::SignedInt
+                | Self::SignedShort
                 | Self::SignedLong
                 | Self::SignedChar
                 | Self::UnsignedInt
+                | Self::UnsignedShort
                 | Self::UnsignedLong
                 | Self::UnsignedChar
                 | Self::Char
@@ -957,7 +961,6 @@ impl CType {
                 TypeSpecifier::Bool => Ok(Self::Bool),
                 TypeSpecifier::Complex => Err(IRGenerationErrorType::TODOImaginary),
                 TypeSpecifier::Atomic(..) => Err(IRGenerationErrorType::TODOUnknownType),
-                TypeSpecifier::Enum(..) => Err(IRGenerationErrorType::TODOUnknownType),
                 TypeSpecifier::TypedefName(ident) => {
                     match scope.var_map.get(&ident.node.name) {
                         Some(VarData::Typedef(ctype)) => Ok(ctype.clone()),
@@ -967,6 +970,7 @@ impl CType {
                 }
                 TypeSpecifier::TypeOf(..) => Err(IRGenerationErrorType::TODOTypeof),
                 TypeSpecifier::TS18661Float(..) => Err(IRGenerationErrorType::TODOUnknownType),
+                TypeSpecifier::Enum(enum_data) => Ok(Self::parse_enum_data(enum_data, scope)?),
                 TypeSpecifier::Struct(struct_data) => {
                     Ok(Self::parse_struct_data(struct_data, scope, is_statement)?)
                 }
@@ -1062,6 +1066,72 @@ impl CType {
             (IntType::LongLong, Sign::Unsigned) => todo!("unsigned long long"),
             (IntType::LongLong, Sign::Signed | Sign::None) => todo!("long long"),
         })
+    }
+
+    fn parse_enum_data(
+        enum_type: &Node<EnumType>,
+        scope: &mut ScopeInfo,
+    ) -> Result<Self, IRGenerationError> {
+        if enum_type.node.enumerators.is_empty() {
+            // using existing enum
+            Err(IRGenerationError {
+                err: IRGenerationErrorType::TODOUnknownType,
+                span: enum_type.span,
+            })
+        } else {
+            let mut last_value = 0;
+            for member in &enum_type.node.enumerators {
+                // FIXME: check that insert is valid here
+                let value = match &member.node.expression {
+                    // TODO: allow arbitrary expressions here.
+                    // this will require refactoring a lot
+                    // because it would require the whole builder to be available all the way in here
+                    // also probably that const eval mode
+                    Some(expr) => match &expr.node {
+                        Expression::Constant(val) => match &val.node {
+                            Constant::Float(_) => {
+                                return Err(IRGenerationError {
+                                    err: IRGenerationErrorType::NonIntegerEnumValue,
+                                    span: expr.span,
+                                });
+                            }
+                            Constant::Integer(int) => integer_constant_to_usize(int),
+                            Constant::Character(str) => {
+                                char_constant_to_usize(str).map_err(|err| IRGenerationError {
+                                    err,
+                                    span: expr.span,
+                                })?
+                            }
+                        },
+                        _ => {
+                            return Err(IRGenerationError {
+                                err: IRGenerationErrorType::TODONonConstantEnumValue,
+                                span: expr.span,
+                            });
+                        }
+                    },
+                    None => last_value,
+                };
+                last_value = value + 1;
+                scope.var_map.insert(
+                    member.node.identifier.node.name.clone(),
+                    VarData::Variable(IRValue::int(value), Self::SignedInt),
+                );
+            }
+            // constructing new enum
+            //FIXME: this is super cheating, but should allow some programs to compile
+            Ok(Self::SignedInt)
+            /*match &enum_type.node.identifier {
+                None => Err(IRGenerationError {
+                    err: IRGenerationErrorType::TODOUnknownType,
+                    span: enum_type.span,
+                }),
+                Some(name) => Err(IRGenerationError {
+                    err: IRGenerationErrorType::TODOUnknownType,
+                    span: enum_type.span,
+                }),
+            }*/
+        }
     }
 
     fn parse_struct_data(
@@ -2420,6 +2490,7 @@ impl TopLevelBuilder<'_> {
         let (end_str, end_lbl) = self.generate_label("end");
 
         let (cond, _cond_type) = self.parse_expression(&expr.node.condition)?;
+        // TODO: assert cond_type is booleanish?
         self.push(IROp::CondBranch(BranchType::Zero, else_str, cond));
         let (temp1, temp1_type) = self.parse_expression(&expr.node.then_expression)?;
         let out = self.generate_pseudo(temp1_type.sizeof(&self.scope));
@@ -2429,6 +2500,7 @@ impl TopLevelBuilder<'_> {
             temp1_type.sizeof(&self.scope),
         ));
         self.push(IROp::AlwaysBranch(end_str));
+
         self.push(else_lbl);
         let (temp2, temp2_type) = self.parse_expression(&expr.node.else_expression)?;
         self.push(IROp::Copy(
@@ -2438,8 +2510,25 @@ impl TopLevelBuilder<'_> {
         ));
         self.push(end_lbl);
 
-        assert_eq!(temp2_type, temp1_type);
-        Ok((out, temp2_type))
+        let common_type =
+            CType::get_common(&temp2_type, &temp1_type).map_err(|err| IRGenerationError {
+                err: IRGenerationErrorType::InvalidCoercion(
+                    err.0.display_type(&self.scope),
+                    err.1.display_type(&self.scope),
+                ),
+                span: expr.span,
+            })?;
+        // TODO: small correctness issue here, but fixing it would require moving
+        // the cast inside both branches, which would require parsing both expressions
+        // before constructing the branches, which would require the same kind of jank
+        // as there is in switch statements w/ mem::swap
+        let out = self
+            .convert_to((out, temp2_type), &common_type)
+            .map_err(|err| IRGenerationError {
+                err,
+                span: expr.span,
+            })?;
+        Ok((out, common_type))
     }
 
     fn parse_call(

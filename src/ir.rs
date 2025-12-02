@@ -42,14 +42,6 @@ pub enum IRType {
     Double,
 }
 
-#[derive(Error, Debug)]
-pub enum IRTypeConversionError {
-    #[error("Void cannot be used in a concrete value")]
-    VoidNotValidType,
-    #[error("Function types cannot be used in a concrete value")]
-    FunctionNotValidType,
-}
-
 impl IRType {
     pub fn from_ctype(value: &CType, scope: &ScopeInfo) -> Self {
         match value {
