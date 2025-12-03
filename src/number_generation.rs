@@ -1,17 +1,17 @@
 use prime_factorization::Factorization;
 
-use crate::ARGS;
-
 const MAX: u64 = 1_114_111;
 const ISIZE_MAX: isize = 1_114_111;
 
-pub fn int_to_befunge_str(num: u64) -> String {
+pub fn int_to_befunge_str(num: u64, deep_search: bool) -> String {
     match num {
         0..10 => num.to_string(),
         10..19 => (num - 9).to_string() + "9+",
         19 => "45*1-".to_owned(),
         20 => "45*".to_owned(),
         34 => "98+2*".to_owned(),
+        // 2^61
+        2_305_843_009_213_693_952_u64 => "\"\u{2000}\u{10000}\u{10000}\u{10000}\"***".to_string(),
         _ => {
             if num < MAX
                 && let Some(char) = char::from_u32(num as u32)
@@ -22,16 +22,16 @@ pub fn int_to_befunge_str(num: u64) -> String {
             let mut len = usize::MAX;
             let mut best = None;
 
-            if ARGS.optimization_level >= 1 {
+            if let Some(n) = find_nearby_square(num) {
+                return n;
+            }
+
+            if deep_search {
                 for i in -9..=9 {
                     let x = with_offset(num, i, sqrt);
                     if let Some(x) = x {
                         return x;
                     }
-                }
-
-                if let Some(n) = find_nearby_square(num) {
-                    return n;
                 }
 
                 for i in -9..=9 {
@@ -188,7 +188,7 @@ fn sqrt(num: u64) -> Option<String> {
         return None;
     }
 
-    let mut str = int_to_befunge_str(sqrt);
+    let mut str = int_to_befunge_str(sqrt, true);
     str.push(':');
     str.push('*');
     Some(str)
@@ -337,7 +337,7 @@ mod tests {
         let mut vals = vec![];
         for _ in 0..1_000 {
             let x: i64 = rng.random();
-            vals.push(int_to_befunge_str(x.abs() as u64).chars().count());
+            vals.push(int_to_befunge_str(x.abs() as u64, true).chars().count());
         }
         println!(
             "average: {}",

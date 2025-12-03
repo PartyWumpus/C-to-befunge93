@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use crate::{
+    ARGS,
     ir::{FuncInfo, IRType, IRValue},
     number_generation::int_to_befunge_str,
 };
@@ -91,7 +92,7 @@ impl OpBuilder {
 
     /// Puts num on bstack
     pub fn load_number(&mut self, num: usize) {
-        let x = int_to_befunge_str(num as u64);
+        let x = int_to_befunge_str(num as u64, ARGS.optimization_level > 1);
         self.str(&x);
         self.current_stack_size += 1;
     }
@@ -700,13 +701,12 @@ impl OpBuilder {
         match a {
             IRValue::Stack(offset) => {
                 // TODO: optimize this
-                // FIXME: INVESTIGATE, IT APPEARS 2^61 + 7 IS INVALID!
                 self.load_number(*offset);
                 self.load_stack_ptr();
                 self.add(&IRValue::BefungeStack, &IRValue::BefungeStack);
             }
             IRValue::Data(position) => {
-                // TODO: fix load number so this just works
+                // TODO:
                 //self.load_number(0b001 * 2_usize.pow(61) + *position);
                 self.add(
                     &IRValue::int(2_usize.pow(61)),

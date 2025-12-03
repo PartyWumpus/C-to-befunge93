@@ -217,6 +217,8 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
+use crate::number_generation::int_to_befunge_str;
+
 fn write_each(
     path: impl AsRef<Path>,
     items: impl IntoIterator<Item = impl AsRef<[u8]>>,
