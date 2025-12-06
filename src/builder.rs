@@ -88,17 +88,29 @@ impl OpBuilder {
     }
 
     /// Puts return value on bstack
-    pub fn load_return_val(&mut self, size: usize) {
-        assert!(size == 1);
-        self.str("20g");
-        self.current_stack_size += 1;
+    pub fn load_return_val(&mut self, loc: &IRValue, size: usize) {
+        assert_ne!(size, 0);
+        if size <= 8 {
+            for i in 0..size {
+                self.str(&format!("{}0g", i + 2));
+                self.current_stack_size += 1;
+                self.copy_with_offset(&IRValue::BefungeStack, loc, i);
+            }
+        } else {
+            panic!("for now, structs sized > 8 cannot be returned")
+        }
     }
 
     fn set_return_val(&mut self, loc: &IRValue, size: usize) {
-        assert!(size == 1);
-        self.load_val(loc);
-        self.str("20p");
-        self.current_stack_size -= 1;
+        if size <= 8 {
+            for i in 0..size {
+                self.copy_from_offset(loc, &IRValue::BefungeStack, i);
+                self.str(&format!("{}0p", i + 2));
+                self.current_stack_size -= 1;
+            }
+        } else {
+            panic!("for now, structs sized > 8 cannot be returned")
+        }
     }
 
     /// Puts num on bstack
@@ -679,7 +691,7 @@ impl OpBuilder {
             IRValue::Data(position) => self.load_data_val(*position + offset),
             IRValue::Register(..) => panic!("Cannot copy with offset into a register"),
             IRValue::BefungeStack => panic!("Cannot copy with offset into the befunge stack"),
-            IRValue::Immediate(_) => panic!("Immediate value as output location"),
+            IRValue::Immediate(val) => self.load_number(*val),
             IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
                 panic!("Psuedo registers should be removed by befunge generation time")
             }

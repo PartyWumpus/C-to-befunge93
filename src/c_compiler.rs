@@ -2592,8 +2592,7 @@ impl TopLevelBuilder<'_> {
                             Ok((IRValue::int(0), return_type))
                         } else {
                             let out = self.generate_pseudo(return_type.sizeof(&self.scope));
-                            self.push(IROp::Copy(
-                                IRValue::Register(20),
+                            self.push(IROp::GetReturnValue(
                                 out.clone(),
                                 return_type.sizeof(&self.scope),
                             ));
