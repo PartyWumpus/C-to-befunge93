@@ -2170,7 +2170,7 @@ impl TopLevelBuilder<'_> {
 
                 for (i, init) in inits.into_iter().enumerate() {
                     assert!(init.1 == 1);
-                    builder.push(IROp::CopyToOffset(init.0, loc.clone(), i));
+                    builder.push(IROp::CopyWithOffset((init.0, 0), (loc.clone(), i)));
                 }
 
                 // FIXME: bad bad bad, just have a seperate global counter
@@ -2196,7 +2196,7 @@ impl TopLevelBuilder<'_> {
 
                 for (i, init) in inits.into_iter().enumerate() {
                     assert!(init.1 == 1);
-                    self.push(IROp::CopyToOffset(init.0, loc.clone(), i));
+                    self.push(IROp::CopyWithOffset((init.0, 0), (loc.clone(), i)));
                 }
             }
         }
@@ -2260,10 +2260,10 @@ impl TopLevelBuilder<'_> {
                 let size = subtype.sizeof(&self.scope);
                 let out = self.generate_pseudo(subtype.sizeof(&self.scope));
                 for i in 0..size {
-                    let tmp = self.generate_pseudo(1);
-                    // TODO: add a copy that has both offsets
-                    self.push(IROp::CopyFromOffset(base.clone(), tmp.clone(), offset + i));
-                    self.push(IROp::CopyToOffset(tmp.clone(), out.clone(), i));
+                    self.push(IROp::CopyWithOffset(
+                        (base.clone(), offset + i),
+                        (out.clone(), i),
+                    ));
                 }
                 Ok((out, subtype))
             }
@@ -2387,7 +2387,10 @@ impl TopLevelBuilder<'_> {
                         }
                         Out::SubObject { base, offset, .. } => {
                             let ptr = self.generate_pseudo(1);
-                            self.push(IROp::CopyFromOffset(base.clone(), ptr.clone(), *offset));
+                            self.push(IROp::CopyWithOffset(
+                                (base.clone(), *offset),
+                                (ptr.clone(), 0),
+                            ));
                             let out = self.generate_pseudo(1);
                             self.push(IROp::AddPtr(
                                 ptr,
@@ -2899,7 +2902,10 @@ impl TopLevelBuilder<'_> {
                                 offset,
                             } => {
                                 let out = self.generate_pseudo(subtype.sizeof(&self.scope));
-                                self.push(IROp::CopyFromOffset(base.clone(), out.clone(), offset));
+                                self.push(IROp::CopyWithOffset(
+                                    (base.clone(), offset),
+                                    (out.clone(), 0),
+                                ));
                                 (
                                     out,
                                     subtype,
@@ -3239,7 +3245,7 @@ impl TopLevelBuilder<'_> {
                 ));
             }
             AssignmentStatus::AssigningToSubObject(base, offset) => {
-                self.push(IROp::CopyToOffset(out.clone(), base, offset));
+                self.push(IROp::CopyWithOffset((out.clone(), 0), (base, offset)));
             }
         }
         Ok(ExpressionOutput::Plain((out, out_type)))

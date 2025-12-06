@@ -49,13 +49,9 @@ fn apply_to_all_ir_values(ops: &mut IRTopLevel, func: &mut impl FnMut(&mut IRVal
                 func(a);
                 func(out);
             }
-            IROp::CopyToOffset(a, out, _) => {
+            IROp::CopyWithOffset((a, _), (b, _)) => {
                 func(a);
-                func(out);
-            }
-            IROp::CopyFromOffset(a, out, _) => {
-                func(a);
-                func(out);
+                func(b);
             }
             IROp::AddPtr(ptr, b, out, _) => {
                 func(ptr);
@@ -163,7 +159,10 @@ fn stack_size_recalculator(func: &mut IRTopLevel) -> usize {
     if ARGS.zero_stack_before_use {
         let mut new_ops = vec![];
         for i in func.parameters..out {
-            new_ops.push(IROp::CopyToOffset(IRValue::int(0), IRValue::Stack(1), i));
+            new_ops.push(IROp::CopyWithOffset(
+                (IRValue::int(0), 0),
+                (IRValue::Stack(1), i),
+            ));
         }
         new_ops.extend(func.ops.iter().cloned());
         func.ops = new_ops;

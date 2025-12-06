@@ -130,15 +130,13 @@ impl CodeGen {
                     self.builder.copy(&IRValue::BefungeStack, out, 1);
                 }
                 IROp::Dereference(a, out, size) => {
-                    self.builder.dereference(a, *size);
-                    self.builder.copy(&IRValue::BefungeStack, out, *size);
+                    self.builder.dereference(a, out, *size);
                 }
                 IROp::Copy(a, out, size) => {
                     self.builder.copy(a, out, *size);
                 }
                 IROp::Store(a, out, size) => {
-                    assert_eq!(*size, 1);
-                    self.builder.store(a, out);
+                    self.builder.store(a, out, *size);
                 }
                 IROp::One(op, a, out, irtype) => match irtype {
                     IRType::Signed(..) | IRType::Unsigned(..) => {
@@ -276,11 +274,14 @@ impl CodeGen {
                         self.builder.copy(&IRValue::Register(20), out, 1);
                     }
                 },
-                IROp::CopyToOffset(source, location, offset) => {
-                    self.builder.copy_with_offset(source, location, *offset);
-                }
-                IROp::CopyFromOffset(source, location, offset) => {
-                    self.builder.copy_from_offset(source, location, *offset);
+                IROp::CopyWithOffset(
+                    (source, source_offset),
+                    (destination, destination_offset),
+                ) => {
+                    self.builder.copy_with_offset(
+                        (source, *source_offset),
+                        (destination, *destination_offset),
+                    );
                 }
                 IROp::AddPtr(ptr, b, out, size) => {
                     self.builder.add_ptr(ptr, b, *size);
