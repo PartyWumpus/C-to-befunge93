@@ -530,7 +530,7 @@ impl CType {
                 // decay arrays in args into pointers
                 .map(|ctype| match ctype {
                     Self::Array(inner, _) => *inner,
-                    //Self::ImmediateArray(..) => panic!("immediate array in function args"),
+                    Self::ImmediateArray(..) => panic!("immediate array in function args"),
                     //Self::Void => panic!("void in function args"),
                     ctype => ctype,
                 })
@@ -2257,8 +2257,14 @@ impl TopLevelBuilder<'_> {
                 subtype,
                 offset,
             } => {
+                let size = subtype.sizeof(&self.scope);
                 let out = self.generate_pseudo(subtype.sizeof(&self.scope));
-                self.push(IROp::CopyFromOffset(base, out.clone(), offset));
+                for i in 0..size {
+                    let tmp = self.generate_pseudo(1);
+                    // TODO: add a copy that has both offsets
+                    self.push(IROp::CopyFromOffset(base.clone(), tmp.clone(), offset + i));
+                    self.push(IROp::CopyToOffset(tmp.clone(), out.clone(), i));
+                }
                 Ok((out, subtype))
             }
         }
