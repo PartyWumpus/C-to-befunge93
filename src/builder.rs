@@ -406,6 +406,7 @@ impl OpBuilder {
 
         // Times by the sign from earlier
         self.char('*');
+        self.current_stack_size -= 1;
     }
 
     pub fn constrain_to_range(&mut self, value: &IRValue, size: IRType, bounded: bool) {
