@@ -127,8 +127,7 @@ impl CodeGen {
                     self.builder.copy(&IRValue::BefungeStack, out, 1);
                 }
                 IROp::Dereference(a, out, size) => {
-                    assert!(*size == 1);
-                    self.builder.dereference(a);
+                    self.builder.dereference(a, *size);
                     self.builder.copy(&IRValue::BefungeStack, out, *size);
                 }
                 IROp::Copy(a, out, size) => {

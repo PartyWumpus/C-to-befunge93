@@ -15,9 +15,11 @@ mod codegen;
 mod ir;
 mod number_generation;
 mod passes;
+mod softfloat_files;
 
 static ARGS: LazyLock<Args> = LazyLock::new(Args::parse);
 static BEFUNGE_LIBC: Dir = include_dir!("./befunge_libc");
+
 
 #[derive(Parser, Debug)]
 #[command(about="A C compiler that outputs befunge93 instead of assembly.", long_about = None)]
@@ -100,7 +102,11 @@ fn main() {
                 match FileBuilder::parse_c(
                     entry.contents(),
                     entry.path().to_str().unwrap(),
-                    &["befunge_libc/stdlib"],
+                    &[
+                        "befunge_libc/stdlib",
+
+                        "befunge_libc/softfloat/include",
+                    ],
                 ) {
                     Err(err) => {
                         if !ARGS.silent {
@@ -114,15 +120,17 @@ fn main() {
         }
     }
 
-    // TODO: get softfloat library working
+    // TODO: get softfloat working
     if false {
         for entry in BEFUNGE_LIBC
             .get_dir("softfloat")
             .expect("softfloat")
             .files()
         {
-            if let Some(ext) = entry.path().extension()
-                && ext == "c"
+            let Some(path) = entry.path().to_str() else { continue };
+            let Some(index) = path.rfind('/') else { continue };
+            let filename = &path[index+1..];
+            if SOFTFLOAT_FILES.contains(&filename)
             {
                 files.push(
                     match FileBuilder::parse_c(
@@ -151,8 +159,10 @@ fn main() {
             .expect("softfloat")
             .files()
         {
-            if let Some(ext) = entry.path().extension()
-                && ext == "c"
+            let Some(path) = entry.path().to_str() else { continue };
+            let Some(index) = path.rfind('/') else { continue };
+            let filename = &path[index+1..];
+            if SOFTFLOAT_FILES.contains(&filename)
             {
                 files.push(
                     match FileBuilder::parse_c(
@@ -217,7 +227,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-use crate::number_generation::int_to_befunge_str;
+use crate::softfloat_files::SOFTFLOAT_FILES;
 
 fn write_each(
     path: impl AsRef<Path>,
@@ -235,9 +245,3 @@ fn write_each(
 
 // FIXME: reorganise __asm__ so all [bstack]'s are loaded first
 // TODO: use seperate global counter for global values
-//
-// NOTE: remember, linking can only use values without . in the name
-//
-// NOTE: Some custom printing thing is going to be needed for every value that isn't signed int(/long?)
-// NOTE: When implementing unsigned ints, gonna need to have custom impls for some things
-//        likely mult, divide and modulo (as befunge ops are signed).

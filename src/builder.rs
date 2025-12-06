@@ -721,21 +721,29 @@ impl OpBuilder {
         }
     }
 
-    pub fn dereference(&mut self, a: &IRValue) {
+    pub fn dereference(&mut self, a: &IRValue, size: usize) {
+        // TODO: consider moving this top level
+        self.load_number(2_usize.pow(61));
+        self.put_val(&IRValue::Register(61));
+
         self.load_val(a);
-        self.char(':');
-        self.current_stack_size += 1;
+        for _ in 1..size*2 {
+            self.char(':');
+            self.current_stack_size += 1;
+        }
 
-        self.load_number(2_usize.pow(61));
-        self.modulo(&IRValue::BefungeStack, &IRValue::BefungeStack);
+        for _ in 0..size {
+            self.load_val(&IRValue::Register(61));
+            self.modulo(&IRValue::BefungeStack, &IRValue::BefungeStack);
 
-        self.char('\\');
+            self.char('\\');
 
-        self.load_number(2_usize.pow(61));
-        self.divide(&IRValue::BefungeStack, &IRValue::BefungeStack);
+            self.load_val(&IRValue::Register(61));
+            self.divide(&IRValue::BefungeStack, &IRValue::BefungeStack);
 
-        self.char('g');
-        self.current_stack_size -= 1;
+            self.char('g');
+            self.current_stack_size -= 1;
+        }
     }
 
     /// follows pointer
