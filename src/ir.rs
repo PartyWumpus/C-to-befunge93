@@ -113,8 +113,7 @@ pub enum IROp {
     One(UnaryOp, IRValue, IRValue, IRType),
     Two(BinOp, IRValue, IRValue, IRValue, IRType),
     Cast(IRType, (IRValue, IRType), IRValue),
-    CopyToOffset(IRValue, IRValue, usize),
-    CopyFromOffset(IRValue, IRValue, usize),
+    CopyWithOffset((IRValue, usize), (IRValue, usize)),
     AddPtr(IRValue, IRValue, IRValue, usize),
 }
 

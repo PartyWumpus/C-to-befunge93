@@ -94,7 +94,7 @@ impl OpBuilder {
             for i in 0..size {
                 self.str(&format!("{}0g", i + 2));
                 self.current_stack_size += 1;
-                self.copy_with_offset(&IRValue::BefungeStack, loc, i);
+                self.copy_with_offset((&IRValue::BefungeStack, 0), (loc, i));
             }
         } else {
             panic!("for now, structs sized > 8 cannot be returned")
@@ -104,7 +104,7 @@ impl OpBuilder {
     fn set_return_val(&mut self, loc: &IRValue, size: usize) {
         if size <= 8 {
             for i in 0..size {
-                self.copy_from_offset(loc, &IRValue::BefungeStack, i);
+                self.copy_with_offset((loc, i), (&IRValue::BefungeStack, 0));
                 self.str(&format!("{}0p", i + 2));
                 self.current_stack_size -= 1;
             }
@@ -642,61 +642,41 @@ impl OpBuilder {
             self.put_val(b);
         } else {
             for offset in 0..size {
-                match a {
-                    IRValue::Stack(position) => self.load_stack_val(*position + offset),
-                    IRValue::Data(position) => self.load_data_val(*position + offset),
-                    IRValue::Register(..) => panic!("Cannot copy with offset into a register"),
-                    IRValue::BefungeStack => {
-                        panic!("Cannot copy with offset into the befunge stack")
-                    }
-                    IRValue::Immediate(_) => panic!("Immediate value as output location"),
-                    IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
-                        panic!("Psuedo registers should be removed by befunge generation time")
-                    }
-                }
-                match b {
-                    IRValue::Stack(position) => self.set_stack_val(*position + offset),
-                    IRValue::Data(position) => self.set_data_val(*position + offset),
-                    IRValue::Register(..) => panic!("Cannot copy with offset into a register"),
-                    IRValue::BefungeStack => {
-                        panic!("Cannot copy with offset into the befunge stack")
-                    }
-                    IRValue::Immediate(_) => panic!("Immediate value as output location"),
-                    IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
-                        panic!("Psuedo registers should be removed by befunge generation time")
-                    }
-                }
+                self.copy_with_offset((a, offset), (b, offset));
             }
         }
     }
 
-    pub fn copy_with_offset(&mut self, a: &IRValue, b: &IRValue, offset: usize) {
-        // TODO: optimize here when loading an immediate value
-        self.load_val(a);
-        match b {
-            IRValue::Stack(position) => self.set_stack_val(*position + offset),
-            IRValue::Data(position) => self.set_data_val(*position + offset),
-            IRValue::Register(..) => panic!("Cannot copy with offset into a register"),
-            IRValue::BefungeStack => panic!("Cannot copy with offset into the befunge stack"),
-            IRValue::Immediate(_) => panic!("Immediate value as output location"),
-            IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
-                panic!("Psuedo registers should be removed by befunge generation time")
+    pub fn copy_with_offset(&mut self, a: (&IRValue, usize), b: (&IRValue, usize)) {
+        if a.1 == 0 {
+            self.load_val(a.0);
+        } else {
+            match a.0 {
+                IRValue::Stack(position) => self.load_stack_val(*position + a.1),
+                IRValue::Data(position) => self.load_data_val(*position + a.1),
+                IRValue::Register(..) => panic!("Cannot copy with offset into a register"),
+                IRValue::BefungeStack => panic!("Cannot copy with offset into the befunge stack"),
+                IRValue::Immediate(val) => self.load_number(*val),
+                IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
+                    panic!("Psuedo registers should be removed by befunge generation time")
+                }
             }
         }
-    }
 
-    pub fn copy_from_offset(&mut self, a: &IRValue, b: &IRValue, offset: usize) {
-        match a {
-            IRValue::Stack(position) => self.load_stack_val(*position + offset),
-            IRValue::Data(position) => self.load_data_val(*position + offset),
-            IRValue::Register(..) => panic!("Cannot copy with offset into a register"),
-            IRValue::BefungeStack => panic!("Cannot copy with offset into the befunge stack"),
-            IRValue::Immediate(val) => self.load_number(*val),
-            IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
-                panic!("Psuedo registers should be removed by befunge generation time")
+        if b.1 == 0 {
+            self.put_val(b.0);
+        } else {
+            match b.0 {
+                IRValue::Stack(position) => self.set_stack_val(*position + b.1),
+                IRValue::Data(position) => self.set_data_val(*position + b.1),
+                IRValue::Register(..) => panic!("Cannot copy with offset into a register"),
+                IRValue::BefungeStack => panic!("Cannot copy with offset into the befunge stack"),
+                IRValue::Immediate(_) => panic!("Immediate value as output location"),
+                IRValue::Psuedo { .. } | IRValue::StaticPsuedo { .. } => {
+                    panic!("Psuedo registers should be removed by befunge generation time")
+                }
             }
         }
-        self.put_val(b);
     }
 
     // 0 - x
@@ -744,7 +724,7 @@ impl OpBuilder {
         }
     }
 
-    pub fn dereference(&mut self, a: &IRValue, size: usize) {
+    pub fn dereference(&mut self, a: &IRValue, out: &IRValue, size: usize) {
         // TODO: consider moving this top level
         self.load_number(2_usize.pow(61));
         self.put_val(&IRValue::Register(61));
@@ -755,7 +735,7 @@ impl OpBuilder {
             self.current_stack_size += 1;
         }
 
-        for _ in 0..size {
+        for i in 0..size {
             self.load_val(&IRValue::Register(61));
             self.modulo(&IRValue::BefungeStack, &IRValue::BefungeStack);
 
@@ -766,27 +746,35 @@ impl OpBuilder {
 
             self.char('g');
             self.current_stack_size -= 1;
+            self.copy_with_offset((&IRValue::BefungeStack, 0), (out, i));
         }
     }
 
     /// follows pointer
-    pub fn store(&mut self, val: &IRValue, loc: &IRValue) {
-        self.load_val(val);
-
-        self.load_val(loc);
-        self.char(':');
-        self.current_stack_size += 1;
-
+    pub fn store(&mut self, val: &IRValue, loc: &IRValue, size: usize) {
+        // TODO: consider moving this top level
         self.load_number(2_usize.pow(61));
-        self.modulo(&IRValue::BefungeStack, &IRValue::BefungeStack);
+        self.put_val(&IRValue::Register(61));
 
-        self.char('\\');
+        for i in 0..size {
+            self.copy_with_offset((val, i), (&IRValue::BefungeStack, 0));
 
-        self.load_number(2_usize.pow(61));
-        self.divide(&IRValue::BefungeStack, &IRValue::BefungeStack);
+            self.load_val(loc);
+            self.char(':');
+            self.current_stack_size += 1;
 
-        self.char('p');
-        self.current_stack_size -= 3;
+            self.load_val(&IRValue::Register(61));
+            self.modulo(&IRValue::BefungeStack, &IRValue::BefungeStack);
+            self.add(&IRValue::BefungeStack, &IRValue::int(i));
+
+            self.char('\\');
+
+            self.load_val(&IRValue::Register(61));
+            self.divide(&IRValue::BefungeStack, &IRValue::BefungeStack);
+
+            self.char('p');
+            self.current_stack_size -= 3;
+        }
     }
 
     pub fn add(&mut self, a: &IRValue, b: &IRValue) {
