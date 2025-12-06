@@ -398,6 +398,10 @@ impl CType {
         matches!(self, Self::Pointer(..) | Self::Array(..))
     }
 
+    pub const fn is_void(&self) -> bool {
+        matches!(self, Self::Void)
+    }
+
     pub const fn is_function_pointer(&self) -> bool {
         matches!(self, Self::Pointer(Self::Function(..)))
     }
@@ -852,7 +856,12 @@ impl FileBuilder {
         let name = parse_declarator_name(&func.node.declarator)?;
         let param_count = builder.parse_func_declarator(&func.node.declarator)?.len();
         builder.parse_statement(&func.node.statement)?;
-        builder.push(IROp::Return(IRValue::int(0)));
+        let size = if builder.return_type.is_void() {
+            1
+        } else {
+            builder.return_type.sizeof(&builder.scope)
+        };
+        builder.push(IROp::Return(IRValue::int(0), size));
 
         // FIXME: bad bad bad, just have a seperate global counter
         builder.file_builder.count = builder.count;
@@ -1575,10 +1584,10 @@ impl TopLevelBuilder<'_> {
                             err,
                             span: stmt.span,
                         })?;
-                    self.push(IROp::Return(out));
+                    self.push(IROp::Return(out, final_type.sizeof(&self.scope)));
                 } else {
                     // return type check not needed, as this is only reachable via UB
-                    self.push(IROp::Return(IRValue::int(0)));
+                    self.push(IROp::Return(IRValue::int(0), 1));
                 }
             }
             Statement::Compound(blocks) => {

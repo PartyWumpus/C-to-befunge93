@@ -20,7 +20,6 @@ mod softfloat_files;
 static ARGS: LazyLock<Args> = LazyLock::new(Args::parse);
 static BEFUNGE_LIBC: Dir = include_dir!("./befunge_libc");
 
-
 #[derive(Parser, Debug)]
 #[command(about="A C compiler that outputs befunge93 instead of assembly.", long_about = None)]
 struct Args {
@@ -102,11 +101,7 @@ fn main() {
                 match FileBuilder::parse_c(
                     entry.contents(),
                     entry.path().to_str().unwrap(),
-                    &[
-                        "befunge_libc/stdlib",
-
-                        "befunge_libc/softfloat/include",
-                    ],
+                    &["befunge_libc/stdlib", "befunge_libc/softfloat/include"],
                 ) {
                     Err(err) => {
                         if !ARGS.silent {
@@ -127,11 +122,14 @@ fn main() {
             .expect("softfloat")
             .files()
         {
-            let Some(path) = entry.path().to_str() else { continue };
-            let Some(index) = path.rfind('/') else { continue };
-            let filename = &path[index+1..];
-            if SOFTFLOAT_FILES.contains(&filename)
-            {
+            let Some(path) = entry.path().to_str() else {
+                continue;
+            };
+            let Some(index) = path.rfind('/') else {
+                continue;
+            };
+            let filename = &path[index + 1..];
+            if SOFTFLOAT_FILES.contains(&filename) {
                 files.push(
                     match FileBuilder::parse_c(
                         entry.contents(),
@@ -159,11 +157,14 @@ fn main() {
             .expect("softfloat")
             .files()
         {
-            let Some(path) = entry.path().to_str() else { continue };
-            let Some(index) = path.rfind('/') else { continue };
-            let filename = &path[index+1..];
-            if SOFTFLOAT_FILES.contains(&filename)
-            {
+            let Some(path) = entry.path().to_str() else {
+                continue;
+            };
+            let Some(index) = path.rfind('/') else {
+                continue;
+            };
+            let filename = &path[index + 1..];
+            if SOFTFLOAT_FILES.contains(&filename) {
                 files.push(
                     match FileBuilder::parse_c(
                         entry.contents(),

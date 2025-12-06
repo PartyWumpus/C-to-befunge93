@@ -11,6 +11,15 @@ use crate::{
     number_generation::int_to_befunge_str,
 };
 
+pub enum BuilderErrorType {
+    InvalidRegister,
+    NonEmptyBstack,
+    BefungeStackUsedWhenEmpty,
+    ZeroSizedCopy,
+    PsuedoInFinalIR,
+    AttemptToModifyConstant,
+}
+
 #[derive(Debug)]
 pub struct OpBuilder {
     ops: Vec<char>,
@@ -79,13 +88,15 @@ impl OpBuilder {
     }
 
     /// Puts return value on bstack
-    fn load_return_val(&mut self) {
+    pub fn load_return_val(&mut self, size: usize) {
+        assert!(size == 1);
         self.str("20g");
         self.current_stack_size += 1;
     }
 
-    /// Set return value to top of bstack
-    fn set_return_val(&mut self) {
+    fn set_return_val(&mut self, loc: &IRValue, size: usize) {
+        assert!(size == 1);
+        self.load_val(loc);
         self.str("20p");
         self.current_stack_size -= 1;
     }
@@ -196,9 +207,8 @@ impl OpBuilder {
         self.current_stack_size = 0;
     }
 
-    pub fn return_(&mut self, val: &IRValue) {
-        self.load_val(val);
-        self.set_return_val();
+    pub fn return_(&mut self, val: &IRValue, size: usize) {
+        self.set_return_val(val, size);
         self.load_call_stack_ptr();
 
         self.str(r"1-:3g");
@@ -219,7 +229,7 @@ impl OpBuilder {
 
     pub fn call(&mut self, caller: FuncInfo, calle: FuncInfo, params: &[(IRValue, usize)]) {
         self.load_stack_ptr();
-        self.set_return_val();
+        self.set_register_val(22);
 
         for (val, size) in params {
             if matches!(val, IRValue::BefungeStack) {
@@ -252,7 +262,7 @@ impl OpBuilder {
         self.str("1+3p");
 
         // Put saved stack ptr value onto the call stack
-        self.load_return_val();
+        self.load_register_val(22);
         self.load_call_stack_ptr();
         self.str("2+3p");
 
@@ -727,7 +737,7 @@ impl OpBuilder {
         self.put_val(&IRValue::Register(61));
 
         self.load_val(a);
-        for _ in 1..size*2 {
+        for _ in 1..size * 2 {
             self.char(':');
             self.current_stack_size += 1;
         }

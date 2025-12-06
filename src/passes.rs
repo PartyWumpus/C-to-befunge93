@@ -15,7 +15,8 @@ struct PsuedoMap<'a> {
 fn apply_to_all_ir_values(ops: &mut IRTopLevel, func: &mut impl FnMut(&mut IRValue)) {
     for i in 0..ops.ops.len() {
         match &mut ops.ops[i] {
-            IROp::Return(o) => func(o),
+            IROp::Return(o, _) => func(o),
+            IROp::GetReturnValue(o, _) => func(o),
             IROp::GetIdOfFunction(_, out) => func(out),
             IROp::Call(_, ops) => ops.iter_mut().for_each(|x| func(&mut x.0)),
             IROp::CondBranch(_, _, a) => func(a),

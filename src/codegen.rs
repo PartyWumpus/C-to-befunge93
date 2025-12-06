@@ -108,8 +108,12 @@ impl CodeGen {
 
                     self.builder.copy(&IRValue::int(called_func.id), out, 1);
                 }
-                IROp::Return(val) => {
-                    self.builder.return_(val);
+                IROp::Return(val, size) => {
+                    self.builder.return_(val, *size);
+                }
+                IROp::GetReturnValue(out, size) => {
+                    self.builder.load_return_val(*size);
+                    self.builder.copy(&IRValue::BefungeStack, &out, *size);
                 }
                 IROp::Cast(irtype, (val, _original_irtype), output) => {
                     self.builder.constrain_to_range(val, *irtype, false);

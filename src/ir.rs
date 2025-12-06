@@ -97,7 +97,8 @@ impl CType {
 
 #[derive(Debug, Clone)]
 pub enum IROp {
-    Return(IRValue),
+    Return(IRValue, usize),
+    GetReturnValue(IRValue, usize),
     GetIdOfFunction(String, IRValue),
     Call(String, Vec<(IRValue, usize)>),
     Label(String),
