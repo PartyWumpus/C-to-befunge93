@@ -243,18 +243,20 @@ impl OpBuilder {
         self.load_stack_ptr();
         self.set_register_val(22);
 
+        assert_eq!(self.current_stack_size, 0);
+        let mut total_size = 0;
         for (val, size) in params {
             if matches!(val, IRValue::BefungeStack) {
                 panic!("function param cannot be assumed to be on the bstack")
             }
-            if *size != 1 {
-                todo!("Structs cannot yet be used as function args")
+            total_size += size;
+            for offset in 0..*size {
+                self.copy_with_offset((val, offset), (&IRValue::BefungeStack, 0));
             }
-            self.load_val(val);
         }
 
         self.increment_stack_ptr(caller.stack_frame_size);
-        for i in (0..params.len()).rev() {
+        for i in (0..total_size).rev() {
             self.put_val(&IRValue::Stack(i + 1));
         }
 
@@ -738,6 +740,7 @@ impl OpBuilder {
         for i in 0..size {
             self.load_val(&IRValue::Register(61));
             self.modulo(&IRValue::BefungeStack, &IRValue::BefungeStack);
+            self.add(&IRValue::BefungeStack, &IRValue::int(i));
 
             self.char('\\');
 

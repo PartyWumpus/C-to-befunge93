@@ -2244,12 +2244,9 @@ impl TopLevelBuilder<'_> {
         match self.parse_expression_inner(expr)? {
             ExpressionOutput::Plain((val, ctype)) => Ok((val, ctype)),
             ExpressionOutput::Dereferenced((ptr, ctype)) => {
-                let out = self.generate_pseudo(ctype.sizeof(&self.scope));
-                self.push(IROp::Dereference(
-                    ptr,
-                    out.clone(),
-                    CType::sizeof(&ctype, &self.scope),
-                ));
+                let size = ctype.sizeof(&self.scope);
+                let out = self.generate_pseudo(size);
+                self.push(IROp::Dereference(ptr, out.clone(), size));
                 Ok((out, ctype))
             }
             ExpressionOutput::SubObject {
