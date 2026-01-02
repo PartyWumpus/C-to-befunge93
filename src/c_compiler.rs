@@ -468,7 +468,11 @@ enum InitializerInfo {
     Compound(Vec<InitializerInfo>, Span),
 }
 
-fn preprocess(config: &lang_c::driver::Config, source: &[u8]) -> io::Result<String> {
+fn preprocess(
+    config: &lang_c::driver::Config,
+    source: &[u8],
+    filename: &str,
+) -> io::Result<String> {
     let mut cmd = Command::new(&config.cpp_command);
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
@@ -481,6 +485,9 @@ fn preprocess(config: &lang_c::driver::Config, source: &[u8]) -> io::Result<Stri
     let mut cmd = cmd.spawn().expect("Failed to spawn gcc");
 
     let mut stdin = cmd.stdin.take().expect("Failed to open stdin");
+    stdin
+        .write_all(&format!("# 1 \"{}\"\n", filename.replace('"', "\\\"")).into_bytes())
+        .expect("Failed to write to stdin");
     let source = source.to_vec(); // pointless clone :(
     std::thread::spawn(move || {
         stdin.write_all(&source).expect("Failed to write to stdin");
@@ -530,13 +537,12 @@ impl FileBuilder {
 
         let config = lang_c::driver::Config {
             flavor: Flavor::GnuC11,
-            cpp_command: "gcc".into(),
+            cpp_command: "cpp".into(),
             cpp_options: command,
         };
         let preproccessed =
-            preprocess(&config, source).map_err(|err| CompilerError::ParseError {
+            preprocess(&config, source, filename).map_err(|err| CompilerError::ParseError {
                 err: lang_c::driver::Error::PreprocessorError(err),
-                filename: filename.to_string(),
             })?;
 
         if ARGS.verbose {
@@ -547,7 +553,6 @@ impl FileBuilder {
         let parsed = parse_preprocessed(&config, preproccessed).map_err(|err| {
             CompilerError::ParseError {
                 err: lang_c::driver::Error::SyntaxError(err),
-                filename: filename.to_string(),
             }
         })?;
 
@@ -559,7 +564,6 @@ impl FileBuilder {
                             err: err.err,
                             span: err.span,
                             source: parsed.source.clone(),
-                            filename: filename.into(),
                         }
                     })?;
                     if let Some(x) = x {
@@ -570,7 +574,6 @@ impl FileBuilder {
                     err: IRGenerationErrorType::TODOStaticAssert,
                     span: ass.span,
                     source: parsed.source.clone(),
-                    filename: filename.into(),
                 })?,
                 ExternalDeclaration::FunctionDefinition(func) => {
                     let x = builder.parse_function(func).map_err(|err| {
@@ -578,7 +581,6 @@ impl FileBuilder {
                             err: err.err,
                             span: err.span,
                             source: parsed.source.clone(),
-                            filename: filename.into(),
                         }
                     })?;
                     builder.funcs.push(x);

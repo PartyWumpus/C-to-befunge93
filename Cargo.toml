@@ -5,7 +5,8 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4.5.21", features = ["derive"] }
-codespan-reporting = "0.12.0"
+codespan-reporting = "0.13.1"
+codespan_preprocessed = { git = "https://github.com/PartyWumpus/codespan_preprocessed.git", branch = "main" }
 include_dir = "0.7.4"
 indexmap = "2.11.0"
 lang-c = { git = "https://github.com/PartyWumpus/lang-c.git", branch = "sauce" }

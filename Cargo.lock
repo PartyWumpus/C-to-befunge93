@@ -69,6 +69,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "codespan-reporting",
+ "codespan_preprocessed",
  "include_dir",
  "indexmap",
  "lang-c",
@@ -127,13 +128,21 @@ checksum = "afb84c814227b90d6895e01398aee0d8033c00e7466aca416fb6a8e0eb19d8a7"
 
 [[package]]
 name = "codespan-reporting"
-version = "0.12.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe6d2e5af09e8c8ad56c969f2157a3d4238cebc7c55f0a517728c38f7b200f81"
+checksum = "af491d569909a7e4dee0ad7db7f5341fef5c614d5b8ec8cf765732aba3cff681"
 dependencies = [
  "serde",
  "termcolor",
  "unicode-width",
+]
+
+[[package]]
+name = "codespan_preprocessed"
+version = "0.9.0"
+source = "git+https://github.com/PartyWumpus/codespan_preprocessed.git?branch=main#ad5265b800837162bc92d7184a4f52ddae82e7c7"
+dependencies = [
+ "codespan-reporting",
 ]
 
 [[package]]

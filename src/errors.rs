@@ -1,13 +1,10 @@
-use codespan_reporting::{
-    diagnostic::{self, Diagnostic},
-    files::SimpleFile,
-    term::{
-        self,
-        termcolor::{ColorChoice, StandardStream},
-    },
+use codespan_preprocessed::PreprocessedFile;
+use codespan_preprocessed::reporting::Diagnostic;
+use codespan_reporting::term::{
+    self,
+    termcolor::{ColorChoice, StandardStream},
 };
 use lang_c::ast::PointerDeclarator;
-
 use std::fmt::Display;
 
 use thiserror::Error;
@@ -154,16 +151,15 @@ impl Display for IRGenerationError {
     }
 }
 
+#[derive(Debug)]
 pub enum CompilerError {
     IRGenerationError {
         err: IRGenerationErrorType,
         span: lang_c::span::Span,
         source: String,
-        filename: String,
     },
     ParseError {
         err: lang_c::driver::Error,
-        filename: String,
     },
 }
 
@@ -172,28 +168,31 @@ impl CompilerError {
         let writer = StandardStream::stderr(ColorChoice::Always);
         let config = codespan_reporting::term::Config::default();
 
-        let (filename, source) = match self {
-            Self::IRGenerationError {
-                filename, source, ..
-            } => (filename, source),
+        let source = match self {
+            Self::IRGenerationError { source, .. } => source,
             Self::ParseError {
-                filename,
                 err: lang_c::driver::Error::SyntaxError(err),
-            } => (filename, &err.source),
+                ..
+            } => &err.source,
             Self::ParseError {
-                filename,
                 err: lang_c::driver::Error::PreprocessorError(_),
-            } => (filename, &String::new()),
+                ..
+            } => &String::new(),
         };
 
-        let file = SimpleFile::new(filename, source);
+        let file = PreprocessedFile::new(source);
         let diag = self.report();
 
-        term::emit(&mut writer.lock(), &config, &file, &diag)
-            .expect("if io fails i cant do anything anyways");
+        term::emit_to_write_style(
+            &mut writer.lock(),
+            &config,
+            &file,
+            &diag.to_diagnostic(&file),
+        )
+        .expect("if io fails i cant do anything anyways");
     }
 
-    fn report(&self) -> Diagnostic<()> {
+    fn report(&self) -> Diagnostic<&str> {
         match self {
             Self::ParseError {
                 err: lang_c::driver::Error::SyntaxError(err),
@@ -222,18 +221,12 @@ impl CompilerError {
                 if end_of_line {
                     Diagnostic::error()
                         .with_message("Missing semicolon at end of line")
-                        .with_label(
-                            diagnostic::Label::primary((), err.offset - i..err.offset - i)
-                                .with_message("insert `;` here"),
-                        )
-                        .with_label(
-                            diagnostic::Label::secondary((), err.offset..err.offset)
-                                .with_message("Unexpected token"),
-                        )
+                        .with_primary_label(err.offset - i - 1..err.offset - i, "insert `;` here")
+                        .with_secondary_label(err.offset..err.offset + 1, "Unexpected token")
                 } else {
                     Diagnostic::error()
                         .with_message("Unexpected token")
-                        .with_label(diagnostic::Label::primary((), err.offset..err.offset))
+                        .with_primary_label(err.offset..err.offset + 1, "")
                         .with_note(format!("Expected one of {:?}", err.expected))
                 }
             }
@@ -242,10 +235,10 @@ impl CompilerError {
                 ..
             } => Diagnostic::error()
                 .with_message("Preprocessor (gcc) error")
-                .with_note(err),
+                .with_note(err.to_string()),
             Self::IRGenerationError { err, span, .. } => Diagnostic::error()
-                .with_message(err)
-                .with_label(diagnostic::Label::primary((), span.start..span.end)),
+                .with_message(err.to_string())
+                .with_primary_label(span.start..span.end, ""),
         }
     }
 }
