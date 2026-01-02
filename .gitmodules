@@ -4,3 +4,6 @@
 [submodule "RBeJ"]
 	path = RBeJ
 	url = https://github.com/PartyWumpus/RBeJ
+[submodule "befunge_libc/softfloat"]
+	path = befunge_libc/softfloat
+	url = https://github.com/PartyWumpus/berkeley-softfloat-3

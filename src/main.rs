@@ -118,7 +118,10 @@ fn main() {
                 match FileBuilder::parse_c(
                     entry.contents(),
                     entry.path().to_str().unwrap(),
-                    &["befunge_libc/stdlib", "befunge_libc/softfloat/include"],
+                    &[
+                        "befunge_libc/stdlib",
+                        "befunge_libc/softfloat/source/include",
+                    ],
                 ) {
                     Err(err) => {
                         if !ARGS.silent {
@@ -134,7 +137,7 @@ fn main() {
 
     if ARGS.enable_softfloat {
         for entry in BEFUNGE_LIBC
-            .get_dir("softfloat")
+            .get_dir("softfloat/source")
             .expect("softfloat")
             .files()
         {
@@ -152,8 +155,9 @@ fn main() {
                         entry.path().to_str().unwrap(),
                         &[
                             "befunge_libc/stdlib",
-                            "befunge_libc/softfloat/include",
-                            "befunge_libc/softfloat/8086-SSE",
+                            "befunge_libc/softfloat_config",
+                            "befunge_libc/softfloat/source/include",
+                            "befunge_libc/softfloat/source/8086-SSE",
                         ],
                     ) {
                         Err(err) => {
@@ -169,7 +173,7 @@ fn main() {
         }
 
         for entry in BEFUNGE_LIBC
-            .get_dir("softfloat/8086-SSE")
+            .get_dir("softfloat/source/8086-SSE")
             .expect("softfloat")
             .files()
         {
@@ -187,8 +191,9 @@ fn main() {
                         entry.path().to_str().unwrap(),
                         &[
                             "befunge_libc/stdlib",
-                            "befunge_libc/softfloat/include",
-                            "befunge_libc/softfloat/8086-SSE",
+                            "befunge_libc/softfloat_config",
+                            "befunge_libc/softfloat/source/include",
+                            "befunge_libc/softfloat/source/8086-SSE",
                         ],
                     ) {
                         Err(err) => {
