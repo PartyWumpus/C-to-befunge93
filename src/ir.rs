@@ -1,5 +1,3 @@
-use thiserror::Error;
-
 use crate::c_compiler::{CType, ScopeInfo};
 
 #[derive(Debug, Clone)]

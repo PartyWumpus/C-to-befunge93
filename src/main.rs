@@ -12,6 +12,7 @@ use std::{fs, process};
 mod builder;
 mod c_compiler;
 mod codegen;
+mod errors;
 mod ir;
 mod number_generation;
 mod passes;
