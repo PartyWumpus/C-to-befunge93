@@ -1,11 +1,14 @@
 # A C to befunge compiler
 
+It's a C compiler that outputs (64 bit) befunge93 programs instead of assembly. Roughly targeting c11, but strict conformance is not a primary goal.
+
 ## Big thanks to: 
 
 - Nora Sandler's [Writing a C Compiler](https://norasandler.com/book/) book for helping guide this project (and for being a great read regardless)
 - Mikescher's [BefunExec](https://github.com/Mikescher/BefunExec) for being an excellent befunge debugger
 - Notes from [Jeffrey Lee's site](https://www.phlamethrower.co.uk/index.php) about their [prototype befunge -> C compiler](https://www.phlamethrower.co.uk/befunge/c2b.php) and their [general befunge insights](https://www.phlamethrower.co.uk/befunge/)
 - The [lang_c](https://docs.rs/lang-c/latest/lang_c/index.html) crate for doing the lexing and parsing of c for me (i love skipping 1/2 of the work)
+- The [Berkeley SoftFloat](https://www.jhauser.us/arithmetic/SoftFloat.html) library, which is used for floating point operations in befunge
 
 ## Befunge interpreter assumptions
 I've been testing this with [BefunExec](https://github.com/Mikescher/BefunExec), [RBeJ](https://github.com/PartyWumpus/RBeJ) and my [befunge-editor](https://github.com/PartyWumpus/befunge-editor), so I'd recommend one of those.
@@ -16,6 +19,10 @@ I've been testing this with [BefunExec](https://github.com/Mikescher/BefunExec),
 
 ## Important usage note
 Requires being run in this repo, because the preproccessor step (for now) requires the befunge_libc/ folder to exist.
+The befunge_libc folder contains:
+- `stdlib`: a minimal copy of libc
+- `internal`: various c functions that only the compiler should insert calls to
+- `softfloat`: the Berkeley SoftFloat (version 3e) library, internally used for all double/float operations
 
 ## Notes about the implementation
 
@@ -49,13 +56,10 @@ There's also a static memory space used for globals.
 ### Current Limitations
 None of these are full architectural failures so will eventually be resolved.
 - No unions or enums
-- No typedef
 - Doubles can only be created and pointed to
 - Overflow is incorrectly handled for ints and unsigned longs (correct for all chars and signed longs though)
 - No string literals
 - No var args
-- Errors containing types do not use the canonical names (`Pointer(Int)` instead of `int *`)
-- Struct support is very incomplete
 - Some invalid lvalues are incorrectly allowed (stuff like `func().a = 5`)
 - Function pointers can't be used (but can be constructed)
 - Type qualifiers like `const`, `volatile` and `restrict` are not supported

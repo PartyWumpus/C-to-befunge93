@@ -1,5 +1,5 @@
-#![allow(incomplete_features)]
-#![feature(deref_patterns)]
+#![expect(incomplete_features)]
+#![feature(deref_patterns)] // incomplete feature
 
 use c_compiler::FileBuilder;
 use clap::Parser;
@@ -54,6 +54,11 @@ struct Args {
     #[arg(long)]
     disable_bitwise_ops: bool,
 
+    /// Use Berkeley SoftFloat v3 to do floating point operations
+    /// Currently barely functional, do not use
+    #[arg(long)]
+    enable_softfloat: bool,
+
     #[arg(short = 'O', default_value = "0")]
     optimization_level: u8,
 }
@@ -85,6 +90,7 @@ fn main() {
         }
         Ok(x) => x,
     };
+
     if ARGS.verbose {
         println!("\n-- IR, (pre linking)");
         print_ir(&program);
@@ -93,7 +99,18 @@ fn main() {
     let mut files = vec![program];
 
     // TODO: add caching so the entire lib isn't compiled every time
-    for entry in BEFUNGE_LIBC.get_dir("stdlib").expect("stdlib").files() {
+    for entry in BEFUNGE_LIBC
+        .get_dir("stdlib")
+        .expect("stdlib")
+        .files()
+        .chain(BEFUNGE_LIBC.get_dir("internal").expect("internal").files())
+    {
+        if !ARGS.enable_softfloat
+            && let Some(filename) = entry.path().to_str()
+            && filename.contains("_bf_float")
+        {
+            continue;
+        }
         if let Some(ext) = entry.path().extension()
             && ext == "c"
         {
@@ -115,8 +132,7 @@ fn main() {
         }
     }
 
-    // TODO: get softfloat working
-    if false {
+    if ARGS.enable_softfloat {
         for entry in BEFUNGE_LIBC
             .get_dir("softfloat")
             .expect("softfloat")

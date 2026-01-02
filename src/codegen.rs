@@ -150,14 +150,13 @@ impl CodeGen {
                         self.builder.copy(&IRValue::BefungeStack, out, 1);
                     }
                     IRType::Double => {
-                        panic!("floats");
-                        /*
+                        assert!(!func.is_initializer, "Floats can't yet be used in init");
                         match op {
-                            UnaryOp::Minus => self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_double_unary_minus"],
-                                &[(a.clone(), 1)],
-                            ),
+                            UnaryOp::Minus => {
+                                self.builder.add(a, &IRValue::float(-0.0));
+                                self.builder.copy(&IRValue::BefungeStack, out, 1);
+                                continue;
+                            }
                             UnaryOp::Complement => self.builder.call(
                                 self.function_map[&func.name],
                                 self.function_map["_bf_double_bitwise_complement"],
@@ -170,7 +169,6 @@ impl CodeGen {
                             ),
                         }
                         self.builder.copy(&IRValue::BefungeStack, out, 1);
-                        */
                     }
                 },
                 IROp::Two(op, a, b, out, irtype) => match irtype {
@@ -193,10 +191,32 @@ impl CodeGen {
                             BinOp::BitwiseXor => self.builder.bit_xor(a, b),
 
                             BinOp::ShiftLeft => {
-                                self.builder.bitshift_left(a, b);
+                                assert!(
+                                    !func.is_initializer,
+                                    "Bitshfits can't yet be used in init"
+                                );
+                                //self.builder.bitshift_left(a, b);
+                                self.builder.call(
+                                    self.function_map[&func.name],
+                                    self.function_map["_bf_bitshift_left"],
+                                    &[(a.clone(), 1), (b.clone(), 1)],
+                                );
+                                self.builder.load_return_val(out, 1);
+                                continue;
                             }
                             BinOp::ShiftRight => {
-                                self.builder.bitshift_right(a, b);
+                                assert!(
+                                    !func.is_initializer,
+                                    "Bitshfits can't yet be used in init"
+                                );
+                                //self.builder.bitshift_right(a, b);
+                                self.builder.call(
+                                    self.function_map[&func.name],
+                                    self.function_map["_bf_bitshift_right"],
+                                    &[(a.clone(), 1), (b.clone(), 1)],
+                                );
+                                self.builder.load_return_val(out, 1);
+                                continue;
                             }
                         }
                         self.builder
@@ -204,8 +224,11 @@ impl CodeGen {
                         self.builder.copy(&IRValue::BefungeStack, out, 1);
                     }
                     IRType::Double => {
-                        todo!("floats");
                         assert!(!func.is_initializer, "Floats can't yet be used in init");
+                        assert!(
+                            ARGS.enable_softfloat,
+                            "Softfloat is not enabled, but a floating point operation was used"
+                        );
                         match op {
                             BinOp::Add => self.builder.call(
                                 self.function_map[&func.name],
@@ -232,16 +255,16 @@ impl CodeGen {
                                 self.function_map["_bf_double_modulo"],
                                 &[(a.clone(), 1), (b.clone(), 1)],
                             ),
-                            BinOp::Equal => self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_double_is_equal"],
-                                &[(a.clone(), 1), (b.clone(), 1)],
-                            ),
-                            BinOp::NotEqual => self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_double_is_not_equal"],
-                                &[(a.clone(), 1), (b.clone(), 1)],
-                            ),
+                            BinOp::Equal => {
+                                self.builder.is_equal(a, b);
+                                self.builder.copy(&IRValue::BefungeStack, out, 1);
+                                continue;
+                            }
+                            BinOp::NotEqual => {
+                                self.builder.is_not_equal(a, b);
+                                self.builder.copy(&IRValue::BefungeStack, out, 1);
+                                continue;
+                            }
                             BinOp::LessThan => self.builder.call(
                                 self.function_map[&func.name],
                                 self.function_map["_bf_double_is_less_than"],
@@ -271,7 +294,7 @@ impl CodeGen {
                             BinOp::ShiftRight => panic!("cannot bitshift_right floats"),
                         }
 
-                        self.builder.copy(&IRValue::Register(20), out, 1);
+                        self.builder.load_return_val(out, 1);
                     }
                 },
                 IROp::CopyWithOffset(

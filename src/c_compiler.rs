@@ -29,8 +29,8 @@ use lang_c::{
         Identifier, IfStatement, Initializer, Integer, IntegerBase, IntegerSize, IntegerSuffix,
         Label, LabeledStatement, MemberExpression, MemberOperator, PointerDeclarator, SizeOfTy,
         SizeOfVal, SpecifierQualifier, Statement, StorageClassSpecifier, StructDeclaration,
-        StructKind, StructType, SwitchStatement, TypeName, TypeSpecifier, UnaryOperator,
-        UnaryOperatorExpression, WhileStatement,
+        StructKind, StructType, SwitchStatement, TypeName, TypeQualifier, TypeSpecifier,
+        UnaryOperator, UnaryOperatorExpression, WhileStatement,
     },
     driver::{Flavor, parse_preprocessed},
     span::{Node, Span},
@@ -300,8 +300,8 @@ enum AssignmentStatus {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct StructData {
     pub name: Option<String>,
-    pub fields: IndexMap<String, (CType, usize)>,
     pub size: usize,
+    pub fields: IndexMap<String, (CType, usize)>,
 }
 
 impl StructData {
@@ -588,19 +588,13 @@ pub struct FileBuilder {
     funcs: Vec<IRTopLevel>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TagType {
-    Struct,
-    Union,
-}
-
 type TagID = usize;
 
 #[derive(Debug, Clone)]
 struct TagData {
     source_depth: usize,
     tag_id: TagID,
-    tag_type: TagType,
+    tag_type: StructKind,
 }
 
 // TODO: make the invariants in here specified in type system
@@ -637,7 +631,7 @@ impl ScopeInfo {
         scope
     }
 
-    fn generate_struct_id(&self, name: Option<&str>) -> (TagID, bool) {
+    fn generate_struct_id(&self, name: Option<&str>, tag_type: StructKind) -> (TagID, bool) {
         match name {
             None => (self.structs.lock().len(), true),
             Some(name) => match self.tag_map.get(name) {
@@ -645,11 +639,11 @@ impl ScopeInfo {
                 None => (self.structs.lock().len(), true),
                 Some(TagData {
                     source_depth,
-                    tag_type,
+                    tag_type: source_tag_type,
                     tag_id,
                 }) => {
                     if *source_depth == self.depth {
-                        assert_eq!(*tag_type, TagType::Struct);
+                        assert_eq!(*source_tag_type, tag_type);
                         (*tag_id, false)
                     } else {
                         // it has been declared earlier, but in a higher scope, so overwrite
@@ -660,8 +654,8 @@ impl ScopeInfo {
         }
     }
 
-    fn insert_incomplete_struct(&mut self, name: Option<&str>) -> TagID {
-        let (id, new) = self.generate_struct_id(name);
+    fn insert_incomplete_struct(&mut self, name: Option<&str>, tag_type: StructKind) -> TagID {
+        let (id, new) = self.generate_struct_id(name, tag_type);
         if !new {
             return id;
         }
@@ -672,7 +666,7 @@ impl ScopeInfo {
                 TagData {
                     source_depth: self.depth,
                     tag_id: id,
-                    tag_type: TagType::Struct,
+                    tag_type,
                 },
             );
         }
@@ -684,8 +678,9 @@ impl ScopeInfo {
         &mut self,
         name: Option<&str>,
         struct_data: StructData,
+        tag_type: StructKind,
     ) -> Result<TagID, IRGenerationErrorType> {
-        let (id, new) = self.generate_struct_id(name);
+        let (id, new) = self.generate_struct_id(name, tag_type);
         if !new && self.structs.lock()[id].get().is_some() {
             return Err(IRGenerationErrorType::StructRedefinition);
         }
@@ -697,7 +692,7 @@ impl ScopeInfo {
                 TagData {
                     source_depth: self.depth,
                     tag_id: id,
-                    tag_type: TagType::Struct,
+                    tag_type,
                 },
             );
         }
@@ -803,15 +798,17 @@ impl FileBuilder {
         for obj in &parsed.unit.0 {
             match &obj.node {
                 ExternalDeclaration::Declaration(decl) => {
-                    let x = builder.parse_top_level_declaration(decl);
-                    builder
-                        .funcs
-                        .push(x.map_err(|err| CompilerError::IRGenerationError {
+                    let x = builder.parse_top_level_declaration(decl).map_err(|err| {
+                        CompilerError::IRGenerationError {
                             err: err.err,
                             span: err.span,
                             source: parsed.source.clone(),
                             filename: filename.into(),
-                        })?);
+                        }
+                    })?;
+                    if let Some(x) = x {
+                        builder.funcs.push(x);
+                    }
                 }
                 ExternalDeclaration::StaticAssert(ass) => Err(CompilerError::IRGenerationError {
                     err: IRGenerationErrorType::TODOStaticAssert,
@@ -879,7 +876,7 @@ impl FileBuilder {
     fn parse_top_level_declaration(
         &mut self,
         decl: &Node<Declaration>,
-    ) -> Result<IRTopLevel, IRGenerationError> {
+    ) -> Result<Option<IRTopLevel>, IRGenerationError> {
         let mut builder = TopLevelBuilder {
             ops: vec![],
             count: self.count,
@@ -900,25 +897,26 @@ impl FileBuilder {
             .map(|x| Ok(format!("'{}'", parse_declarator_name(&x.node.declarator)?)))
             .collect::<Result<Vec<String>, _>>()?
             .join(", ");
-        let name = if name.is_empty() {
-            "empty region"
-        } else {
-            name
-        };
+        let name = if name.is_empty() { "[no name]" } else { name };
 
         builder.file_builder.scope = builder.scope;
 
         // FIXME: bad bad bad, just have a seperate global counter
         builder.file_builder.count = builder.count;
-        Ok(IRTopLevel {
-            name: name.to_owned(),
-            ops: builder.ops,
-            parameters: 0,
-            is_initializer: true,
-            return_type: Some(builder.return_type),
-            stack_frame_size: builder.count, // NOTE: this is a 'worst case' value,
-                                             // and should be recalculated in a later pass
-        })
+
+        if builder.ops.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(IRTopLevel {
+                name: name.to_owned(),
+                ops: builder.ops,
+                parameters: 0,
+                is_initializer: true,
+                return_type: Some(builder.return_type),
+                stack_frame_size: builder.count, // NOTE: this is a 'worst case' value,
+                                                 // and should be recalculated in a later pass
+            }))
+        }
     }
 }
 
@@ -1167,7 +1165,7 @@ impl CType {
                     // if it has not been declared yet then just insert
                     None => {
                         if is_statement {
-                            scope.insert_incomplete_struct(name.as_deref())
+                            scope.insert_incomplete_struct(name.as_deref(), struct_kind)
                         } else {
                             return Err(IRGenerationError {
                                 err: IRGenerationErrorType::InvalidStructType,
@@ -1175,17 +1173,13 @@ impl CType {
                             });
                         }
                     }
-                    Some(TagData {
-                        source_depth,
-                        tag_type,
-                        tag_id,
-                    }) => {
+                    Some(prev) => {
                         // it has been declared earlier, but in a higher scope, so overwrite
-                        if is_statement && *source_depth != scope.depth {
-                            scope.insert_incomplete_struct(name.as_deref())
+                        if is_statement && prev.source_depth != scope.depth {
+                            scope.insert_incomplete_struct(name.as_deref(), struct_kind)
                         } else {
-                            assert_eq!(*tag_type, TagType::Struct);
-                            *tag_id
+                            assert_eq!(prev.tag_type, struct_kind);
+                            prev.tag_id
                         }
                     }
                 }
@@ -1218,21 +1212,26 @@ impl CType {
                                 }
                                 let sizeof = ctype.sizeof(scope);
                                 match struct_kind {
-                                    StructKind::Struct => struct_data.fields.insert(
-                                        parse_declarator_name(declarator)?,
-                                        (ctype, struct_data.size),
-                                    ),
-                                    StructKind::Union => struct_data
-                                        .fields
-                                        .insert(parse_declarator_name(declarator)?, (ctype, 0)),
-                                };
-                                struct_data.size += sizeof;
+                                    StructKind::Struct => {
+                                        struct_data.fields.insert(
+                                            parse_declarator_name(declarator)?,
+                                            (ctype, struct_data.size),
+                                        );
+                                        struct_data.size += sizeof;
+                                    }
+                                    StructKind::Union => {
+                                        struct_data
+                                            .fields
+                                            .insert(parse_declarator_name(declarator)?, (ctype, 0));
+                                        struct_data.size = usize::max(sizeof, struct_data.size);
+                                    }
+                                }
                             }
                         }
                     }
                 }
                 scope
-                    .insert_struct(name.as_deref(), struct_data)
+                    .insert_struct(name.as_deref(), struct_data, struct_kind)
                     .map_err(|err| IRGenerationError {
                         span: struct_type.span,
                         err,
@@ -1250,13 +1249,21 @@ impl CType {
         for specifier in specifiers {
             match &specifier.node {
                 SpecifierQualifier::TypeSpecifier(spec) => c_types.push(spec),
-                // Consider implementing just volatile
-                SpecifierQualifier::TypeQualifier(_) => {
-                    println!("WARNING: All type qualifiers are ignored {specifier:?}");
+                SpecifierQualifier::TypeQualifier(spec) => match spec.node {
+                    TypeQualifier::Const => {
+                        if !ARGS.silent {
+                            eprintln!("WARNING: Const is ignored")
+                        }
+                    }
+                    _ => panic!("{spec:?}"),
+                },
+                SpecifierQualifier::Extension(_) => {
+                    if !ARGS.silent {
+                        eprintln!(
+                            "WARNING: GNU declaration specifier extensions are ignored {specifier:?}"
+                        );
+                    }
                 }
-                SpecifierQualifier::Extension(_) => println!(
-                    "WARNING: GNU declaration specifier extensions are ignored {specifier:?}"
-                ),
             }
         }
 
@@ -1441,23 +1448,39 @@ impl DeclarationInfo {
                     }
                 }
                 DeclarationSpecifier::TypeSpecifier(spec) => c_types.push(spec),
-                // Consider implementing just volatile
-                DeclarationSpecifier::TypeQualifier(_) => {
-                    println!("WARNING: All type qualifiers are ignored {specifier:?}");
-                }
+                DeclarationSpecifier::TypeQualifier(spec) => match spec.node {
+                    TypeQualifier::Const => {
+                        if !ARGS.silent {
+                            eprintln!("WARNING: Const is ignored")
+                        }
+                    }
+                    _ => panic!("{spec:?}"),
+                },
                 DeclarationSpecifier::Function(spec) => match spec.node {
-                    FunctionSpecifier::Inline => eprintln!("WARNING: Inline is ignored"),
+                    FunctionSpecifier::Inline => {
+                        if !ARGS.silent {
+                            eprintln!("WARNING: Inline is ignored")
+                        }
+                    }
                     FunctionSpecifier::Noreturn => Err(IRGenerationError {
                         err: IRGenerationErrorType::TODONoreturn,
                         span: specifier.span,
                     })?,
                 },
-                DeclarationSpecifier::Alignment(_) => println!(
-                    "WARNING: All declaration alignment specifiers are ignored {specifier:?}"
-                ),
-                DeclarationSpecifier::Extension(_) => println!(
-                    "WARNING: GNU declaration specifier extensions are ignored {specifier:?}"
-                ),
+                DeclarationSpecifier::Alignment(_) => {
+                    if !ARGS.silent {
+                        eprintln!(
+                            "WARNING: All declaration alignment specifiers are ignored {specifier:?}"
+                        );
+                    }
+                }
+                DeclarationSpecifier::Extension(_) => {
+                    if !ARGS.silent {
+                        eprintln!(
+                            "WARNING: GNU declaration specifier extensions are ignored {specifier:?}"
+                        );
+                    }
+                }
             }
         }
 
@@ -1591,11 +1614,12 @@ impl TopLevelBuilder<'_> {
                 }
             }
             Statement::Compound(blocks) => {
-                let old_scope = self.scope.new_scope();
+                let new_scope = self.scope.new_scope();
+                let mut old_scope = mem::replace(&mut self.scope, new_scope);
                 for block_item in blocks {
                     self.parse_block_item(block_item)?;
                 }
-                self.scope = old_scope;
+                mem::swap(&mut old_scope, &mut self.scope);
             }
             Statement::Expression(Some(expr)) => {
                 self.parse_expression(expr)?;
@@ -1743,7 +1767,9 @@ impl TopLevelBuilder<'_> {
                 }
 
                 for clobbers in &asm.clobbers {
-                    println!("WARNING: asm clobbers are ignored {clobbers:?}");
+                    if !ARGS.silent {
+                        eprintln!("WARNING: asm clobbers are ignored {clobbers:?}")
+                    }
                 }
             }
         }

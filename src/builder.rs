@@ -453,7 +453,7 @@ impl OpBuilder {
                     }
                 }
             }
-            IRType::Double => todo!("floats"),
+            IRType::Double => (),
         }
     }
 
