@@ -55,10 +55,9 @@ There's also a static memory space used for globals.
 
 ### Current Limitations
 None of these are full architectural failures so will eventually be resolved.
-- No unions or enums
+- Enums are incorrectly implemented, but largely functional
 - Doubles can only be created and pointed to
 - Overflow is incorrectly handled for ints and unsigned longs (correct for all chars and signed longs though)
-- No string literals
 - No var args
 - Some invalid lvalues are incorrectly allowed (stuff like `func().a = 5`)
 - Function pointers can't be used (but can be constructed)

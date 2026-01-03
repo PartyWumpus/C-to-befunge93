@@ -20,9 +20,9 @@ use lang_c::{
         ForInitializer, ForStatement, FunctionDefinition, FunctionSpecifier, GnuAsmOperand,
         Identifier, IfStatement, Initializer, Integer, IntegerBase, IntegerSize, IntegerSuffix,
         Label, LabeledStatement, MemberExpression, MemberOperator, PointerDeclarator, SizeOfTy,
-        SizeOfVal, SpecifierQualifier, Statement, StorageClassSpecifier, StructDeclaration,
-        StructKind, StructType, SwitchStatement, TypeName, TypeQualifier, TypeSpecifier,
-        UnaryOperator, UnaryOperatorExpression, WhileStatement,
+        SizeOfVal, SpecifierQualifier, Statement, StorageClassSpecifier, StringLiteral,
+        StructDeclaration, StructKind, StructType, SwitchStatement, TypeName, TypeQualifier,
+        TypeSpecifier, UnaryOperator, UnaryOperatorExpression, WhileStatement,
     },
     driver::{Flavor, parse_preprocessed},
     span::{Node, Span},
@@ -2035,10 +2035,21 @@ impl TopLevelBuilder<'_> {
         init: &Node<Initializer>,
     ) -> Result<InitializerInfo, IRGenerationError> {
         match &init.node {
-            Initializer::Expression(expr) => Ok(InitializerInfo::Single(
-                self.parse_expression(expr)?,
-                expr.span,
-            )),
+            Initializer::Expression(expr) => Ok(match &expr.node {
+                Expression::StringLiteral(expr) => {
+                    let str = string_literal_to_string(expr)?
+                        .into_iter()
+                        .map(|char| {
+                            InitializerInfo::Single(
+                                (IRValue::int(char as usize), CType::Char),
+                                expr.span,
+                            )
+                        })
+                        .collect();
+                    InitializerInfo::Compound(str, init.span)
+                }
+                _ => InitializerInfo::Single(self.parse_expression(expr)?, expr.span),
+            }),
             Initializer::List(expr_list) => {
                 let mut res = vec![];
                 for expr in expr_list {
@@ -2108,7 +2119,7 @@ impl TopLevelBuilder<'_> {
             Expression::OffsetOf(_) => todo!("OffsetOf {expr:?}"),
 
             // Other stuff
-            Expression::StringLiteral(_) => todo!("StringLiteral {expr:?}"),
+            Expression::StringLiteral(expr) => Out::Plain(self.parse_string_literal(expr)?),
             Expression::GenericSelection(_) => todo!("GenericSelection {expr:?}"),
             Expression::CompoundLiteral(_) => todo!("CompoundLiteral {expr:?}"),
             Expression::Conditional(cond) => Out::Plain(self.parse_ternary(cond)?),
@@ -2118,6 +2129,28 @@ impl TopLevelBuilder<'_> {
             // Extension
             Expression::Statement(_) => todo!("Statement {expr:?}"),
         })
+    }
+
+    fn parse_string_literal(
+        &mut self,
+        expr: &Node<StringLiteral>,
+    ) -> Result<(IRValue, CType), IRGenerationError> {
+        let str = string_literal_to_string(expr)?;
+        let len = str.len() + 1;
+        let loc = self.generate_unique_static_pseudo("str".to_string(), len);
+        for (i, char) in str.iter().enumerate() {
+            self.push(IROp::CopyWithOffset(
+                (IRValue::int(*char as usize), 0),
+                (loc.clone(), i),
+            ));
+        }
+        // null terminator
+        self.push(IROp::CopyWithOffset(
+            (IRValue::int(0), 0),
+            (loc.clone(), len - 1),
+        ));
+
+        Ok((loc, CType::ImmediateArray(Box::new(CType::Char), len)))
     }
 
     fn parse_member_access(
@@ -3291,10 +3324,10 @@ impl TopLevelBuilder<'_> {
     }
 }
 
-fn cleanup_parsed_asm(lines: &[String]) -> Vec<String> {
+fn cleanup_parsed_asm(lines: &[Node<String>]) -> Vec<String> {
     lines
         .iter()
-        .map(|line| line.trim_matches(|x| x == '"').to_owned())
+        .map(|line| line.node.trim_matches(|x| x == '"').to_owned())
         .collect()
 }
 
@@ -3377,6 +3410,29 @@ fn char_constant_to_usize(str: &str) -> Result<usize, IRGenerationErrorType> {
             chars[0] as usize
         }
     })
+}
+
+fn string_literal_to_string(expr: &Node<StringLiteral>) -> Result<Vec<char>, IRGenerationError> {
+    let mut out = vec![];
+    for Node { node: string, span } in &expr.node {
+        if !string.starts_with('"') {
+            let len = if string.starts_with("u8") { 2 } else { 1 };
+
+            return Err(IRGenerationError {
+                err: IRGenerationErrorType::TODOStringEncodingPrefix,
+                span: Span {
+                    start: span.start,
+                    end: span.start + len,
+                },
+            });
+        }
+
+        // TODO: convert escape sequences
+
+        // NOTE: this indexing will have to change if encoding prefixes are supported
+        out.append(&mut string[1..string.len() - 1].chars().collect());
+    }
+    Ok(out)
 }
 
 fn parse_array_length(decl: &Node<ArrayDeclarator>) -> Result<usize, IRGenerationError> {

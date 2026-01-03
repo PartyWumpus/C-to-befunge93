@@ -110,6 +110,8 @@ pub enum IRGenerationErrorType {
     TODONoreturn,
     #[error("Typeof is not yet supported")]
     TODOTypeof,
+    #[error("String encoding prefixes are not yet supported")]
+    TODOStringEncodingPrefix,
 
     // switch case errors
     #[error("Breaks can only appear inside loops or switch case statements")]
