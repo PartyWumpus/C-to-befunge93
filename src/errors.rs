@@ -17,6 +17,10 @@ pub enum IRGenerationErrorType {
     InvalidCoercion(Box<str>, Box<str>),
     #[error("Unknown type")]
     TODOUnknownType,
+    #[error("Variable declared as void")]
+    VariableDeclaredAsVoid,
+    #[error("Variable has incomplete type")]
+    VariableDeclaredIncomplete,
     #[error("Invalid declaration specifier combination")]
     InvalidTypeSpecifier,
     #[error("Unknown struct")]

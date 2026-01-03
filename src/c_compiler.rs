@@ -55,15 +55,13 @@ enum AssignmentStatus {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct StructData {
-    pub name: Option<String>,
-    pub size: usize,
     pub fields: IndexMap<String, (CType, usize)>,
+    pub size: usize,
 }
 
 impl StructData {
-    fn new(name: Option<String>) -> Self {
+    fn new() -> Self {
         Self {
-            name,
             fields: IndexMap::new(),
             size: 0,
         }
@@ -269,8 +267,8 @@ impl CType {
                 return_type.display_type_inner(scope, &format!("{inner}({args})",))
             }
             Self::Struct(tag_id) => {
-                let tag_data = scope.get_struct_by_id(*tag_id);
-                tag_data.name.map_or_else(
+                let name = scope.get_struct_name_by_id(*tag_id);
+                name.map_or_else(
                     || format!("struct ANON {inner}"),
                     |name| format!("struct {name} {inner}"),
                 )
@@ -376,7 +374,7 @@ pub struct ScopeInfo {
     // IRValue is only None when CType is Function
     var_map: HashMap<String, VarData>,
     tag_map: HashMap<String, TagData>,
-    structs: Rc<Mutex<Vec<OnceCell<StructData>>>>,
+    structs: Rc<Mutex<Vec<(Option<String>, OnceCell<StructData>)>>>,
     depth: usize,
 }
 
@@ -426,7 +424,7 @@ impl ScopeInfo {
                 },
             );
         }
-        structs.push(OnceCell::new());
+        structs.push((name.map(str::to_string), OnceCell::new()));
         id
     }
 
@@ -437,10 +435,12 @@ impl ScopeInfo {
         tag_type: StructKind,
     ) -> Result<TagID, IRGenerationErrorType> {
         let (id, new) = self.generate_struct_id(name, tag_type);
-        if !new && self.structs.lock()[id].get().is_some() {
+        if !new && self.structs.lock()[id].1.get().is_some() {
             return Err(IRGenerationErrorType::StructRedefinition);
         }
-        self.structs.lock().push(OnceCell::from(struct_data));
+        self.structs
+            .lock()
+            .push((name.map(str::to_string), OnceCell::from(struct_data)));
 
         if let Some(name) = name {
             self.tag_map.insert(
@@ -455,10 +455,19 @@ impl ScopeInfo {
         Ok(id)
     }
 
-    pub fn get_struct_by_id(&self, id: TagID) -> StructData {
+    pub fn get_struct_by_id(&self, id: TagID) -> Result<StructData, IRGenerationErrorType> {
         let structs = self.structs.lock();
         // TODO: don't clone here
-        structs[id].get().expect("all tag ids are valid").clone()
+        structs[id].1.get().map_or_else(
+            || Err(IRGenerationErrorType::VariableDeclaredIncomplete),
+            |x| Ok(x.clone()),
+        )
+    }
+
+    pub fn get_struct_name_by_id(&self, id: TagID) -> Option<String> {
+        let structs = self.structs.lock();
+        // TODO: don't clone here
+        structs[id].0.as_deref().map(str::to_string)
     }
 }
 
@@ -950,7 +959,7 @@ impl CType {
                         span: struct_type.span,
                     });
                 }
-                let mut struct_data = StructData::new(name.clone());
+                let mut struct_data = StructData::new();
                 for decl in decls {
                     match &decl.node {
                         StructDeclaration::StaticAssert(..) => {
@@ -1010,7 +1019,7 @@ impl CType {
                 SpecifierQualifier::TypeQualifier(spec) => match spec.node {
                     TypeQualifier::Const => {
                         if !ARGS.silent {
-                            eprintln!("WARNING: Const is ignored")
+                            eprintln!("WARNING: Const is ignored");
                         }
                     }
                     _ => panic!("{spec:?}"),
@@ -1209,7 +1218,7 @@ impl DeclarationInfo {
                 DeclarationSpecifier::TypeQualifier(spec) => match spec.node {
                     TypeQualifier::Const => {
                         if !ARGS.silent {
-                            eprintln!("WARNING: Const is ignored")
+                            eprintln!("WARNING: Const is ignored");
                         }
                     }
                     _ => panic!("{spec:?}"),
@@ -1217,7 +1226,7 @@ impl DeclarationInfo {
                 DeclarationSpecifier::Function(spec) => match spec.node {
                     FunctionSpecifier::Inline => {
                         if !ARGS.silent {
-                            eprintln!("WARNING: Inline is ignored")
+                            eprintln!("WARNING: Inline is ignored");
                         }
                     }
                     FunctionSpecifier::Noreturn => Err(IRGenerationError {
@@ -1526,7 +1535,7 @@ impl TopLevelBuilder<'_> {
 
                 for clobbers in &asm.clobbers {
                     if !ARGS.silent {
-                        eprintln!("WARNING: asm clobbers are ignored {clobbers:?}")
+                        eprintln!("WARNING: asm clobbers are ignored {clobbers:?}");
                     }
                 }
             }
@@ -1773,7 +1782,14 @@ impl TopLevelBuilder<'_> {
                 out
             }
             (CType::Struct(tag_id), InitializerInfo::Compound(init_list, span)) => {
-                let struct_data = self.scope.get_struct_by_id(*tag_id);
+                let struct_data =
+                    self.scope
+                        .get_struct_by_id(*tag_id)
+                        .map_err(|err| IRGenerationError {
+                            // TODO: check this span is sensible
+                            err,
+                            span,
+                        })?;
                 if init_list.len() > struct_data.size {
                     return Err(IRGenerationError {
                         err: IRGenerationErrorType::ExcessElementsInInitializer,
@@ -1831,8 +1847,26 @@ impl TopLevelBuilder<'_> {
         // TODO: sort out repeated declarations
         for decl in &decls.node.declarators {
             let name = parse_declarator_name(&decl.node.declarator)?;
+
             let mut ctype =
                 CType::from_declarator(&decl.node.declarator, &info.c_type, &mut self.scope)?;
+
+            if ctype.is_void() {
+                return Err(IRGenerationError {
+                    err: IRGenerationErrorType::VariableDeclaredAsVoid,
+                    span: decl.span,
+                });
+            }
+
+            // TODO: remove this once sizeof is fallible
+            if let CType::Struct(tag_id) = ctype {
+                self.scope
+                    .get_struct_by_id(tag_id)
+                    .map_err(|err| IRGenerationError {
+                        err,
+                        span: decl.span,
+                    })?;
+            }
 
             if let CType::Function(..) = ctype {
                 match self.scope.var_map.get(&name) {
@@ -2100,7 +2134,14 @@ impl TopLevelBuilder<'_> {
         let field_name = &expr.node.identifier.node.name;
 
         if let CType::Struct(tag_id) = base_type {
-            let struct_data = self.scope.get_struct_by_id(*tag_id);
+            let struct_data =
+                self.scope
+                    .get_struct_by_id(*tag_id)
+                    .map_err(|err| IRGenerationError {
+                        // TODO: check this span is sensible
+                        err,
+                        span: expr.span,
+                    })?;
             let field = struct_data.fields.get(field_name);
 
             match field {
@@ -2143,7 +2184,14 @@ impl TopLevelBuilder<'_> {
                 },
             }
         } else if let CType::Pointer(CType::Struct(tag_id)) = base_type {
-            let struct_data = self.scope.get_struct_by_id(*tag_id);
+            let struct_data =
+                self.scope
+                    .get_struct_by_id(*tag_id)
+                    .map_err(|err| IRGenerationError {
+                        // TODO: check this span is sensible
+                        err,
+                        span: expr.span,
+                    })?;
             let field = struct_data.fields.get(field_name);
 
             match field {

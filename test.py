@@ -24,6 +24,7 @@ suite_parser.add_argument("--silent", "-s", action='store_true')
 suite_parser.add_argument("--save-diff", action='store_true')
 suite_parser.add_argument("--check-diff", action='store_true')
 suite_parser.add_argument("--extra-credit", action='store_true')
+suite_parser.add_argument("--show-all-stdout", action='store_true')
 suite_parser.add_argument("--chapters", nargs='+', default=['1','2','3','4','5','6','7','8','9','10'])
 
 args = parser.parse_args()
@@ -146,7 +147,7 @@ async def test_runner(
         scores[res.status] += 1
         counts[res.result].append(test[1][0])
         if not args.quiet and not args.silent:
-            if res.status != Status.GREEN:
+            if args.show_all_stdout or res.status != Status.GREEN:
                 sys.stdout.write(status_to_code(res.status))
                 sys.stdout.write(res.info)
                 sys.stdout.write("\033[0m") # reset

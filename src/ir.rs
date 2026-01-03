@@ -86,7 +86,7 @@ impl CType {
             Self::Array(inner_type, size) | Self::ImmediateArray(inner_type, size) => {
                 inner_type.sizeof(scope) * size
             }
-            Self::Struct(tag_id) => scope.get_struct_by_id(*tag_id).size,
+            Self::Struct(tag_id) => scope.get_struct_by_id(*tag_id).expect("struct exists").size,
             Self::Void => panic!("void is not sized"),
             Self::Function(..) => panic!("functions cannot be used as concrete types"),
         }
