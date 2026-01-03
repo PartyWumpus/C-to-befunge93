@@ -11,7 +11,7 @@ v!R#######    main stack    =>   !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNO
 v#########    static memory =>   !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ...etc
 v#########    dynamic alloc =>   !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ...etc
 v#########    call stack    =>   !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~ ...etc
-v#########    filename: 
+v#########    filename
 v#########    compiled by: c-to-befunge
 v#########  below are the bit stacks, for bitshifts and bitwise operations
 v#########  the last 64 bits are just zeros for cheaper bitshifts
@@ -72,7 +72,14 @@ impl CodeGen {
         let func_finder_pos = (3, out.len() - 2);
         out.extend(funcs);
 
-        out[4] += &ARGS.filename;
+        // out[4] == "filename"
+        if ARGS.filenames.len() == 1 {
+            out[4] += ": ";
+            out[4] += &ARGS.filenames[0];
+        } else {
+            out[4] += "s: ";
+            out[4] += &ARGS.filenames.join(", ");
+        }
 
         // Stick preproccesor info at the bottom
         if ARGS.preprocessor_info {

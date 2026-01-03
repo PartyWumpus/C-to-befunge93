@@ -25,7 +25,11 @@ static BEFUNGE_LIBC: Dir = include_dir!("./befunge_libc");
 #[command(about="A C compiler that outputs befunge93 instead of assembly.", long_about = None)]
 struct Args {
     /// File to compile
-    filename: String,
+    filenames: Vec<String>,
+
+    /// Directories to be searched by the preprocessor for header files
+    #[arg(short = 'I')]
+    include_dirs: Vec<String>,
 
     /// Print extra info about compilation
     #[arg(short, long)]
@@ -65,39 +69,47 @@ struct Args {
 }
 
 fn main() {
-    let c_source = match fs::read_to_string(&ARGS.filename) {
-        Err(err) => {
-            eprintln!("File '{}' failed to open: {}", ARGS.filename, err);
-            process::exit(1);
-        }
-        Ok(a) => a,
-    };
-    if ARGS.verbose {
-        println!("-- C SOURCE (pre preprocessor)");
-        println!("{c_source}\n");
+    let mut files = vec![];
+
+    if ARGS.filenames.is_empty() {
+        eprintln!("No input files provided, try --help");
+        process::exit(1);
     }
 
-    // TODO: support multiple user files?
-    let program = match FileBuilder::parse_c(
-        c_source.as_bytes(),
-        &ARGS.filename,
-        &["befunge_libc/stdlib"],
-    ) {
-        Err(err) => {
-            if !ARGS.silent {
-                err.print();
+    let mut included = vec!["befunge_libc/stdlib"];
+    let mut x: Vec<&str> = ARGS.include_dirs.iter().map(AsRef::as_ref).collect();
+    included.append(&mut x);
+
+    for filename in &ARGS.filenames {
+        let c_source = match fs::read_to_string(filename) {
+            Err(err) => {
+                eprintln!("File '{filename}' failed to open: {err}");
+                process::exit(1);
             }
-            process::exit(1);
+            Ok(a) => a,
+        };
+        if ARGS.verbose {
+            println!("-- C SOURCE (pre preprocessor)");
+            println!("{c_source}\n");
         }
-        Ok(x) => x,
-    };
 
-    if ARGS.verbose {
-        println!("\n-- IR, (pre linking)");
-        print_ir(&program);
+        let program = match FileBuilder::parse_c(c_source.as_bytes(), filename, &included) {
+            Err(err) => {
+                if !ARGS.silent {
+                    err.print();
+                }
+                process::exit(1);
+            }
+            Ok(x) => x,
+        };
+
+        if ARGS.verbose {
+            println!("\n-- IR, (pre linking)");
+            print_ir(&program);
+        };
+
+        files.push(program);
     }
-
-    let mut files = vec![program];
 
     // TODO: add caching so the entire lib isn't compiled every time
     for entry in BEFUNGE_LIBC

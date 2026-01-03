@@ -65,7 +65,6 @@ None of these are full architectural failures so will eventually be resolved.
 - Type qualifiers like `const`, `volatile` and `restrict` are not supported
 - Bitshifts and bitwise operations are wrong (i think?) for negative values
 - `malloc` is just a dumb linear allocator with `free()` being a no-op
-- Linking is currently limited to the static befunge_libc library (which is extremely minimal)
 - Doesn't do a register allocation pass or any other optimizations, which would probably make it a decent bit faster
 - Uses gcc for preprocessing (ie #includes), so requires gcc installed to work (step one to making a c compiler, use another c compiler...)
 
