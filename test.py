@@ -61,7 +61,8 @@ class ResultType(IntEnum):
     INTERPRETER_TIMEOUT = 2
     INTERPRETER_CRASH = 3
     INVALID_ACCEPTED = 4
-    SUCCESS = 5
+    INVALID_REJECTED = 5
+    SUCCESS = 6
 
 class Status(IntEnum):
     RED = 0
@@ -92,7 +93,7 @@ async def test_invalid(test: str) -> Result:
         stdout, _ = await proc.communicate()
 
         if proc.returncode != 0: # compiler failed, which is what we want
-            return Result(f"PASS {test}", ResultType.SUCCESS, Status.GREEN, stdout)
+            return Result(f"PASS {test}", ResultType.INVALID_REJECTED, Status.GREEN, stdout)
         else:
             return Result(f"INVALID ACCEPTED {test}", ResultType.INVALID_ACCEPTED, Status.YELLOW, stdout)
 
@@ -237,6 +238,7 @@ elif args.command == "test":
             print(f"{text}: {len(a)}\033[0m")
 
     wawa(f"\033[1;33minvalid acceptances: ", ResultType.INVALID_ACCEPTED)
+    wawa(f"\033[1;32mvalid rejections: ", ResultType.INVALID_REJECTED)
     wawa(f"\033[1;33minterpreter crashes: ", ResultType.INTERPRETER_CRASH, ResultType.INTERPRETER_TIMEOUT)
     wawa(f"\033[1;33mcompile fails: ", ResultType.COMPILE_FAIL)
     wawa(f"\033[1;31mincorrect execution: ", ResultType.INCORRECT_EXECUTION)
