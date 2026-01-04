@@ -70,7 +70,7 @@ fn pseudo_removal(
 ) {
     let mut map = PsuedoMap {
         stack_map: HashMap::new(),
-        stack_count: func.parameters,
+        stack_count: func.parameters_size,
         data_count,
         data_map,
     };
@@ -155,10 +155,10 @@ fn stack_size_recalculator(func: &mut IRTopLevel) -> usize {
         }
     };
     apply_to_all_ir_values(func, &mut check);
-    let out = std::cmp::max(counter, func.parameters) + 1;
+    let out = std::cmp::max(counter, func.parameters_size) + 1;
     if ARGS.zero_stack_before_use {
         let mut new_ops = vec![];
-        for i in func.parameters..out {
+        for i in func.parameters_size..out {
             new_ops.push(IROp::CopyWithOffset(
                 (IRValue::int(0), 0),
                 (IRValue::Stack(1), i),

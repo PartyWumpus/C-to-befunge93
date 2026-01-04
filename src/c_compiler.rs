@@ -625,13 +625,19 @@ impl FileBuilder {
         };
 
         let name = parse_declarator_name(&func.node.declarator)?;
-        let param_count = builder.parse_func_declarator(&func.node.declarator)?.len();
+        let param_count = builder
+            .parse_func_declarator(&func.node.declarator)?
+            .iter()
+            .map(|(_name, ctype)| ctype.sizeof(&builder.scope))
+            .sum();
+
         builder.parse_statement(&func.node.statement)?;
         let size = if builder.return_type.is_void() {
             1
         } else {
             builder.return_type.sizeof(&builder.scope)
         };
+
         builder.push(IROp::Return(IRValue::int(0), size));
 
         // FIXME: bad bad bad, just have a seperate global counter
@@ -639,7 +645,7 @@ impl FileBuilder {
         Ok(IRTopLevel {
             name,
             ops: builder.ops,
-            parameters: param_count,
+            parameters_size: param_count,
             is_initializer: false,
             return_type: Some(builder.return_type),
             stack_frame_size: builder.count, // NOTE: this is a 'worst case' value,
@@ -684,7 +690,7 @@ impl FileBuilder {
             Ok(Some(IRTopLevel {
                 name: name.to_owned(),
                 ops: builder.ops,
-                parameters: 0,
+                parameters_size: 0,
                 is_initializer: true,
                 return_type: Some(builder.return_type),
                 stack_frame_size: builder.count, // NOTE: this is a 'worst case' value,
@@ -2006,7 +2012,7 @@ impl TopLevelBuilder<'_> {
                 let init = IRTopLevel {
                     name: String::new(),
                     ops: builder.ops,
-                    parameters: 0,
+                    parameters_size: 0,
                     is_initializer: true,
                     stack_frame_size: builder.count,
                     return_type: Some(builder.return_type),

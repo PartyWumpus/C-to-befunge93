@@ -154,7 +154,7 @@ pub enum BinOp {
 pub struct IRTopLevel {
     pub name: String,
     pub stack_frame_size: usize,
-    pub parameters: usize,
+    pub parameters_size: usize,
     pub ops: Vec<IROp>,
     pub is_initializer: bool,
     pub return_type: Option<CType>,
