@@ -413,6 +413,7 @@ impl ScopeInfo {
         if !new {
             return id;
         }
+
         let mut structs = self.structs.lock();
         if let Some(name) = name {
             self.tag_map.insert(
@@ -435,23 +436,29 @@ impl ScopeInfo {
         tag_type: StructKind,
     ) -> Result<TagID, IRGenerationErrorType> {
         let (id, new) = self.generate_struct_id(name, tag_type);
-        if !new && self.structs.lock()[id].1.get().is_some() {
-            return Err(IRGenerationErrorType::StructRedefinition);
-        }
-        self.structs
-            .lock()
-            .push((name.map(str::to_string), OnceCell::from(struct_data)));
+        if new {
+            self.structs
+                .lock()
+                .push((name.map(str::to_string), OnceCell::from(struct_data)));
 
-        if let Some(name) = name {
-            self.tag_map.insert(
-                name.to_string(),
-                TagData {
-                    source_depth: self.depth,
-                    tag_id: id,
-                    tag_type,
-                },
-            );
+            if let Some(name) = name {
+                self.tag_map.insert(
+                    name.to_string(),
+                    TagData {
+                        source_depth: self.depth,
+                        tag_id: id,
+                        tag_type,
+                    },
+                );
+            }
+        } else {
+            let structs = self.structs.lock();
+            if structs[id].1.get().is_some() {
+                return Err(IRGenerationErrorType::StructRedefinition);
+            }
+            structs[id].1.set(struct_data).unwrap();
         }
+
         Ok(id)
     }
 
@@ -959,6 +966,9 @@ impl CType {
                         span: struct_type.span,
                     });
                 }
+
+                scope.insert_incomplete_struct(name.as_deref(), struct_kind);
+
                 let mut struct_data = StructData::new();
                 for decl in decls {
                     match &decl.node {
