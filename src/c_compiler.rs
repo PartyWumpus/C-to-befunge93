@@ -1832,6 +1832,34 @@ impl TopLevelBuilder<'_> {
                 }
                 out
             }
+
+            // mildly jank special case for string literals
+            (
+                CType::Pointer(
+                    inner_type @ (CType::Char | CType::UnsignedChar | CType::SignedChar),
+                ),
+                InitializerInfo::Compound(init_list, _span),
+            ) => {
+                let mut inits = vec![];
+                for init_info in init_list {
+                    let x = self.flatten_and_type_check_initializer_info(init_info, inner_type)?;
+                    inits.extend(x);
+                }
+
+                // relies on the assumption below that all members are size 1
+                let loc = self.generate_unique_static_pseudo("arr".to_string(), inits.len());
+
+                for (i, init) in inits.into_iter().enumerate() {
+                    assert!(init.1 == 1);
+                    self.push(IROp::CopyWithOffset((init.0, 0), (loc.clone(), i)));
+                }
+
+                let out = self.generate_pseudo(1);
+                self.push(IROp::AddressOf(loc, out.clone()));
+
+                vec![(out, 1)]
+            }
+
             (_, InitializerInfo::Compound(_init_list, span)) => {
                 return Err(IRGenerationError {
                     err: IRGenerationErrorType::TODOScalarInitializers,
@@ -2053,15 +2081,20 @@ impl TopLevelBuilder<'_> {
         match &init.node {
             Initializer::Expression(expr) => Ok(match &expr.node {
                 Expression::StringLiteral(expr) => {
-                    let str = string_literal_to_string(expr)?
+                    let mut str: Vec<_> = string_literal_to_string(expr)?
                         .into_iter()
                         .map(|char| {
                             InitializerInfo::Single(
                                 (IRValue::int(char as usize), CType::Char),
+                                // TODO: make span more good
                                 expr.span,
                             )
                         })
                         .collect();
+                    str.push(InitializerInfo::Single(
+                        (IRValue::int(0), CType::Char),
+                        expr.span,
+                    ));
                     InitializerInfo::Compound(str, init.span)
                 }
                 _ => InitializerInfo::Single(self.parse_expression(expr)?, expr.span),
