@@ -3442,8 +3442,19 @@ fn string_literal_to_string(expr: &Node<StringLiteral>) -> Result<Vec<char>, IRG
                 },
             });
         }
-
-        // TODO: convert escape sequences
+        // convert escape sequences
+        let string = string
+            .replace(r"\\", r"\")
+            .replace(r"\'", &char::from(39).to_string())
+            .replace("\\\"", &char::from(34).to_string())
+            .replace(r"\?", &char::from(63).to_string())
+            .replace(r"\a", &char::from(7).to_string())
+            .replace(r"\b", &char::from(8).to_string())
+            .replace(r"\f", &char::from(12).to_string())
+            .replace(r"\n", &char::from(10).to_string())
+            .replace(r"\r", &char::from(13).to_string())
+            .replace(r"\t", &char::from(9).to_string())
+            .replace(r"\v", &char::from(11).to_string());
 
         // NOTE: this indexing will have to change if encoding prefixes are supported
         out.append(&mut string[1..string.len() - 1].chars().collect());
