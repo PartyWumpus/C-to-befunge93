@@ -3412,20 +3412,23 @@ fn char_constant_to_usize(str: &str) -> Result<usize, IRGenerationErrorType> {
     let mut chars = str.chars().skip(1).collect::<Vec<_>>();
     chars.pop();
 
-    Ok(match &chars {
+    Ok(match &chars[..] {
         // octal
-        ['\\', '0'..'7', ..] => {
+        ['\\', '0'..'7'] | ['\\', '0'..'7', '0'..'7'] | ['\\', '0'..'7', '0'..'7', '0'..'7'] => {
             let num: String = chars.into_iter().skip(1).collect();
             usize::from_str_radix(&num, 8).unwrap()
         }
         // hex
-        ['\\', 'x', ..] => {
-            let num: String = chars.into_iter().skip(2).collect();
+        ['\\', 'x', num @ ..] => {
+            let num: String = num.iter().collect();
             usize::from_str_radix(&num, 16).unwrap()
         }
         // normal escape
-        ['\\', ..] => {
-            match chars[1] {
+        ['\\', escape @ ..] => {
+            if escape.len() != 1 {
+                return Err(IRGenerationErrorType::LongCharLiteral);
+            }
+            match escape[0] {
                 // Single quote
                 '\'' => 39,
                 // Double quote
