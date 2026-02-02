@@ -1,4 +1,6 @@
-use crate::c_compiler::{CType, ScopeInfo};
+use std::num::{NonZero, NonZeroU64, NonZeroUsize};
+
+use crate::c_compiler::{CSize, CType, ScopeInfo};
 
 #[derive(Debug, Clone)]
 pub enum IRValue {
@@ -11,12 +13,12 @@ pub enum IRValue {
     /// An absolute position in static memory
     Data(usize),
     /// A location to be determined Later, will be on the stack
-    Psuedo { name: String, size: usize },
+    Psuedo { name: String, size: CSize },
     /// A location to be determined Later, will be in static memory
     StaticPsuedo {
         name: String,
         linkable: bool,
-        size: usize,
+        size: CSize,
     },
     /// The current value on the top of the bstack
     /// Must be careful when using
@@ -69,7 +71,7 @@ impl IRType {
 }
 
 impl CType {
-    pub fn sizeof(&self, scope: &ScopeInfo) -> usize {
+    pub fn sizeof(&self, scope: &ScopeInfo) -> CSize {
         match self {
             Self::Pointer(..)
             | Self::Char
@@ -82,9 +84,9 @@ impl CType {
             | Self::UnsignedInt
             | Self::UnsignedLong
             | Self::Bool
-            | Self::Double => 1,
+            | Self::Double => CSize::new(1).unwrap(),
             Self::Array(inner_type, size) | Self::ImmediateArray(inner_type, size) => {
-                inner_type.sizeof(scope) * size
+                CSize::new(inner_type.sizeof(scope).get() * size.get()).unwrap()
             }
             Self::Struct(tag_id) => scope.get_struct_by_id(*tag_id).expect("struct exists").size,
             Self::Void => panic!("void is not sized"),
@@ -95,24 +97,24 @@ impl CType {
 
 #[derive(Debug, Clone)]
 pub enum IROp {
-    Return(IRValue, usize),
-    GetReturnValue(IRValue, usize),
+    Return(IRValue, CSize),
+    GetReturnValue(IRValue, CSize),
     GetIdOfFunction(String, IRValue),
-    Call(String, Vec<(IRValue, usize)>),
+    Call(String, Vec<(IRValue, CSize)>),
     Label(String),
     InlineBefunge(Vec<String>),
     AlwaysBranch(String),
     CondBranch(BranchType, String, IRValue),
     AddressOf(IRValue, IRValue),
-    Dereference(IRValue, IRValue, usize),
+    Dereference(IRValue, IRValue, CSize),
     // do i need a source and destination offset?
-    Copy(IRValue, IRValue, usize),
-    Store(IRValue, IRValue, usize),
+    Copy(IRValue, IRValue, CSize),
+    Store(IRValue, IRValue, CSize),
     One(UnaryOp, IRValue, IRValue, IRType),
     Two(BinOp, IRValue, IRValue, IRValue, IRType),
     Cast(IRType, (IRValue, IRType), IRValue),
     CopyWithOffset((IRValue, usize), (IRValue, usize)),
-    AddPtr(IRValue, IRValue, IRValue, usize),
+    AddPtr(IRValue, IRValue, IRValue, CSize),
 }
 
 #[derive(Debug, Clone, Copy)]

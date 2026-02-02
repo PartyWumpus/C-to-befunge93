@@ -47,6 +47,8 @@ pub enum IRGenerationErrorType {
     UnknownFunction,
     #[error("Non-integer array length")]
     NonIntegerArrayLength,
+    #[error("Array length equal to zero")]
+    ZeroArrayLength,
     #[error("Arrays must be initialized with an initializer list or string literal")]
     InvalidArrayInit,
     #[error(

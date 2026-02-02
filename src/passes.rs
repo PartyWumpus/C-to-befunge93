@@ -87,7 +87,7 @@ impl PsuedoMap<'_> {
                 }
                 self.stack_map.insert(name.to_owned(), self.stack_count + 1);
                 let out = IRValue::Stack(self.stack_count + 1);
-                self.stack_count += size;
+                self.stack_count += size.get();
                 out
             }
             IRValue::StaticPsuedo { name, size, .. } => {
@@ -96,7 +96,7 @@ impl PsuedoMap<'_> {
                 }
                 self.data_map.insert(name.to_owned(), *self.data_count + 1);
                 let out = IRValue::Data(*self.data_count + 1);
-                *self.data_count += size;
+                *self.data_count += size.get();
                 out
             }
             _ => val.clone(),

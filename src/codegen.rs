@@ -104,8 +104,14 @@ impl CodeGen {
                         panic!("Function '{called_func_name}' not found");
                     };
 
-                    self.builder
-                        .call(self.function_map[&func.name], *called_func, vals);
+                    self.builder.call(
+                        self.function_map[&func.name],
+                        *called_func,
+                        &vals
+                            .iter()
+                            .map(|(a, b)| (a.clone(), b.get()))
+                            .collect::<Vec<_>>(),
+                    );
                 }
                 IROp::GetIdOfFunction(called_func_name, out) => {
                     // TODO: improve error on unknown func call
@@ -116,10 +122,10 @@ impl CodeGen {
                     self.builder.copy(&IRValue::int(called_func.id), out, 1);
                 }
                 IROp::Return(val, size) => {
-                    self.builder.return_(val, *size);
+                    self.builder.return_(val, size.get());
                 }
                 IROp::GetReturnValue(out, size) => {
-                    self.builder.load_return_val(out, *size);
+                    self.builder.load_return_val(out, size.get());
                 }
                 IROp::Cast(irtype, (val, _original_irtype), output) => {
                     self.builder.constrain_to_range(val, *irtype, false);
@@ -137,13 +143,13 @@ impl CodeGen {
                     self.builder.copy(&IRValue::BefungeStack, out, 1);
                 }
                 IROp::Dereference(a, out, size) => {
-                    self.builder.dereference(a, out, *size);
+                    self.builder.dereference(a, out, size.get());
                 }
                 IROp::Copy(a, out, size) => {
-                    self.builder.copy(a, out, *size);
+                    self.builder.copy(a, out, size.get());
                 }
                 IROp::Store(a, out, size) => {
-                    self.builder.store(a, out, *size);
+                    self.builder.store(a, out, size.get());
                 }
                 IROp::One(op, a, out, irtype) => match irtype {
                     IRType::Signed(..) | IRType::Unsigned(..) => {
@@ -314,7 +320,7 @@ impl CodeGen {
                     );
                 }
                 IROp::AddPtr(ptr, b, out, size) => {
-                    self.builder.add_ptr(ptr, b, *size);
+                    self.builder.add_ptr(ptr, b, size.get());
                     self.builder.copy(&IRValue::BefungeStack, out, 1);
                 }
             }
