@@ -51,40 +51,47 @@ impl OpBuilder {
         }
     }
 
-    fn str(&mut self, str: &str) {
+    #[allow(clippy::cast_sign_loss)]
+    fn str(&mut self, str: &str, change: isize) {
         self.ops.extend(str.chars());
+        self.current_stack_size = self.current_stack_size.wrapping_add(change as usize);
     }
 
+    #[allow(clippy::cast_sign_loss)]
     fn char(&mut self, char: char) {
         self.ops.push(char);
+        self.current_stack_size = self.current_stack_size.wrapping_add(match char {
+            '0'..='9' | '.' | ',' | ':' => 1,
+            '>' | '<' | '^' | 'v' | '#' | '?' | '@' | '\\' | '!' => 0,
+            '+' | '-' | '*' | '/' | '%' | '`' | '$' | '_' | '|' | 'g' | '&' | '~' => -1,
+            'p' => -3,
+            ' ' => panic!("use add_space so this can be optimized out (eventually)"),
+            _ => todo!("{}", char),
+        } as usize);
     }
 
     pub fn add_space(&mut self) {
-        self.char(' ');
+        self.str(" ", 0);
     }
 
     /// Puts stack ptr on bstack
     fn load_stack_ptr(&mut self) {
-        self.str("00g");
-        self.current_stack_size += 1;
+        self.str("00g", 1);
     }
 
     /// Set stack ptr to top of bstack
     fn set_stack_ptr(&mut self) {
-        self.str("00p");
-        self.current_stack_size += 1;
+        self.str("00p", -1);
     }
 
     /// Puts stack ptr on bstack
     fn load_call_stack_ptr(&mut self) {
-        self.str("10g");
-        self.current_stack_size += 1;
+        self.str("10g", 1);
     }
 
     /// Set stack ptr to top of bstack
     fn set_call_stack_ptr(&mut self) {
-        self.str("10p");
-        self.current_stack_size += 1;
+        self.str("10p", -1);
     }
 
     /// Puts return value on bstack
@@ -92,8 +99,7 @@ impl OpBuilder {
         assert_ne!(size, 0);
         if size <= 8 {
             for i in 0..size {
-                self.str(&format!("{}0g", i + 2));
-                self.current_stack_size += 1;
+                self.str(&format!("{}0g", i + 2), 1);
                 self.copy_with_offset((&IRValue::BefungeStack, 0), (loc, i));
             }
         } else {
@@ -105,8 +111,7 @@ impl OpBuilder {
         if size <= 8 {
             for i in 0..size {
                 self.copy_with_offset((loc, i), (&IRValue::BefungeStack, 0));
-                self.str(&format!("{}0p", i + 2));
-                self.current_stack_size -= 1;
+                self.str(&format!("{}0p", i + 2), -1);
             }
         } else {
             panic!("for now, structs sized > 8 cannot be returned")
@@ -116,54 +121,46 @@ impl OpBuilder {
     /// Puts num on bstack
     pub fn load_number(&mut self, num: usize) {
         let x = int_to_befunge_str(num as u64, ARGS.optimization_level > 1);
-        self.str(&x);
-        self.current_stack_size += 1;
+        self.str(&x, 1);
     }
 
     fn index_register(&mut self, id: usize) {
         assert!(id <= 99, "attempt to index register > 99");
-        self.str(&format!("{}{}", id / 10, id % 10));
-        self.current_stack_size += 2;
+        self.str(&format!("{}{}", id / 10, id % 10), 2);
     }
 
     fn load_register_val(&mut self, id: usize) {
         self.index_register(id);
         self.char('g');
-        self.current_stack_size -= 1;
     }
 
     fn set_register_val(&mut self, id: usize) {
         self.index_register(id);
         self.char('p');
-        self.current_stack_size -= 3;
     }
 
     fn load_stack_val(&mut self, offset: usize) {
         self.load_stack_ptr();
         self.load_number(offset);
-        self.str("+0g");
-        self.current_stack_size -= 1;
+        self.str("+0g", -1);
     }
 
     fn set_stack_val(&mut self, offset: usize) {
         self.load_stack_ptr();
         self.load_number(offset);
-        self.str("+0p");
-        self.current_stack_size -= 3;
+        self.str("+0p", -3);
     }
 
     /// Puts data value on bstack
     fn load_data_val(&mut self, position: usize) {
         self.load_number(position + 31); // + 31 to avoid the register space
-        self.str("1g");
-        self.current_stack_size += 0;
+        self.str("1g", 0);
     }
 
     /// Set data value to top of bstack
     fn set_data_val(&mut self, position: usize) {
         self.load_number(position + 31); // + 31 to avoid the register space
-        self.str("1p");
-        self.current_stack_size -= 2;
+        self.str("1p", -2);
     }
 
     pub fn label(&mut self, label: String) {
@@ -182,12 +179,11 @@ impl OpBuilder {
 
     pub fn not_zero_branch(&mut self, val: &IRValue, label: String) {
         self.load_val(val);
-        self.str("#v_");
+        self.str("#v_", -1);
         self.branch_points
             .entry(label)
             .or_default()
             .push(self.ops.len() - 2);
-        self.current_stack_size -= 1;
         assert!(self.current_stack_size == 0);
     }
 
@@ -223,17 +219,17 @@ impl OpBuilder {
         self.set_return_val(val, size);
         self.load_call_stack_ptr();
 
-        self.str(r"1-:3g");
+        self.str(r"1-:3g", 0);
         self.set_stack_ptr();
 
-        self.str(r"1-:3g\1-:3g\");
+        self.str(r"1-:3g\1-:3g\", 0);
         self.set_call_stack_ptr();
 
         self.exit();
     }
 
     fn call_exit(&mut self) {
-        self.str("^>");
+        self.str("^>", 0);
         self.exit_points.push(self.ops.len() - 2);
         self.return_points.push(self.ops.len() - 1);
         self.current_stack_size = 0;
@@ -265,24 +261,24 @@ impl OpBuilder {
 
         // Load my ID onto the call stack
         // TODO: optimize with swap op
-        self.char(' ');
+        self.add_space();
         self.load_number(caller.id);
         self.load_call_stack_ptr();
-        self.str("3p");
+        self.str("3p", 0);
 
         // Load current location in function onto the call stack
         self.load_number(self.return_points.len() + 1);
         self.load_call_stack_ptr();
-        self.str("1+3p");
+        self.str("1+3p", 0);
 
         // Put saved stack ptr value onto the call stack
         self.load_register_val(22);
         self.load_call_stack_ptr();
-        self.str("2+3p");
+        self.str("2+3p", 0);
 
         // Increment call stack ptr
         self.load_call_stack_ptr();
-        self.str("3+");
+        self.str("3+", 0);
         self.set_call_stack_ptr();
 
         self.call_exit();
@@ -333,8 +329,7 @@ impl OpBuilder {
         self.load_bit_stack(a, true);
         self.load_bit_stack(b, false);
         // Calculate sign for later: (a*b)*2-1
-        self.str(r"*2*1-");
-        self.current_stack_size -= 1;
+        self.str(r"*2*1-", -1);
 
         // For each bit, do a * b
         self.insert_inline_befunge(&[
@@ -346,15 +341,13 @@ impl OpBuilder {
 
         // Times by the sign from earlier
         self.char('*');
-        self.current_stack_size -= 1;
     }
 
     pub fn bit_xor(&mut self, a: &IRValue, b: &IRValue) {
         self.load_bit_stack(a, true);
         self.load_bit_stack(b, false);
         // Calculate sign for later: (a+b mod 2) * -2 + 1
-        self.str("+2%02-*1+");
-        self.current_stack_size -= 1;
+        self.str("+2%02-*1+", -1);
 
         // For each bit, do (a + b) mod 2
         self.insert_inline_befunge(&[
@@ -366,15 +359,13 @@ impl OpBuilder {
 
         // Times by the sign from earlier
         self.char('*');
-        self.current_stack_size -= 1;
     }
 
     pub fn bit_or(&mut self, a: &IRValue, b: &IRValue) {
         self.load_bit_stack(a, true);
         self.load_bit_stack(b, false);
         // If both one, -> 1 else -1
-        self.str(r"+1`2*1-");
-        self.current_stack_size -= 1;
+        self.str(r"+1`2*1-", -1);
 
         // For each bit, do not( (a + b) > 1 )
         self.insert_inline_befunge(&[
@@ -386,13 +377,12 @@ impl OpBuilder {
 
         // Times by the sign from earlier
         self.char('*');
-        self.current_stack_size -= 1;
     }
 
     pub fn bitshift_left(&mut self, a: &IRValue, b: &IRValue) {
         self.load_bit_stack(a, true);
         // sign bit (0/1) to sign (-1/1)
-        self.str("2*1-");
+        self.str("2*1-", 0);
         self.load_val(b);
         self.insert_inline_befunge(&[
             r#"097p:87p"?"+>:9g97g2*+97pv>"#.to_owned(),
@@ -402,7 +392,6 @@ impl OpBuilder {
 
         // Times by the sign from earlier
         self.char('*');
-        self.current_stack_size -= 1;
     }
 
     // NOTE: this does not match gcc.
@@ -410,7 +399,7 @@ impl OpBuilder {
     pub fn bitshift_right(&mut self, a: &IRValue, b: &IRValue) {
         self.load_bit_stack(a, true);
         // sign bit (0/1) to sign (-1/1)
-        self.str("2*1-");
+        self.str("2*1-", 0);
         self.load_val(b);
         self.insert_inline_befunge(&[
             r#"097p:87p"?"\->:9g97g2*+97pv>"#.to_owned(),
@@ -420,7 +409,6 @@ impl OpBuilder {
 
         // Times by the sign from earlier
         self.char('*');
-        self.current_stack_size -= 1;
     }
 
     pub fn constrain_to_range(&mut self, value: &IRValue, size: IRType, bounded: bool) {
@@ -433,7 +421,6 @@ impl OpBuilder {
                 if size < 32 {
                     self.load_number(2_usize.pow(size as u32));
                     self.char('%');
-                    self.current_stack_size -= 1;
                 }
             }
             IRType::Signed(size) => {
@@ -460,7 +447,7 @@ impl OpBuilder {
     pub fn insert_inline_befunge(&mut self, lines: &[String]) {
         let initial_length = self.ops.len();
         if let Some(first_line) = lines.first() {
-            self.str(first_line);
+            self.str(first_line, 0);
         }
         let mut longest_extra = 0;
         for (i, line) in lines[1..].iter().enumerate() {
@@ -686,15 +673,13 @@ impl OpBuilder {
         self.load_number(0);
         self.load_val(a);
         self.char('-');
-        self.current_stack_size -= 1;
     }
 
     // TODO: improve. x -> -1 - x
     pub fn bitwise_complement(&mut self, a: &IRValue) {
         self.load_number(0);
         self.load_val(a);
-        self.str("-1-");
-        self.current_stack_size -= 1;
+        self.str("-1-", -1);
     }
 
     pub fn boolean_negate(&mut self, a: &IRValue) {
@@ -734,7 +719,6 @@ impl OpBuilder {
         self.load_val(a);
         for _ in 1..size * 2 {
             self.char(':');
-            self.current_stack_size += 1;
         }
 
         for i in 0..size {
@@ -748,7 +732,6 @@ impl OpBuilder {
             self.divide(&IRValue::BefungeStack, &IRValue::BefungeStack);
 
             self.char('g');
-            self.current_stack_size -= 1;
             self.copy_with_offset((&IRValue::BefungeStack, 0), (out, i));
         }
     }
@@ -764,7 +747,6 @@ impl OpBuilder {
 
             self.load_val(loc);
             self.char(':');
-            self.current_stack_size += 1;
 
             self.load_val(&IRValue::Register(61));
             self.modulo(&IRValue::BefungeStack, &IRValue::BefungeStack);
@@ -776,71 +758,58 @@ impl OpBuilder {
             self.divide(&IRValue::BefungeStack, &IRValue::BefungeStack);
 
             self.char('p');
-            self.current_stack_size -= 3;
         }
     }
 
     pub fn add(&mut self, a: &IRValue, b: &IRValue) {
         self.get_two_reorderable(a, b);
         self.char('+');
-        self.current_stack_size -= 1;
     }
     pub fn sub(&mut self, a: &IRValue, b: &IRValue) {
         self.get_two_ordered(a, b);
         self.char('-');
-        self.current_stack_size -= 1;
     }
     pub fn multiply(&mut self, a: &IRValue, b: &IRValue) {
         self.get_two_reorderable(a, b);
         self.char('*');
-        self.current_stack_size -= 1;
     }
     pub fn divide(&mut self, a: &IRValue, b: &IRValue) {
         self.get_two_ordered(a, b);
         self.char('/');
-        self.current_stack_size -= 1;
     }
     pub fn modulo(&mut self, a: &IRValue, b: &IRValue) {
         self.get_two_ordered(a, b);
         self.char('%');
-        self.current_stack_size -= 1;
     }
     pub fn is_equal(&mut self, a: &IRValue, b: &IRValue) {
         self.get_two_reorderable(a, b);
-        self.str("-!");
-        self.current_stack_size -= 1;
+        self.str("-!", -1);
     }
     pub fn is_not_equal(&mut self, a: &IRValue, b: &IRValue) {
         self.get_two_reorderable(a, b);
-        self.str("-!!");
-        self.current_stack_size -= 1;
+        self.str("-!!", -1);
     }
     pub fn is_less_than(&mut self, a: &IRValue, b: &IRValue) {
         self.get_two_ordered(b, a); // swapped load order
-        self.str("`");
-        self.current_stack_size -= 1;
+        self.char('`');
     }
     pub fn is_less_or_equal(&mut self, a: &IRValue, b: &IRValue) {
         self.get_two_ordered(a, b);
-        self.str("`!");
-        self.current_stack_size -= 1;
+        self.str("`!", -1);
     }
     pub fn is_greater_than(&mut self, a: &IRValue, b: &IRValue) {
         self.get_two_ordered(a, b);
         self.char('`');
-        self.current_stack_size -= 1;
     }
     pub fn is_greater_or_equal(&mut self, a: &IRValue, b: &IRValue) {
         self.get_two_ordered(b, a); // swapped load order
-        self.str("`!");
-        self.current_stack_size -= 1;
+        self.str("`!", -1);
     }
     pub fn add_ptr(&mut self, ptr: &IRValue, b: &IRValue, size: usize) {
         self.get_two_ordered(ptr, b);
         //self.address_of(ptr);
         //self.get_val(b);
         self.load_number(size);
-        self.str("*+");
-        self.current_stack_size -= 2;
+        self.str("*+", -2);
     }
 }
