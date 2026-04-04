@@ -1,5 +1,3 @@
-use std::num::{NonZero, NonZeroU64, NonZeroUsize};
-
 use crate::c_compiler::{CSize, CType, ScopeInfo};
 
 #[derive(Debug, Clone)]
@@ -112,6 +110,7 @@ pub enum IROp {
     Store(IRValue, IRValue, CSize),
     One(UnaryOp, IRValue, IRValue, IRType),
     Two(BinOp, IRValue, IRValue, IRValue, IRType),
+    Cmp(CmpOp, IRValue, IRValue, IRValue, IRType),
     Cast(IRType, (IRValue, IRType), IRValue),
     CopyWithOffset((IRValue, usize), (IRValue, usize)),
     AddPtr(IRValue, IRValue, IRValue, CSize),
@@ -137,19 +136,22 @@ pub enum BinOp {
     Mult,
     Div,
     Mod,
-    // TODO: make these seperate because they always return int
-    Equal,
-    NotEqual,
-    LessThan,
-    LessOrEqual,
-    GreaterThan,
-    GreaterOrEqual,
 
     BitwiseAnd,
     BitwiseOr,
     BitwiseXor,
     ShiftLeft,
     ShiftRight,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CmpOp {
+    Equal,
+    NotEqual,
+    LessThan,
+    LessOrEqual,
+    GreaterThan,
+    GreaterOrEqual,
 }
 
 #[derive(Debug)]

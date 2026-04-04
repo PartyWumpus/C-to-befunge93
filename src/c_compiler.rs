@@ -32,7 +32,7 @@ use lang_c::{
 use crate::{
     ARGS,
     errors::{CompilerError, IRGenerationError, IRGenerationErrorType},
-    ir::{BinOp, BranchType, IROp, IRTopLevel, IRType, IRValue, UnaryOp},
+    ir::{BinOp, BranchType, CmpOp, IROp, IRTopLevel, IRType, IRValue, UnaryOp},
 };
 
 pub type CSize = NonZeroUsize;
@@ -1453,11 +1453,12 @@ impl TopLevelBuilder<'_> {
         let tmp = self.generate_pseudo(CType::UnsignedInt.sizeof(&self.scope));
         for (i, expr) in info.cases.iter().enumerate() {
             let case_value = self.parse_expression(expr)?;
-            self.push(IROp::Two(
-                BinOp::Equal,
+            self.push(IROp::Cmp(
+                CmpOp::Equal,
                 case_value.0,
                 condition.0.clone(),
                 tmp.clone(),
+                // FIXME: compare types correctly here
                 IRType::from_ctype(&CType::UnsignedInt, &self.scope),
             ));
             let lbl = self.generate_switch_case_label(id, i).0;
@@ -2782,7 +2783,7 @@ impl TopLevelBuilder<'_> {
             return Ok(ExpressionOutput::Plain((out, CType::SignedInt)));
         }
 
-        let ((lhs, lhs_type), (rhs, rhs_type), out_type, assignment_status) =
+        let ((lhs, lhs_type), (rhs, rhs_type), out_type, common_type, assignment_status) =
             match expr.node.operator.node {
                 CBinOp::AssignPlus
                 | CBinOp::AssignMinus
@@ -2843,7 +2844,8 @@ impl TopLevelBuilder<'_> {
                     (
                         (lhs, lhs_type.clone()),
                         (rhs, rhs_type),
-                        lhs_type,
+                        lhs_type.clone(),
+                        lhs_type, // Shouldn't be used
                         assignment_status,
                     )
                 }
@@ -2904,9 +2906,24 @@ impl TopLevelBuilder<'_> {
                                 span: expr.span,
                             })?;
                     }
+
+                    let out_type = if matches!(
+                        expr.node.operator.node,
+                        CBinOp::Greater
+                            | CBinOp::LessOrEqual
+                            | CBinOp::GreaterOrEqual
+                            | CBinOp::Equals
+                            | CBinOp::NotEquals
+                    ) {
+                        CType::SignedInt
+                    } else {
+                        common_type.clone()
+                    };
+
                     (
                         (lhs, lhs_type),
                         (rhs, rhs_type),
+                        out_type,
                         common_type,
                         AssignmentStatus::NoAssignment,
                     )
@@ -3056,47 +3073,47 @@ impl TopLevelBuilder<'_> {
                 IRType::from_ctype(&out_type, &self.scope),
             ),
 
-            CBinOp::Less => IROp::Two(
-                BinOp::LessThan,
+            CBinOp::Less => IROp::Cmp(
+                CmpOp::LessThan,
                 lhs,
                 rhs,
                 out.clone(),
-                IRType::from_ctype(&CType::SignedInt, &self.scope),
+                IRType::from_ctype(&common_type, &self.scope),
             ),
-            CBinOp::Greater => IROp::Two(
-                BinOp::GreaterThan,
+            CBinOp::Greater => IROp::Cmp(
+                CmpOp::GreaterThan,
                 lhs,
                 rhs,
                 out.clone(),
-                IRType::from_ctype(&CType::SignedInt, &self.scope),
+                IRType::from_ctype(&common_type, &self.scope),
             ),
-            CBinOp::LessOrEqual => IROp::Two(
-                BinOp::LessOrEqual,
+            CBinOp::LessOrEqual => IROp::Cmp(
+                CmpOp::LessOrEqual,
                 lhs,
                 rhs,
                 out.clone(),
-                IRType::from_ctype(&CType::SignedInt, &self.scope),
+                IRType::from_ctype(&common_type, &self.scope),
             ),
-            CBinOp::GreaterOrEqual => IROp::Two(
-                BinOp::GreaterOrEqual,
+            CBinOp::GreaterOrEqual => IROp::Cmp(
+                CmpOp::GreaterOrEqual,
                 lhs,
                 rhs,
                 out.clone(),
-                IRType::from_ctype(&CType::SignedInt, &self.scope),
+                IRType::from_ctype(&common_type, &self.scope),
             ),
-            CBinOp::Equals => IROp::Two(
-                BinOp::Equal,
+            CBinOp::Equals => IROp::Cmp(
+                CmpOp::Equal,
                 lhs,
                 rhs,
                 out.clone(),
-                IRType::from_ctype(&CType::SignedInt, &self.scope),
+                IRType::from_ctype(&common_type, &self.scope),
             ),
-            CBinOp::NotEquals => IROp::Two(
-                BinOp::NotEqual,
+            CBinOp::NotEquals => IROp::Cmp(
+                CmpOp::NotEqual,
                 lhs,
                 rhs,
                 out.clone(),
-                IRType::from_ctype(&CType::SignedInt, &self.scope),
+                IRType::from_ctype(&common_type, &self.scope),
             ),
 
             // bitwise ops

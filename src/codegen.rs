@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     ARGS,
     builder::OpBuilder,
-    ir::{BinOp, BranchType, FuncInfo, IROp, IRTopLevel, IRType, IRValue, UnaryOp},
+    ir::{BinOp, BranchType, CmpOp, FuncInfo, IROp, IRTopLevel, IRType, IRValue, UnaryOp},
 };
 
 static PRE_INIT_PRELUDE: &str = r##"
@@ -127,7 +127,19 @@ impl CodeGen {
                 IROp::GetReturnValue(out, size) => {
                     self.builder.load_return_val(out, size.get());
                 }
-                IROp::Cast(irtype, (val, _original_irtype), output) => {
+                IROp::Cast(irtype, (val, original_irtype), output) => {
+                    let val = match original_irtype {
+                        IRType::Signed(..) | IRType::Unsigned(..) => val,
+                        IRType::Double => {
+                            self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_f64_to_i64"],
+                                &[(val.clone(), 1)],
+                            );
+                            self.builder.load_return_val(output, 1);
+                            output
+                        }
+                    };
                     self.builder.constrain_to_range(val, *irtype, false);
                     self.builder.copy(&IRValue::BefungeStack, output, 1);
                 }
@@ -181,7 +193,60 @@ impl CodeGen {
                                 &[(a.clone(), 1)],
                             ),
                         }
+                        self.builder.load_return_val(out, 1);
+                    }
+                },
+                IROp::Cmp(op, a, b, out, irtype) => match irtype {
+                    IRType::Signed(..) | IRType::Unsigned(..) => {
+                        match op {
+                            CmpOp::Equal => self.builder.is_equal(a, b),
+                            CmpOp::NotEqual => self.builder.is_not_equal(a, b),
+                            CmpOp::LessThan => self.builder.is_less_than(a, b, *irtype),
+                            CmpOp::LessOrEqual => self.builder.is_less_or_equal(a, b, *irtype),
+                            CmpOp::GreaterThan => self.builder.is_greater_than(a, b, *irtype),
+                            CmpOp::GreaterOrEqual => {
+                                self.builder.is_greater_or_equal(a, b, *irtype)
+                            }
+                        }
                         self.builder.copy(&IRValue::BefungeStack, out, 1);
+                    }
+                    IRType::Double => {
+                        match op {
+                            // TODO:
+                            CmpOp::Equal => {
+                                self.builder.is_equal(a, b);
+                                self.builder.copy(&IRValue::BefungeStack, out, 1);
+                                continue;
+                            }
+                            // TODO:
+                            CmpOp::NotEqual => {
+                                self.builder.is_not_equal(a, b);
+                                self.builder.copy(&IRValue::BefungeStack, out, 1);
+                                continue;
+                            }
+                            CmpOp::LessThan => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_is_less_than"],
+                                &[(a.clone(), 1), (b.clone(), 1)],
+                            ),
+                            CmpOp::LessOrEqual => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_is_less_or_equal"],
+                                &[(a.clone(), 1), (b.clone(), 1)],
+                            ),
+                            CmpOp::GreaterThan => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_is_greater_than"],
+                                &[(a.clone(), 1), (b.clone(), 1)],
+                            ),
+                            CmpOp::GreaterOrEqual => self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_double_is_greater_or_equal"],
+                                &[(a.clone(), 1), (b.clone(), 1)],
+                            ),
+                        }
+
+                        self.builder.load_return_val(out, 1);
                     }
                 },
                 IROp::Two(op, a, b, out, irtype) => match irtype {
@@ -192,12 +257,6 @@ impl CodeGen {
                             BinOp::Mult => self.builder.multiply(a, b),
                             BinOp::Div => self.builder.divide(a, b),
                             BinOp::Mod => self.builder.modulo(a, b),
-                            BinOp::Equal => self.builder.is_equal(a, b),
-                            BinOp::NotEqual => self.builder.is_not_equal(a, b),
-                            BinOp::LessThan => self.builder.is_less_than(a, b),
-                            BinOp::LessOrEqual => self.builder.is_less_or_equal(a, b),
-                            BinOp::GreaterThan => self.builder.is_greater_than(a, b),
-                            BinOp::GreaterOrEqual => self.builder.is_greater_or_equal(a, b),
 
                             BinOp::BitwiseAnd => self.builder.bit_and(a, b),
                             BinOp::BitwiseOr => self.builder.bit_or(a, b),
@@ -266,36 +325,6 @@ impl CodeGen {
                             BinOp::Mod => self.builder.call(
                                 self.function_map[&func.name],
                                 self.function_map["_bf_double_modulo"],
-                                &[(a.clone(), 1), (b.clone(), 1)],
-                            ),
-                            BinOp::Equal => {
-                                self.builder.is_equal(a, b);
-                                self.builder.copy(&IRValue::BefungeStack, out, 1);
-                                continue;
-                            }
-                            BinOp::NotEqual => {
-                                self.builder.is_not_equal(a, b);
-                                self.builder.copy(&IRValue::BefungeStack, out, 1);
-                                continue;
-                            }
-                            BinOp::LessThan => self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_double_is_less_than"],
-                                &[(a.clone(), 1), (b.clone(), 1)],
-                            ),
-                            BinOp::LessOrEqual => self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_double_is_less_or_equal"],
-                                &[(a.clone(), 1), (b.clone(), 1)],
-                            ),
-                            BinOp::GreaterThan => self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_double_is_greater_than"],
-                                &[(a.clone(), 1), (b.clone(), 1)],
-                            ),
-                            BinOp::GreaterOrEqual => self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_double_is_greater_or_equal"],
                                 &[(a.clone(), 1), (b.clone(), 1)],
                             ),
 

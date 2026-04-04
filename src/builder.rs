@@ -94,7 +94,7 @@ impl OpBuilder {
         self.str("10p", -1);
     }
 
-    /// Puts return value on bstack
+    /// Puts return value onto loc
     pub fn load_return_val(&mut self, loc: &IRValue, size: usize) {
         assert_ne!(size, 0);
         if size <= 8 {
@@ -789,27 +789,67 @@ impl OpBuilder {
         self.get_two_reorderable(a, b);
         self.str("-!!", -1);
     }
-    pub fn is_less_than(&mut self, a: &IRValue, b: &IRValue) {
+    pub fn is_less_than(&mut self, a: &IRValue, b: &IRValue, irtype: IRType) {
         self.get_two_ordered(b, a); // swapped load order
-        self.char('`');
+        self.greater_than(irtype);
     }
-    pub fn is_less_or_equal(&mut self, a: &IRValue, b: &IRValue) {
+    pub fn is_less_or_equal(&mut self, a: &IRValue, b: &IRValue, irtype: IRType) {
         self.get_two_ordered(a, b);
-        self.str("`!", -1);
+        self.greater_than(irtype);
+        self.char('!');
     }
-    pub fn is_greater_than(&mut self, a: &IRValue, b: &IRValue) {
+    pub fn is_greater_than(&mut self, a: &IRValue, b: &IRValue, irtype: IRType) {
         self.get_two_ordered(a, b);
-        self.char('`');
+        self.greater_than(irtype);
     }
-    pub fn is_greater_or_equal(&mut self, a: &IRValue, b: &IRValue) {
+    pub fn is_greater_or_equal(&mut self, a: &IRValue, b: &IRValue, irtype: IRType) {
         self.get_two_ordered(b, a); // swapped load order
-        self.str("`!", -1);
+        self.greater_than(irtype);
+        self.char('!');
     }
+
+    fn greater_than(&mut self, irtype: IRType) {
+        match irtype {
+            IRType::Unsigned(64) => {
+                // get sign of b
+                self.char(':');
+                self.put_val(&IRValue::Register(61));
+                self.char('0');
+                self.char('`');
+
+                self.char('\\');
+
+                // get sign of a
+                self.char(':');
+                self.put_val(&IRValue::Register(62));
+                self.char('0');
+                self.char('`');
+
+                // compare signs
+                self.char('-');
+                self.char(':');
+
+                self.insert_inline_befunge(&[
+                    r#"#v_$62g61g>`"#.to_owned(),
+                    r#" >       0^"#.to_owned(),
+                ]);
+                self.current_stack_size -= 1;
+            }
+            IRType::Double => panic!(),
+            _ => {
+                self.char('`');
+            }
+        }
+    }
+
     pub fn add_ptr(&mut self, ptr: &IRValue, b: &IRValue, size: usize) {
         self.get_two_ordered(ptr, b);
         //self.address_of(ptr);
         //self.get_val(b);
         self.load_number(size);
         self.str("*+", -2);
+    }
+    pub fn breakpoint(&mut self) {
+        self.str("Q", 0);
     }
 }

@@ -45,6 +45,11 @@ fn apply_to_all_ir_values(ops: &mut IRTopLevel, func: &mut impl FnMut(&mut IRVal
                 func(b);
                 func(out);
             }
+            IROp::Cmp(_, a, b, out, _) => {
+                func(a);
+                func(b);
+                func(out);
+            }
             IROp::Cast(_, (a, _), out) => {
                 func(a);
                 func(out);
