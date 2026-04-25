@@ -294,9 +294,9 @@ impl OpBuilder {
         self.load_val(a);
 
         self.insert_inline_befunge(&[
-            r#"v    >>\ "#.to_owned(),
-            r#">:0`:|^0<"#.to_owned(),
-            r#"     >\-^"#.to_owned(),
+            r#"v      >>\ "#.to_owned(),
+            r#">:01-`:|^0<"#.to_owned(),
+            r#"       >\-^"#.to_owned(),
         ]);
 
         self.current_stack_size += 1;
