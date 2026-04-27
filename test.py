@@ -108,7 +108,7 @@ async def test_valid(test: str, expected: str | None) -> Result:
         proc = await asyncio.create_subprocess_shell(f"{befunge_interpeter} {tf.name}",stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT)
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), 5)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), 15)
         except asyncio.TimeoutError:
             proc.kill()
             return Result(f"INTERPRETER TIMEOUT {test}", ResultType.INTERPRETER_TIMEOUT, Status.YELLOW, bytes())

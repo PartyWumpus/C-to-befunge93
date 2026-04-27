@@ -91,6 +91,40 @@ impl CType {
             Self::Function(..) => panic!("functions cannot be used as concrete types"),
         }
     }
+
+    pub fn is_signed(&self) -> bool {
+        match self {
+            Self::Bool => panic!("are bools signed?"),
+
+            Self::Char
+            | Self::SignedChar
+            | Self::SignedShort
+            | Self::SignedInt
+            | Self::SignedLong => true,
+
+            Self::UnsignedChar | Self::UnsignedShort | Self::UnsignedInt | Self::UnsignedLong => {
+                false
+            }
+
+            _ => unreachable!("type {self:?} cannot be signed"),
+        }
+    }
+
+    pub fn numerical_bigness(&self) -> usize {
+        match self {
+            Self::Bool => 1,
+
+            Self::Char | Self::UnsignedChar | Self::SignedChar => 2,
+
+            Self::UnsignedShort | Self::SignedShort => 3,
+
+            Self::UnsignedInt | Self::SignedInt => 4,
+
+            Self::SignedLong | Self::UnsignedLong => 5,
+
+            _ => unreachable!("type {self:?} cannot be bigness compared"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

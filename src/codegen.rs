@@ -205,7 +205,7 @@ impl CodeGen {
                             CmpOp::LessOrEqual => self.builder.is_less_or_equal(a, b, *irtype),
                             CmpOp::GreaterThan => self.builder.is_greater_than(a, b, *irtype),
                             CmpOp::GreaterOrEqual => {
-                                self.builder.is_greater_or_equal(a, b, *irtype)
+                                self.builder.is_greater_or_equal(a, b, *irtype);
                             }
                         }
                         self.builder.copy(&IRValue::BefungeStack, out, 1);
@@ -267,7 +267,6 @@ impl CodeGen {
                                     !func.is_initializer,
                                     "Bitshfits can't yet be used in init"
                                 );
-                                //self.builder.bitshift_left(a, b);
                                 self.builder.call(
                                     self.function_map[&func.name],
                                     self.function_map["_bf_bitshift_left"],
@@ -281,12 +280,19 @@ impl CodeGen {
                                     !func.is_initializer,
                                     "Bitshfits can't yet be used in init"
                                 );
-                                //self.builder.bitshift_right(a, b);
-                                self.builder.call(
-                                    self.function_map[&func.name],
-                                    self.function_map["_bf_bitshift_right"],
-                                    &[(a.clone(), 1), (b.clone(), 1)],
-                                );
+                                if matches!(irtype, IRType::Unsigned(64)) {
+                                    self.builder.call(
+                                        self.function_map[&func.name],
+                                        self.function_map["_bf_unsigned_long_bitshift_right"],
+                                        &[(a.clone(), 1), (b.clone(), 1)],
+                                    );
+                                } else {
+                                    self.builder.call(
+                                        self.function_map[&func.name],
+                                        self.function_map["_bf_signed_bitshift_right"],
+                                        &[(a.clone(), 1), (b.clone(), 1)],
+                                    );
+                                }
                                 self.builder.load_return_val(out, 1);
                                 continue;
                             }

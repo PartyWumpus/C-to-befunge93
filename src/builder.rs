@@ -289,15 +289,23 @@ impl OpBuilder {
     // actual values from 0 (0) to 63 (?)
     // then zeros from 64 (@) to 128
 
-    // Puts sign bit and abs(a) on the bstack
+    // Puts sign bit (0 if negative, 1 if positive) and a (with sign bit removed) on the bstack
     fn absolute_value_and_sign_bit(&mut self, a: &IRValue) {
         self.load_val(a);
+        // second arg should match self.load_number
+        let x = int_to_befunge_str(i64::MIN as u64, ARGS.optimization_level > 1);
 
+        // removes sign bit like two's complement by doing
+        // if a < 0: a -= i64::MIN
         self.insert_inline_befunge(&[
-            r#"v      >>\ "#.to_owned(),
-            r#">:01-`:|^0<"#.to_owned(),
-            r#"       >\-^"#.to_owned(),
+            r#"v      >\"#.to_owned(),
+            r#">:01-`:| "#.to_owned(),
+            r#"       >\"#.to_owned(),
         ]);
+
+        self.insert_inline_befunge(&[" ".to_owned(), " ".to_owned(), x]);
+
+        self.insert_inline_befunge(&[r#" >"#.to_owned(), r#"  "#.to_owned(), r#"-^"#.to_owned()]);
 
         self.current_stack_size += 1;
     }
@@ -328,8 +336,22 @@ impl OpBuilder {
     pub fn bit_and(&mut self, a: &IRValue, b: &IRValue) {
         self.load_bit_stack(a, true);
         self.load_bit_stack(b, false);
-        // Calculate sign for later: (a*b)*2-1
-        self.str(r"*2*1-", -1);
+        // Calculate offset from sign
+        // if sign(a) < 0 && sign(b) < 0: out += i64::MIN
+        // comparison done with !(a+b)
+        self.insert_inline_befunge(&[
+            r#"v  >"#.to_owned(),
+            r#">+!| "#.to_owned(),
+            r#"   >"#.to_owned(),
+        ]);
+        self.current_stack_size -= 1;
+
+        // second arg should match self.load_number
+        let x = int_to_befunge_str(i64::MIN as u64, ARGS.optimization_level > 1);
+
+        self.insert_inline_befunge(&[x, " ".to_owned(), "0".to_owned()]);
+
+        self.insert_inline_befunge(&[r#">"#.to_owned(), r#" "#.to_owned(), r#"^"#.to_owned()]);
 
         // For each bit, do a * b
         self.insert_inline_befunge(&[
@@ -339,15 +361,29 @@ impl OpBuilder {
         ]);
         self.current_stack_size += 1;
 
-        // Times by the sign from earlier
-        self.char('*');
+        // Add the offset from earlier
+        self.char('+');
     }
 
     pub fn bit_xor(&mut self, a: &IRValue, b: &IRValue) {
         self.load_bit_stack(a, true);
         self.load_bit_stack(b, false);
-        // Calculate sign for later: (a+b mod 2) * -2 + 1
-        self.str("+2%02-*1+", -1);
+        // Calculate offset from sign
+        // if sign(a) < 0 ^ sign(b) < 0: out += i64::MIN
+        // comparison done with (a+b) == 1
+        self.insert_inline_befunge(&[
+            r#"v    >"#.to_owned(),
+            r#">+1-!|"#.to_owned(),
+            r#"     >"#.to_owned(),
+        ]);
+        self.current_stack_size -= 1;
+
+        // second arg should match self.load_number
+        let x = int_to_befunge_str(i64::MIN as u64, ARGS.optimization_level > 1);
+
+        self.insert_inline_befunge(&[x, " ".to_owned(), "0".to_owned()]);
+
+        self.insert_inline_befunge(&[r#">"#.to_owned(), r#" "#.to_owned(), r#"^"#.to_owned()]);
 
         // For each bit, do (a + b) mod 2
         self.insert_inline_befunge(&[
@@ -357,15 +393,29 @@ impl OpBuilder {
         ]);
         self.current_stack_size += 1;
 
-        // Times by the sign from earlier
-        self.char('*');
+        // Add the offset from earlier
+        self.char('+');
     }
 
     pub fn bit_or(&mut self, a: &IRValue, b: &IRValue) {
         self.load_bit_stack(a, true);
         self.load_bit_stack(b, false);
-        // If both one, -> 1 else -1
-        self.str(r"+1`2*1-", -1);
+        // Calculate offset from sign
+        // if sign(a) < 0 || sign(b) < 0: out += i64::MIN
+        // comparison done with (a+b) == 2
+        self.insert_inline_befunge(&[
+            r#"v    >"#.to_owned(),
+            r#">+2-!|"#.to_owned(),
+            r#"     >"#.to_owned(),
+        ]);
+        self.current_stack_size -= 1;
+
+        // second arg should match self.load_number
+        let x = int_to_befunge_str(i64::MIN as u64, ARGS.optimization_level > 1);
+
+        self.insert_inline_befunge(&[x, " ".to_owned(), "0".to_owned()]);
+
+        self.insert_inline_befunge(&[r#">"#.to_owned(), r#" "#.to_owned(), r#"^"#.to_owned()]);
 
         // For each bit, do not( (a + b) > 1 )
         self.insert_inline_befunge(&[
@@ -375,8 +425,8 @@ impl OpBuilder {
         ]);
         self.current_stack_size += 1;
 
-        // Times by the sign from earlier
-        self.char('*');
+        // Add the offset from earlier
+        self.char('+');
     }
 
     pub fn bitshift_left(&mut self, a: &IRValue, b: &IRValue) {

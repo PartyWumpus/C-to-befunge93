@@ -128,6 +128,7 @@ impl PartialEq for CType {
 
 impl CType {
     pub const fn is_integer(&self) -> bool {
+        // TODO: is Bool an int?
         matches!(
             self,
             Self::SignedInt
@@ -215,6 +216,24 @@ impl CType {
             } else {
                 Err((type1, type2))
             };
+        }
+
+        if matches!(type1, Self::Double) || matches!(type2, Self::Double) {
+            return Ok(Self::Double);
+        }
+
+        if type1.is_integer() && type2.is_integer() {
+            if type1.numerical_bigness() == type2.numerical_bigness() {
+                if type1.is_signed() {
+                    return Ok(type2.clone());
+                }
+                return Ok(type1.clone());
+            }
+
+            if type1.numerical_bigness() > type2.numerical_bigness() {
+                return Ok(type1.clone());
+            }
+            return Ok(type2.clone());
         }
 
         Ok(Self::SignedInt)
