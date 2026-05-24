@@ -2829,14 +2829,11 @@ impl TopLevelBuilder<'_> {
                                 let (val, ctype) = self.attempt_array_decay((val, ctype));
                                 (val.clone(), ctype, AssignmentStatus::AssigningToValue(val))
                             }
-                            ExpressionOutput::Dereferenced((val, ctype)) => {
-                                // NOTE: I think this isn't needed?
-                                let (val, ctype) = self.attempt_array_decay((val, ctype));
-                                (
-                                    val.clone(),
-                                    ctype,
-                                    AssignmentStatus::AssigningToPointer(val),
-                                )
+                            ExpressionOutput::Dereferenced((ptr, ctype)) => {
+                                let size = ctype.sizeof(&self.scope);
+                                let out = self.generate_pseudo(size);
+                                self.push(IROp::Dereference(ptr.clone(), out.clone(), size));
+                                (out, ctype, AssignmentStatus::AssigningToPointer(ptr))
                             }
                             ExpressionOutput::SubObject {
                                 base,
