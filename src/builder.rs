@@ -404,9 +404,9 @@ impl OpBuilder {
         // if sign(a) < 0 || sign(b) < 0: out += i64::MIN
         // comparison done with (a+b) == 2
         self.insert_inline_befunge(&[
-            r#"v    >"#.to_owned(),
-            r#">+2-!|"#.to_owned(),
-            r#"     >"#.to_owned(),
+            r#"v   >"#.to_owned(),
+            r#">+2-|"#.to_owned(),
+            r#"    >"#.to_owned(),
         ]);
         self.current_stack_size -= 1;
 
