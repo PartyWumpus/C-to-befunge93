@@ -93,7 +93,14 @@ fn main() {
             println!("{c_source}\n");
         }
 
-        let program = match FileBuilder::parse_c(c_source.as_bytes(), filename, &included) {
+        let iquoted = if let Some(path) = Path::new(filename).parent() {
+            vec![path.to_str().unwrap()]
+        } else {
+            vec![]
+        };
+
+        let program = match FileBuilder::parse_c(c_source.as_bytes(), filename, &included, &iquoted)
+        {
             Err(err) => {
                 if !ARGS.silent {
                     err.print();
@@ -106,7 +113,7 @@ fn main() {
         if ARGS.verbose {
             println!("\n-- IR, (pre linking)");
             print_ir(&program);
-        };
+        }
 
         files.push(program);
     }
@@ -135,6 +142,7 @@ fn main() {
                         "befunge_libc/stdlib",
                         "befunge_libc/softfloat/source/include",
                     ],
+                    &[],
                 ) {
                     Err(err) => {
                         if !ARGS.silent {
@@ -172,6 +180,7 @@ fn main() {
                             "befunge_libc/softfloat/source/include",
                             "befunge_libc/softfloat/source/8086-SSE",
                         ],
+                        &[],
                     ) {
                         Err(err) => {
                             if !ARGS.silent {
@@ -208,6 +217,7 @@ fn main() {
                             "befunge_libc/softfloat/source/include",
                             "befunge_libc/softfloat/source/8086-SSE",
                         ],
+                        &[],
                     ) {
                         Err(err) => {
                             if !ARGS.silent {

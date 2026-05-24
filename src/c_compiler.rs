@@ -542,6 +542,7 @@ impl FileBuilder {
         source: &[u8],
         filename: &str,
         linked: &[&str],
+        iquoted: &[&str],
     ) -> Result<Vec<IRTopLevel>, Box<CompilerError>> {
         let mut builder = Self {
             count: 0,
@@ -564,11 +565,17 @@ impl FileBuilder {
             command.push((*include).to_string());
         }
 
+        for include in iquoted {
+            command.push("-iquote".into());
+            command.push((*include).to_string());
+        }
+
         let config = lang_c::driver::Config {
             flavor: Flavor::GnuC11,
             cpp_command: "cpp".into(),
             cpp_options: command,
         };
+
         let preproccessed =
             preprocess(&config, source, filename).map_err(|err| CompilerError::ParseError {
                 err: lang_c::driver::Error::PreprocessorError(err),
