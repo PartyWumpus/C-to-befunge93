@@ -309,6 +309,10 @@ impl CType {
     pub fn display_type(&self, scope: &ScopeInfo) -> Box<str> {
         self.display_type_inner(scope, "").into()
     }
+
+    pub fn display_type_badly(&self) -> Box<str> {
+        self.display_type(&ScopeInfo::default())
+    }
 }
 
 struct TopLevelBuilder<'a> {
@@ -486,8 +490,10 @@ impl ScopeInfo {
 
     pub fn get_struct_name_by_id(&self, id: TagID) -> Option<String> {
         let structs = self.structs.lock();
-        // TODO: don't clone here
-        structs[id].0.as_deref().map(str::to_string)
+        structs.get(id).map_or_else(
+            || Some(String::new()),
+            |a| a.0.as_deref().map(str::to_string),
+        )
     }
 }
 
@@ -3369,7 +3375,7 @@ impl TopLevelBuilder<'_> {
         let loop_id = self
             .loop_id
             .expect("Loop labels should only occur inside a loop");
-        let str = "loop".to_owned() + &loop_id.to_string();
+        let str = "loop.".to_owned() + &loop_id.to_string();
         (str.clone(), IROp::Label(str))
     }
 
@@ -3377,7 +3383,7 @@ impl TopLevelBuilder<'_> {
         let loop_id = self
             .loop_id
             .expect("Break labels should only occur inside a loop");
-        let str = "loop_break".to_owned() + &loop_id.to_string();
+        let str = "loop_break.".to_owned() + &loop_id.to_string();
         (str.clone(), IROp::Label(str))
     }
 
@@ -3385,7 +3391,7 @@ impl TopLevelBuilder<'_> {
         let loop_id = self
             .loop_id
             .expect("Continue labels should only occur inside a loop");
-        let str = "loop_continue".to_owned() + &loop_id.to_string();
+        let str = "loop_continue.".to_owned() + &loop_id.to_string();
         (str.clone(), IROp::Label(str))
     }
 

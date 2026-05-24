@@ -1,4 +1,16 @@
+use std::fmt;
+
+use anstyle::{Color, Style};
+
 use crate::c_compiler::{CSize, CType, ScopeInfo};
+
+const KEYWORD: Style = Style::new()
+    .fg_color(Some(Color::Ansi(anstyle::AnsiColor::Green)))
+    .bold();
+const NUM: Style = Style::new().fg_color(Some(Color::Ansi(anstyle::AnsiColor::BrightGreen)));
+const TYPE: Style = Style::new().fg_color(Some(Color::Ansi(anstyle::AnsiColor::Red)));
+const IDENT: Style = Style::new().fg_color(Some(Color::Ansi(anstyle::AnsiColor::BrightMagenta)));
+const LABEL: Style = Style::new().fg_color(Some(Color::Ansi(anstyle::AnsiColor::Yellow)));
 
 #[derive(Debug, Clone)]
 pub enum IRValue {
@@ -23,6 +35,22 @@ pub enum IRValue {
     BefungeStack,
 }
 
+impl fmt::Display for IRValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{IDENT}")?;
+        match self {
+            Self::Stack(n) => write!(f, "%{n}"),
+            Self::Immediate(n) => write!(f, "#{n}"),
+            Self::Register(n) => write!(f, "r{n}"),
+            Self::Data(n) => write!(f, "@{n}"),
+            Self::Psuedo { name, .. } => write!(f, "%{name}"),
+            Self::StaticPsuedo { name, .. } => write!(f, "@{name}"),
+            Self::BefungeStack => write!(f, "bf-stack"),
+        }?;
+        write!(f, "{IDENT:#}")
+    }
+}
+
 impl IRValue {
     pub const fn int(int: usize) -> Self {
         Self::Immediate(int)
@@ -38,6 +66,18 @@ pub enum IRType {
     Signed(u8),
     Unsigned(u8),
     Double,
+}
+
+impl fmt::Display for IRType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{TYPE}")?;
+        match self {
+            Self::Signed(size) => write!(f, "i{size}"),
+            Self::Unsigned(size) => write!(f, "u{size}"),
+            Self::Double => write!(f, "double"),
+        }?;
+        write!(f, "{TYPE:#}")
+    }
 }
 
 impl IRType {
@@ -150,20 +190,121 @@ pub enum IROp {
     AddPtr(IRValue, IRValue, IRValue, CSize),
 }
 
+impl fmt::Display for IROp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Return(val, size) => {
+                write!(f, "{KEYWORD}ret{KEYWORD:#} {NUM}{size}{NUM:#} {val}")
+            }
+            Self::GetReturnValue(dst, size) => {
+                write!(f, "{dst} = {KEYWORD}retval{KEYWORD:#} {NUM}{size}{NUM:#}")
+            }
+            Self::GetIdOfFunction(name, dst) => {
+                write!(f, "{dst} = {KEYWORD}fnptr{KEYWORD:#} @{name}")
+            }
+            Self::Call(name, args) => {
+                let args: Vec<_> = args.iter().map(|(v, s)| format!("{v}[{s}]")).collect();
+                write!(
+                    f,
+                    "{KEYWORD}call{KEYWORD:#} {IDENT}@{name}{IDENT:#}({})",
+                    args.join(", ")
+                )
+            }
+            Self::Label(name) => write!(f, "{LABEL}{name}{LABEL:#}:"),
+            Self::InlineBefunge(str) => {
+                let str = if str.len() == 1 {
+                    " ".to_string() + &str[0]
+                } else {
+                    let str = str
+                        .iter()
+                        .map(|str| format!("\n    {str}"))
+                        .collect::<String>();
+                    str + "\n "
+                };
+                write!(f, "{KEYWORD}asm{KEYWORD:#} {{{str} }}")
+            }
+            Self::AlwaysBranch(label) => {
+                write!(f, "{KEYWORD}br{KEYWORD:#} {LABEL}{label}{LABEL:#}")
+            }
+            Self::CondBranch(branch_type, label, cond) => {
+                write!(
+                    f,
+                    "{KEYWORD}br.{branch_type}{KEYWORD:#} {cond}, {LABEL}{label}{LABEL:#}"
+                )
+            }
+            Self::AddressOf(src, dst) => write!(f, "{dst} = {KEYWORD}addrof{KEYWORD:#} {src}"),
+            Self::Dereference(src, dst, size) => write!(
+                f,
+                "{dst} = {KEYWORD}deref{KEYWORD:#} {NUM}{size}{NUM:#} {src}"
+            ),
+            Self::Copy(src, dst, size) => write!(
+                f,
+                "{dst} = {KEYWORD}copy{KEYWORD:#} {NUM}{size}{NUM:#} {src}"
+            ),
+            Self::Store(src, dst, size) => {
+                write!(f, "{KEYWORD}store{KEYWORD:#}[{size}] {src} -> {dst}")
+            }
+            Self::One(op, src, dst, ty) => write!(f, "{dst} = {KEYWORD}{op}{KEYWORD:#} {ty} {src}"),
+            Self::Two(op, lhs, rhs, dst, ty) => {
+                write!(f, "{dst} = {KEYWORD}{op}{KEYWORD:#} {ty} {lhs}, {rhs}")
+            }
+            Self::Cmp(op, lhs, rhs, dst, ty) => {
+                write!(f, "{dst} = {KEYWORD}cmp.{op}{KEYWORD:#} {ty} {lhs}, {rhs}")
+            }
+            Self::Cast(to_ty, (src, from_ty), dst) => {
+                write!(
+                    f,
+                    "{dst} = {KEYWORD}cast{KEYWORD:#} {src} : {from_ty} -> {to_ty}"
+                )
+            }
+            Self::CopyWithOffset((src, src_off), (dst, dst_off)) => {
+                if *src_off == 0 {
+                    write!(
+                        f,
+                        "{dst}+{NUM}{dst_off}{NUM:#} = {KEYWORD}copy{KEYWORD:#} {src}"
+                    )
+                } else {
+                    write!(
+                        f,
+                        "{dst}+{NUM}{dst_off}{NUM:#} = {KEYWORD}copy{KEYWORD:#} {src}+{NUM}{src_off}{NUM:#}"
+                    )
+                }
+            }
+            Self::AddPtr(ptr, offset, dst, scale) => {
+                write!(
+                    f,
+                    "{dst} = {KEYWORD}addptr{KEYWORD:#} {ptr}, {offset} * {NUM}{scale}{NUM:}"
+                )
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum BranchType {
     NonZero,
     Zero,
 }
 
-#[derive(Debug, Clone, Copy)]
+impl fmt::Display for BranchType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonZero => write!(f, "nz"),
+            Self::Zero => write!(f, "z"),
+        }
+    }
+}
+
+#[derive(strum_macros::Display, Debug, Clone, Copy)]
+#[strum(serialize_all = "snake_case")]
 pub enum UnaryOp {
     Minus,
     Complement,
     BooleanNegate,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(strum_macros::Display, Debug, Clone, Copy)]
+#[strum(serialize_all = "snake_case")]
 pub enum BinOp {
     Add,
     Sub,
@@ -188,6 +329,19 @@ pub enum CmpOp {
     GreaterOrEqual,
 }
 
+impl fmt::Display for CmpOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Equal => write!(f, "eq"),
+            Self::NotEqual => write!(f, "ne"),
+            Self::LessThan => write!(f, "lt"),
+            Self::LessOrEqual => write!(f, "le"),
+            Self::GreaterThan => write!(f, "gt"),
+            Self::GreaterOrEqual => write!(f, "ge"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct IRTopLevel {
     pub name: String,
@@ -206,14 +360,26 @@ pub struct FuncInfo {
 
 pub fn print_ir(ir: &Vec<IRTopLevel>) {
     for func in ir {
+        println!("\n// frame_size: {}", func.stack_frame_size);
         if func.is_initializer {
-            println!("\nINIT REGION {}", func.name);
+            println!("{KEYWORD}def{KEYWORD:#} {IDENT}{}{IDENT:#} {{", func.name);
         } else {
-            println!("\nFUNC {:?}", func.name);
+            let ty = func
+                .return_type
+                .as_ref()
+                .map_or_else(|| "no type?".into(), CType::display_type_badly);
+            println!(
+                "{KEYWORD}fn{KEYWORD:#} {TYPE}{ty}{TYPE:#} {IDENT}@{}{IDENT:#}(..{}) {{",
+                func.name, func.parameters_size
+            );
         }
-        println!("frame_size: {}", func.stack_frame_size);
         for line in &func.ops {
-            println!("{line:?}");
+            if matches!(line, IROp::Label(_)) {
+                println!(" {line}");
+            } else {
+                println!("  {line}");
+            }
         }
+        println!("}}");
     }
 }

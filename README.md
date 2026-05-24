@@ -137,11 +137,16 @@ int main(void) {
 ```
 Just to make it super clear exactly what is going on, here's the generated IR, with a copy to r2 before, and a copy from r2 after.
 ```
-One(Copy, Immediate(10), Psuedo("a.1"))
-One(Copy, Psuedo("a.1"), Register(34))
-InlineBefunge(["34g 5+ 40p", "befunge93!"])
-One(Copy, Register(34), Psuedo("a.1"))
-Return(Psuedo("a.1"))
+fn int @main(..0) {
+  %a.1 = copy #10
+  r34 = copy 1 %a.1
+  asm {
+    34g 5+ 34p
+    befunge93!
+  }
+  %a.1 = copy 1 r34
+  ret 1 %a.1
+}
 ```
 
 ##### `bstack` example
@@ -176,11 +181,12 @@ int main(void) {
 ```
 Becomes this IR
 ```
-FUNC "main"
-Two(Mult, Immediate(10), Immediate(25), Stack(1))
-One(Copy, Stack(1), Stack(2))
-Two(Mult, Stack(2), Stack(2), Stack(3))
-Return(Stack(3))
+fn int @main(..0) {
+  %tmp.2 = mult i32 #10, #25
+  %a.1 = copy %tmp.2
+  %tmp.3 = mult i32 %a.1, %a.1
+  ret 1 %tmp.3
+}
 ```
 Which then becomes this befunge
 ```b93
@@ -220,33 +226,38 @@ int fib(int a) {
 ```
 Becomes this IR
 ```
-FUNC "main"
-One(Copy, Immediate(10), Stack(1))
-Call("fib", [Stack(1)])
-One(Copy, Register(0), Stack(2))
-Return(Stack(2))
+fn int @main(..0) {
+  %x.13 = copy #10
+  call @fib(%x.13)
+  %tmp.14 = retval 1
+  ret 1 %tmp.14
+}
 
-FUNC "fib"
-Two(Equal, Stack(1), Immediate(0), Stack(2))
-CondBranch(NonZero, "skip.3", Stack(2))
-Two(Equal, Stack(1), Immediate(1), Stack(3))
-CondBranch(NonZero, "skip.3", Stack(3))
-One(Copy, Immediate(0), Stack(4))
-AlwaysBranch("end.4")
-Label("skip.3")
-One(Copy, Immediate(1), Stack(4))
-Label("end.4")
-CondBranch(Zero, "else.12", Stack(4))
-Return(Immediate(1))
-Label("else.12")
-Two(Sub, Stack(1), Immediate(1), Stack(5))
-Call("fib", [Stack(5)])
-One(Copy, Register(0), Stack(6))
-Two(Sub, Stack(1), Immediate(2), Stack(7))
-Call("fib", [Stack(7)])
-One(Copy, Register(0), Stack(8))
-Two(Add, Stack(6), Stack(8), Stack(9))
-Return(Stack(9))
+fn int @fib(..1) {
+  %tmp.3 = cmp.eq i32 %1, #0
+  br.nz %tmp.3, logical_skip.1
+  %tmp.4 = cmp.eq i32 %1, #1
+  br.nz %tmp.4, logical_skip.1
+  %tmp.5 = copy 1 #0
+  br logical_end.2
+
+ logical_skip.1:
+  %tmp.5 = copy 1 #1
+
+ logical_end.2:
+  br.z %tmp.5, else.6
+  ret 1 #1
+
+ else.6:
+  %tmp.8 = sub i32 %1, #1
+  call @fib(%tmp.8)
+  %tmp.9 = retval 1
+  %tmp.10 = sub i32 %1, #2
+  call @fib(%tmp.10)
+  %tmp.11 = retval 1
+  %tmp.12 = add i32 %tmp.9, %tmp.11
+  ret 1 %tmp.12
+}
 ```
 Which then becomes this befunge
 ```b93
@@ -311,35 +322,40 @@ int func_d(int a) {
 ```
 ->
 ```
-FUNC "main"
-One(Copy, Immediate(10), Stack(1))
-Call("func_d", [Stack(1)])
-One(Copy, Register(0), Stack(2))
-Call("func_d", [Stack(2)])
-One(Copy, Register(0), Stack(3))
-Return(Stack(3))
+fn int @main(..0) {
+  %b.1 = copy #10
+  call @func_d(%b.1)
+  %tmp.2 = retval 1
+  call @func_d(%tmp.2)
+  %tmp.3 = retval 1
+  ret 1 %tmp.3
+}
 
-FUNC "func_a"
-Two(Add, Stack(1), Immediate(1), Stack(2))
-Call("func_b", [Stack(2)])
-One(Copy, Register(0), Stack(3))
-Return(Stack(3))
+fn int @func_a(..1) {
+  %tmp.4 = add i32 %1, #1
+  call @func_b(%tmp.4)
+  %tmp.5 = retval 1
+  ret 1 %tmp.5
+}
 
-FUNC "func_b"
-Two(Add, Stack(1), Immediate(1), Stack(2))
-Return(Stack(2))
+fn int @func_b(..1) {
+  %tmp.6 = add i32 %1, #1
+  ret 1 %tmp.6
+}
 
-FUNC "func_c"
-Two(Add, Stack(1), Immediate(1), Stack(2))
-Call("func_a", [Stack(2)])
-One(Copy, Register(0), Stack(3))
-Return(Stack(3))
+fn int @func_c(..1) {
+  %tmp.7 = add i32 %1, #1
+  call @func_a(%tmp.7)
+  %tmp.8 = retval 1
+  ret 1 %tmp.8
+}
 
-FUNC "func_d"
-Two(Add, Stack(1), Immediate(1), Stack(2))
-Call("func_c", [Stack(2)])
-One(Copy, Register(0), Stack(3))
-Return(Stack(3))
+fn int @func_d(..1) {
+  %tmp.9 = add i32 %1, #1
+  call @func_c(%tmp.9)
+  %tmp.10 = retval 1
+  ret 1 %tmp.10
+}
 ```
 ->
 ```b93
