@@ -98,8 +98,12 @@ async def test_invalid(test: str) -> Result:
             return Result(f"INVALID ACCEPTED {test}", ResultType.INVALID_ACCEPTED, Status.YELLOW, stdout)
 
 async def test_valid(test: str, expected: str | None) -> Result:
+    files = test
+    if "libraries/" in test:
+        files = f"{test} {test.replace(".c", "_client.c")}"
+
     with tempfile.NamedTemporaryFile() as tf:
-        proc = await asyncio.create_subprocess_shell(f"{compiler} {test} -q -o {tf.name}", stdout=asyncio.subprocess.PIPE,
+        proc = await asyncio.create_subprocess_shell(f"{compiler} {files} -q -o {tf.name}", stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT)
         stdout, _ = await proc.communicate()
         if proc.returncode != 0: # compiler failed
