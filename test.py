@@ -32,7 +32,7 @@ args = parser.parse_args()
 def find_valid_tests(chapter_regex: str):
     valid_tests: dict[str, str] = {}
     # find valid tests
-    with open(f"./writing-a-c-compiler-tests/expected_results.json") as f:
+    with open("./writing-a-c-compiler-tests/expected_results.json") as f:
         data = json.loads(f.read())
         for test in data:
             if re.match(chapter_regex, test):
@@ -196,13 +196,13 @@ async def run_tests(valid_tests: dict[str, str], invalid_tests: list[str]):
     if not args.silent:
         sys.stdout.write("\n")
     for i, err in enumerate(res):
-        if err != None:
+        if err is not None:
             print(err)
     sys.stdout.flush()
     return counts
 
 async def run_single_test(test: str):
-    with open(f"./writing-a-c-compiler-tests/expected_results.json") as f:
+    with open("./writing-a-c-compiler-tests/expected_results.json") as f:
         valid_tests = json.loads(f.read())
     if test.removeprefix("./writing-a-c-compiler-tests/tests/") in valid_tests:
         res = await test_valid(test, valid_tests[test.removeprefix("./writing-a-c-compiler-tests/tests/")])
@@ -250,10 +250,10 @@ elif args.command == "test":
         else:
             print(f"{text}: {len(a)}\033[0m")
 
-    wawa(f"\033[1;33minvalid acceptances: ", ResultType.INVALID_ACCEPTED)
-    wawa(f"\033[1;32mvalid rejections: ", ResultType.INVALID_REJECTED)
-    wawa(f"\033[1;32mvalid rejections without diagnostic: ", ResultType.INVALID_REJECTED_CRASH)
-    wawa(f"\033[1;33minterpreter crashes: ", ResultType.INTERPRETER_CRASH, ResultType.INTERPRETER_TIMEOUT)
-    wawa(f"\033[1;33mcompile fails: ", ResultType.COMPILE_FAIL)
-    wawa(f"\033[1;31mincorrect execution: ", ResultType.INCORRECT_EXECUTION)
-    wawa(f"\033[1;32msuccesses: ", ResultType.SUCCESS)
+    wawa("\033[1;33minvalid acceptances: ", ResultType.INVALID_ACCEPTED)
+    wawa("\033[1;32mvalid rejections: ", ResultType.INVALID_REJECTED)
+    wawa("\033[1;32mvalid rejections without diagnostic: ", ResultType.INVALID_REJECTED_CRASH)
+    wawa("\033[1;33minterpreter crashes: ", ResultType.INTERPRETER_CRASH, ResultType.INTERPRETER_TIMEOUT)
+    wawa("\033[1;33mcompile fails: ", ResultType.COMPILE_FAIL)
+    wawa("\033[1;31mincorrect execution: ", ResultType.INCORRECT_EXECUTION)
+    wawa("\033[1;32msuccesses: ", ResultType.SUCCESS)
