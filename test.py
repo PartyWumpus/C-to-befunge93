@@ -56,11 +56,15 @@ class TestType(IntEnum):
     Valid = 1
 
 class ResultType(IntEnum):
+    # bad
     COMPILE_FAIL = 0
     INCORRECT_EXECUTION = 1
-    INTERPRETER_TIMEOUT = 2
     INTERPRETER_CRASH = 3
     INVALID_ACCEPTED = 4
+    # meh
+    INTERPRETER_TIMEOUT = 2
+    INVALID_REJECTED_CRASH = 7
+    # good
     INVALID_REJECTED = 5
     SUCCESS = 6
 
@@ -92,10 +96,15 @@ async def test_invalid(test: str) -> Result:
         stderr=asyncio.subprocess.STDOUT)
         stdout, _ = await proc.communicate()
 
-        if proc.returncode != 0: # compiler failed, which is what we want
+        if proc.returncode == 1: # compiler failed with a diagnostic, which is what we want
             return Result(f"PASS {test}", ResultType.INVALID_REJECTED, Status.GREEN, stdout)
-        else:
+        elif proc.returncode == 101:
+            return Result(f"BAD DIAGNOSTIC {test}", ResultType.INVALID_REJECTED_CRASH, Status.YELLOW, stdout)
+        elif proc.returncode == 0:
             return Result(f"INVALID ACCEPTED {test}", ResultType.INVALID_ACCEPTED, Status.YELLOW, stdout)
+        else:
+            print(f"\n\n\n\n\n\n !! unexpected return code {proc.returncode} from {test}")
+            sys.exit(5)
 
 async def test_valid(test: str, expected: str | None) -> Result:
     files = test
@@ -243,6 +252,7 @@ elif args.command == "test":
 
     wawa(f"\033[1;33minvalid acceptances: ", ResultType.INVALID_ACCEPTED)
     wawa(f"\033[1;32mvalid rejections: ", ResultType.INVALID_REJECTED)
+    wawa(f"\033[1;32mvalid rejections without diagnostic: ", ResultType.INVALID_REJECTED_CRASH)
     wawa(f"\033[1;33minterpreter crashes: ", ResultType.INTERPRETER_CRASH, ResultType.INTERPRETER_TIMEOUT)
     wawa(f"\033[1;33mcompile fails: ", ResultType.COMPILE_FAIL)
     wawa(f"\033[1;31mincorrect execution: ", ResultType.INCORRECT_EXECUTION)
