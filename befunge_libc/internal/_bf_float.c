@@ -58,7 +58,7 @@ double _bf_double_is_greater_or_equal(double a, double b) {
 long _bf_f64_to_i64(double a) {
   i64_f64 x;
   x.f = a;
-  f64_to_i64_r_minMag(x.s, false);
+  return f64_to_i64_r_minMag(x.s, false);
 }
 
 double _bf_i64_to_f64(long a) {
