@@ -70,6 +70,10 @@ struct Args {
 
 fn main() {
     let mut files = vec![];
+    // TODO: once function pointers actually work this won't work
+    // probably just add all function pointers to the list of roots?
+    // maybe something smarter is possible
+    let mut roots = vec!["main".to_owned()];
 
     if ARGS.filenames.is_empty() {
         eprintln!("No input files provided, try --help");
@@ -114,12 +118,7 @@ fn main() {
     }
 
     // TODO: add caching so the entire lib isn't compiled every time
-    for entry in BEFUNGE_LIBC
-        .get_dir("stdlib")
-        .expect("stdlib")
-        .files()
-        .chain(BEFUNGE_LIBC.get_dir("internal").expect("internal").files())
-    {
+    for entry in BEFUNGE_LIBC.get_dir("stdlib").expect("stdlib").files() {
         if !ARGS.enable_softfloat
             && let Some(filename) = entry.path().to_str()
             && filename.contains("_bf_float")
@@ -148,6 +147,43 @@ fn main() {
                     Ok(x) => x,
                 },
             );
+        }
+    }
+
+    for entry in BEFUNGE_LIBC.get_dir("internal").expect("internal").files() {
+        if !ARGS.enable_softfloat
+            && let Some(filename) = entry.path().to_str()
+            && filename.contains("_bf_float")
+        {
+            continue;
+        }
+        if let Some(ext) = entry.path().extension()
+            && ext == "c"
+        {
+            let file = match FileBuilder::parse_c(
+                entry.contents(),
+                entry.path().to_str().unwrap(),
+                &[
+                    "befunge_libc/stdlib",
+                    "befunge_libc/softfloat/source/include",
+                ],
+                &[],
+            ) {
+                Err(err) => {
+                    if !ARGS.silent {
+                        err.print();
+                    }
+                    process::exit(1);
+                }
+                Ok(x) => x,
+            };
+            // TODO: this currently means we include all floating point operations
+            // and all bitwise operations even if they are not used
+            // need to get some machinery to sensibly keep track of this
+            for func_name in file.0.keys() {
+                roots.push(func_name.to_string());
+            }
+            files.push(file);
         }
     }
 
@@ -227,7 +263,7 @@ fn main() {
         }
     }
     // TODO: strip out unused functions
-    let mut program = passes::the_linkening(files);
+    let mut program = passes::the_linkening(files, roots);
 
     if ARGS.verbose {
         println!("\n-- IR, (post linking, pre optimizations)");

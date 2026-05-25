@@ -3,7 +3,7 @@ use parking_lot::Mutex;
 
 use std::{
     cell::OnceCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::{self, Debug},
     io::{self, Write},
     mem,
@@ -322,6 +322,7 @@ struct TopLevelBuilder<'a> {
     break_last_seen: BreakTypes,
     loop_id: Option<usize>,
     return_type: CType,
+    called_functions: HashSet<String>,
     switch_case_info: Option<SwitchCaseInfo>,
     /// If const (not inside a function), use Data instead of Stack
     is_const: bool,
@@ -650,6 +651,7 @@ impl FileBuilder {
             loop_id: None,
             break_last_seen: BreakTypes::None,
             is_const: false,
+            called_functions: HashSet::new(),
             switch_case_info: None,
             file_builder: self,
             return_type: info.c_type,
@@ -680,7 +682,8 @@ impl FileBuilder {
             is_initializer: false,
             return_type: Some(builder.return_type),
             stack_frame_size: builder.count, // NOTE: this is a 'worst case' value,
-                                             // and should be recalculated in a later pass
+            // and should be recalculated in a later pass
+            called_functions: builder.called_functions,
         })
     }
 
@@ -695,6 +698,7 @@ impl FileBuilder {
             loop_id: None,
             break_last_seen: BreakTypes::None,
             is_const: true,
+            called_functions: HashSet::new(),
             switch_case_info: None,
             file_builder: self,
             return_type: CType::Void,
@@ -725,7 +729,8 @@ impl FileBuilder {
                 is_initializer: true,
                 return_type: Some(builder.return_type),
                 stack_frame_size: builder.count, // NOTE: this is a 'worst case' value,
-                                                 // and should be recalculated in a later pass
+                // and should be recalculated in a later pass
+                called_functions: builder.called_functions,
             }))
         }
     }
@@ -2061,6 +2066,7 @@ impl TopLevelBuilder<'_> {
                     loop_id: None,
                     break_last_seen: BreakTypes::None,
                     is_const: true,
+                    called_functions: HashSet::new(),
                     switch_case_info: None,
                     file_builder: self.file_builder,
                     return_type: ctype.clone(),
@@ -2088,6 +2094,7 @@ impl TopLevelBuilder<'_> {
                     is_initializer: true,
                     stack_frame_size: builder.count,
                     return_type: Some(builder.return_type),
+                    called_functions: builder.called_functions,
                 };
                 self.file_builder.anon_funcs.push(init);
             } else {
@@ -2436,6 +2443,7 @@ impl TopLevelBuilder<'_> {
             loop_id: None,
             break_last_seen: BreakTypes::None,
             is_const: false,
+            called_functions: HashSet::new(),
             switch_case_info: None,
             file_builder: self.file_builder,
             return_type: CType::Void,
@@ -2546,6 +2554,7 @@ impl TopLevelBuilder<'_> {
                                 })?;
                         }
 
+                        self.called_functions.insert(ident.node.name.clone());
                         self.push(IROp::Call(
                             ident.node.name.clone(),
                             args.iter()

@@ -2,7 +2,7 @@ use crate::{
     ARGS,
     ir::{FuncInfo, IROp, IRTopLevel, IRValue},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 struct PsuedoMap<'a> {
     stack_map: HashMap<String, usize>,
@@ -119,26 +119,46 @@ pub fn remove_pseudos(funcs: &mut Vec<IRTopLevel>) {
 
 pub fn the_linkening(
     files: Vec<(HashMap<Box<str>, IRTopLevel>, Vec<IRTopLevel>)>,
+    roots: Vec<String>,
 ) -> Vec<IRTopLevel> {
     let mut out = vec![IRTopLevel::default()];
-    let mut main_found = false;
+
+    let mut map: HashMap<Box<str>, IRTopLevel> = HashMap::default();
     for (i, file) in files.into_iter().enumerate() {
         for mut anon_func in file.1 {
             append_to_all_psuedos(&mut anon_func, &(".".to_owned() + &i.to_string()));
             out.push(anon_func);
         }
-        for (_name, mut func) in file.0 {
-            append_to_all_psuedos(&mut func, &(".".to_owned() + &i.to_string()));
 
-            if func.name == "main" {
-                assert!(!main_found, "There can only be one 'main' function");
-                out[0] = func;
-                main_found = true;
-            } else {
-                out.push(func);
-            }
+        for (name, mut func) in file.0 {
+            append_to_all_psuedos(&mut func, &(".".to_owned() + &i.to_string()));
+            map.insert(name, func);
         }
     }
+
+    let mut next = roots;
+    let mut seen = HashSet::new();
+    loop {
+        let Some(curr) = next.pop() else { break };
+        let Some(curr) = map
+            // TODO: should be doable to figure out where it was called. add error then
+            .remove(&curr.clone().into_boxed_str())
+        else {
+            panic!("Function '{curr}' not found")
+        };
+        for called in &curr.called_functions {
+            if seen.insert(called.clone()) {
+                next.push(called.clone());
+            }
+        }
+
+        if curr.name == "main" {
+            out[0] = curr;
+        } else {
+            out.push(curr);
+        }
+    }
+
     out
 }
 

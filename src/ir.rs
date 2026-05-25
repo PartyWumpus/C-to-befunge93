@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{collections::HashSet, fmt};
 
 use anstyle::{Color, Style};
 
@@ -350,6 +350,7 @@ pub struct IRTopLevel {
     pub ops: Vec<IROp>,
     pub is_initializer: bool,
     pub return_type: Option<CType>,
+    pub called_functions: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Copy)]

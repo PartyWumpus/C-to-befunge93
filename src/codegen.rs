@@ -99,9 +99,10 @@ impl CodeGen {
             match &op {
                 IROp::Call(called_func_name, vals) => {
                     assert!(!func.is_initializer, "Non static call in static context");
-                    // TODO: improve error on unknown func call
                     let Some(called_func) = self.function_map.get(called_func_name) else {
-                        panic!("Function '{called_func_name}' not found");
+                        unreachable!(
+                            "Function '{called_func_name}' not found LATE. should be caught in linker"
+                        );
                     };
 
                     self.builder.call(
@@ -114,9 +115,10 @@ impl CodeGen {
                     );
                 }
                 IROp::GetIdOfFunction(called_func_name, out) => {
-                    // TODO: improve error on unknown func call
                     let Some(called_func) = self.function_map.get(called_func_name) else {
-                        panic!("Function '{called_func_name}' not found");
+                        unreachable!(
+                            "Function '{called_func_name}' not found LATE. should be caught in linker"
+                        );
                     };
 
                     self.builder.copy(&IRValue::int(called_func.id), out, 1);
