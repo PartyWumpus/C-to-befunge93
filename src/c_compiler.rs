@@ -355,8 +355,8 @@ impl SwitchCaseInfo {
 pub struct FileBuilder {
     count: usize,
     scope: ScopeInfo,
-    // TODO: make hashmap so can be searched through easier
-    funcs: Vec<IRTopLevel>,
+    funcs: HashMap<Box<str>, IRTopLevel>,
+    anon_funcs: Vec<IRTopLevel>,
 }
 
 type TagID = usize;
@@ -549,11 +549,12 @@ impl FileBuilder {
         filename: &str,
         linked: &[&str],
         iquoted: &[&str],
-    ) -> Result<Vec<IRTopLevel>, Box<CompilerError>> {
+    ) -> Result<(HashMap<Box<str>, IRTopLevel>, Vec<IRTopLevel>), Box<CompilerError>> {
         let mut builder = Self {
             count: 0,
             scope: ScopeInfo::default(),
-            funcs: vec![],
+            funcs: HashMap::new(),
+            anon_funcs: Vec::new(),
         };
 
         let mut command = vec![
@@ -609,7 +610,7 @@ impl FileBuilder {
                         }
                     })?;
                     if let Some(x) = x {
-                        builder.funcs.push(x);
+                        builder.anon_funcs.push(x);
                     }
                 }
                 ExternalDeclaration::StaticAssert(ass) => Err(CompilerError::IRGenerationError {
@@ -625,11 +626,15 @@ impl FileBuilder {
                             source: parsed.source.clone(),
                         }
                     })?;
-                    builder.funcs.push(x);
+                    let name = x.name.clone().into_boxed_str();
+                    if builder.funcs.contains_key(&name) {
+                        unreachable!("Duplicate function names later than expected");
+                    }
+                    builder.funcs.insert(name, x);
                 }
             }
         }
-        Ok(builder.funcs)
+        Ok((builder.funcs, builder.anon_funcs))
     }
 
     fn parse_function(
@@ -2064,6 +2069,8 @@ impl TopLevelBuilder<'_> {
                     let init_info = builder.parse_initializer(init)?;
                     builder.flatten_and_type_check_initializer_info(init_info, &ctype)?
                 } else {
+                    // FIXME: this can still run if a variable was initialized earlier, and
+                    // then zero it out :(
                     ctype.zero_init()
                 };
 
@@ -2082,7 +2089,7 @@ impl TopLevelBuilder<'_> {
                     stack_frame_size: builder.count,
                     return_type: Some(builder.return_type),
                 };
-                self.file_builder.funcs.push(init);
+                self.file_builder.anon_funcs.push(init);
             } else {
                 let inits = if let Some(init) = &decl.node.initializer {
                     let init_info = self.parse_initializer(init)?;

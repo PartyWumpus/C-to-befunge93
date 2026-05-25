@@ -110,11 +110,6 @@ fn main() {
             Ok(x) => x,
         };
 
-        if ARGS.verbose {
-            println!("\n-- IR, (pre linking)");
-            print_ir(&program);
-        }
-
         files.push(program);
     }
 
@@ -240,7 +235,6 @@ fn main() {
     }
 
     // Mandatory passes
-    passes::sort_functions(&mut program); // put main function at the top
     passes::remove_pseudos(&mut program);
     passes::stack_size_reducer(&mut program);
     let function_map = passes::function_id_mapping(&program);

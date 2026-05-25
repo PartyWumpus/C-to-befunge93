@@ -117,12 +117,26 @@ pub fn remove_pseudos(funcs: &mut Vec<IRTopLevel>) {
     }
 }
 
-pub fn the_linkening(files: Vec<Vec<IRTopLevel>>) -> Vec<IRTopLevel> {
-    let mut out = vec![];
+pub fn the_linkening(
+    files: Vec<(HashMap<Box<str>, IRTopLevel>, Vec<IRTopLevel>)>,
+) -> Vec<IRTopLevel> {
+    let mut out = vec![IRTopLevel::default()];
+    let mut main_found = false;
     for (i, file) in files.into_iter().enumerate() {
-        for mut func in file {
+        for mut anon_func in file.1 {
+            append_to_all_psuedos(&mut anon_func, &(".".to_owned() + &i.to_string()));
+            out.push(anon_func);
+        }
+        for (_name, mut func) in file.0 {
             append_to_all_psuedos(&mut func, &(".".to_owned() + &i.to_string()));
-            out.push(func);
+
+            if func.name == "main" {
+                assert!(!main_found, "There can only be one 'main' function");
+                out[0] = func;
+                main_found = true;
+            } else {
+                out.push(func);
+            }
         }
     }
     out
@@ -197,18 +211,4 @@ pub fn function_id_mapping(funcs: &[IRTopLevel]) -> HashMap<String, FuncInfo> {
         }
     }
     map
-}
-
-// TODO: return result instead of panic
-pub fn sort_functions(funcs: &mut [IRTopLevel]) {
-    let mut main_pos = None;
-    for (i, func) in funcs.iter().enumerate() {
-        if func.name == "main" {
-            assert!(main_pos.is_none(), "There can only be one 'main' function");
-            main_pos = Some(i);
-        }
-    }
-    let main_pos =
-        main_pos.expect("There must be a 'main' function (lib compilation is not yet supported)");
-    funcs.swap(main_pos, 0);
 }

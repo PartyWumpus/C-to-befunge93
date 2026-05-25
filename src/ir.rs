@@ -342,7 +342,7 @@ impl fmt::Display for CmpOp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct IRTopLevel {
     pub name: String,
     pub stack_frame_size: usize,
