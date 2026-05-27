@@ -26,9 +26,20 @@ long _bf_bitshift_left(long value, long shift) {
 }
 
 long _bf_signed_bitshift_right(long value, long shift) {
-  for (long i = 0; i < shift; i++) {
-    value /= 2;
+  if (value >= 0) {
+    for (long i = 0; i < shift; i++) {
+      value /= 2;
+    }
+  } else {
+    for (long i = 0; i < shift; i++) {
+      if (value % 2 != 0) {
+        value = (value - 1) / 2;
+      } else {
+        value = value / 2;
+      }
+    }
   }
+
   return value;
 }
 
