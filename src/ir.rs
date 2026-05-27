@@ -353,6 +353,37 @@ pub struct IRTopLevel {
     pub called_functions: HashSet<String>,
 }
 
+impl fmt::Display for IRTopLevel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "// frame_size: {}", self.stack_frame_size)?;
+        if self.is_initializer {
+            writeln!(
+                f,
+                "{KEYWORD}def{KEYWORD:#} {IDENT}{}{IDENT:#} {{",
+                self.name
+            )?;
+        } else {
+            let ty = self
+                .return_type
+                .as_ref()
+                .map_or_else(|| "no type?".into(), CType::display_type_badly);
+            writeln!(
+                f,
+                "{KEYWORD}fn{KEYWORD:#} {TYPE}{ty}{TYPE:#} {IDENT}@{}{IDENT:#}(..{}) {{",
+                self.name, self.parameters_size
+            )?;
+        }
+        for line in &self.ops {
+            if matches!(line, IROp::Label(_)) {
+                writeln!(f, " {line}")?;
+            } else {
+                writeln!(f, "  {line}")?;
+            }
+        }
+        writeln!(f, "}}")
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct FuncInfo {
     pub stack_frame_size: usize,
@@ -361,26 +392,6 @@ pub struct FuncInfo {
 
 pub fn print_ir(ir: &Vec<IRTopLevel>) {
     for func in ir {
-        println!("\n// frame_size: {}", func.stack_frame_size);
-        if func.is_initializer {
-            println!("{KEYWORD}def{KEYWORD:#} {IDENT}{}{IDENT:#} {{", func.name);
-        } else {
-            let ty = func
-                .return_type
-                .as_ref()
-                .map_or_else(|| "no type?".into(), CType::display_type_badly);
-            println!(
-                "{KEYWORD}fn{KEYWORD:#} {TYPE}{ty}{TYPE:#} {IDENT}@{}{IDENT:#}(..{}) {{",
-                func.name, func.parameters_size
-            );
-        }
-        for line in &func.ops {
-            if matches!(line, IROp::Label(_)) {
-                println!(" {line}");
-            } else {
-                println!("  {line}");
-            }
-        }
-        println!("}}");
+        println!("{func}");
     }
 }

@@ -262,7 +262,7 @@ fn main() {
             }
         }
     }
-    // TODO: strip out unused functions
+
     let mut program = passes::the_linkening(files, roots);
 
     if ARGS.verbose {
