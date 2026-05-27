@@ -1074,18 +1074,18 @@ impl CType {
                 SpecifierQualifier::TypeSpecifier(spec) => c_types.push(spec),
                 SpecifierQualifier::TypeQualifier(spec) => match spec.node {
                     TypeQualifier::Const => {
-                        if !ARGS.silent {
+                        /*if !ARGS.silent {
                             eprintln!("WARNING: Const is ignored");
-                        }
+                        }*/
                     }
                     _ => panic!("{spec:?}"),
                 },
                 SpecifierQualifier::Extension(_) => {
-                    if !ARGS.silent {
+                    /*if !ARGS.silent {
                         eprintln!(
                             "WARNING: GNU declaration specifier extensions are ignored {specifier:?}"
                         );
-                    }
+                    }*/
                 }
             }
         }
@@ -1273,17 +1273,17 @@ impl DeclarationInfo {
                 DeclarationSpecifier::TypeSpecifier(spec) => c_types.push(spec),
                 DeclarationSpecifier::TypeQualifier(spec) => match spec.node {
                     TypeQualifier::Const => {
-                        if !ARGS.silent {
+                        /*if !ARGS.silent {
                             eprintln!("WARNING: Const is ignored");
-                        }
+                        }*/
                     }
                     _ => panic!("{spec:?}"),
                 },
                 DeclarationSpecifier::Function(spec) => match spec.node {
                     FunctionSpecifier::Inline => {
-                        if !ARGS.silent {
+                        /*if !ARGS.silent {
                             eprintln!("WARNING: Inline is ignored");
-                        }
+                        }*/
                     }
                     FunctionSpecifier::Noreturn => Err(IRGenerationError {
                         err: IRGenerationErrorType::TODONoreturn,
@@ -2927,10 +2927,10 @@ impl TopLevelBuilder<'_> {
                         }
                     })?;
 
-                    if !matches!(
+                    if !(matches!(
                         expr.node.operator.node,
                         CBinOp::Plus | CBinOp::AssignPlus | CBinOp::Minus | CBinOp::AssignMinus
-                    ) && !lhs_type.is_pointer()
+                    ) && lhs_type.is_pointer())
                     {
                         lhs = self
                             .convert_to((lhs, lhs_type.clone()), &common_type)
@@ -2939,10 +2939,10 @@ impl TopLevelBuilder<'_> {
                                 span: expr.span,
                             })?;
                     }
-                    if !matches!(
+                    if !(matches!(
                         expr.node.operator.node,
                         CBinOp::Plus | CBinOp::AssignPlus | CBinOp::Minus | CBinOp::AssignMinus
-                    ) && !rhs_type.is_pointer()
+                    ) && rhs_type.is_pointer())
                     {
                         rhs = self
                             .convert_to((rhs, rhs_type.clone()), &common_type)
