@@ -130,20 +130,33 @@ impl CodeGen {
                     self.builder.load_return_val(out, size.get());
                 }
                 IROp::Cast(irtype, (val, original_irtype), output) => {
-                    let val = match original_irtype {
-                        IRType::Signed(..) | IRType::Unsigned(..) => val,
-                        IRType::Double => {
+                    match (original_irtype, irtype) {
+                        // bool happens no matter what
+                        (_, IRType::Signed(1) | IRType::Unsigned(1)) => {
+                            self.builder.constrain_to_range(val, *irtype, false);
+                            self.builder.copy(&IRValue::BefungeStack, output, 1);
+                        }
+                        (IRType::Double, IRType::Signed(..) | IRType::Unsigned(..)) => {
                             self.builder.call(
                                 self.function_map[&func.name],
                                 self.function_map["_bf_f64_to_i64"],
                                 &[(val.clone(), 1)],
                             );
                             self.builder.load_return_val(output, 1);
-                            output
                         }
-                    };
-                    self.builder.constrain_to_range(val, *irtype, false);
-                    self.builder.copy(&IRValue::BefungeStack, output, 1);
+                        (IRType::Signed(..) | IRType::Unsigned(..), IRType::Double) => {
+                            self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_i64_to_f64"],
+                                &[(val.clone(), 1)],
+                            );
+                            self.builder.load_return_val(output, 1);
+                        }
+                        _ => {
+                            self.builder.constrain_to_range(val, *irtype, false);
+                            self.builder.copy(&IRValue::BefungeStack, output, 1);
+                        }
+                    }
                 }
                 IROp::Label(label) => self.builder.label(label.to_owned()),
                 IROp::InlineBefunge(lines) => self.builder.insert_inline_befunge(lines),
@@ -165,39 +178,26 @@ impl CodeGen {
                 IROp::Store(a, out, size) => {
                     self.builder.store(a, out, size.get());
                 }
-                IROp::One(op, a, out, irtype) => match irtype {
-                    IRType::Signed(..) | IRType::Unsigned(..) => {
-                        match op {
-                            UnaryOp::Minus => self.builder.unary_minus(a),
-                            UnaryOp::Complement => self.builder.bitwise_complement(a),
-                            UnaryOp::BooleanNegate => self.builder.boolean_negate(a),
-                        }
-                        self.builder
-                            .constrain_to_range(&IRValue::BefungeStack, *irtype, false);
-                        self.builder.copy(&IRValue::BefungeStack, out, 1);
-                    }
-                    IRType::Double => {
-                        assert!(!func.is_initializer, "Floats can't yet be used in init");
-                        match op {
-                            UnaryOp::Minus => {
+                IROp::One(op, a, out, irtype) => {
+                    match op {
+                        UnaryOp::Minus => {
+                            if matches!(irtype, IRType::Double) {
                                 self.builder.add(a, &IRValue::float(-0.0));
                                 self.builder.copy(&IRValue::BefungeStack, out, 1);
                                 continue;
                             }
-                            UnaryOp::Complement => self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_double_bitwise_complement"],
-                                &[(a.clone(), 1)],
-                            ),
-                            UnaryOp::BooleanNegate => self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_double_boolean_negate"],
-                                &[(a.clone(), 1)],
-                            ),
+
+                            self.builder.unary_minus(a);
                         }
-                        self.builder.load_return_val(out, 1);
+                        UnaryOp::Complement => self.builder.bitwise_complement(a),
+                        UnaryOp::BooleanNegate => self.builder.boolean_negate(a),
                     }
-                },
+                    if !matches!(irtype, IRType::Double) {
+                        self.builder
+                            .constrain_to_range(&IRValue::BefungeStack, *irtype, false);
+                    }
+                    self.builder.copy(&IRValue::BefungeStack, out, 1);
+                }
                 IROp::Cmp(op, a, b, out, irtype) => match irtype {
                     IRType::Signed(..) | IRType::Unsigned(..) => {
                         match op {
@@ -213,42 +213,57 @@ impl CodeGen {
                         self.builder.copy(&IRValue::BefungeStack, out, 1);
                     }
                     IRType::Double => {
-                        match op {
-                            // TODO:
-                            CmpOp::Equal => {
-                                self.builder.is_equal(a, b);
-                                self.builder.copy(&IRValue::BefungeStack, out, 1);
-                                continue;
+                        if ARGS.enable_softfloat {
+                            match op {
+                                CmpOp::Equal => self.builder.call(
+                                    self.function_map[&func.name],
+                                    self.function_map["_bf_double_is_equal"],
+                                    &[(a.clone(), 1), (b.clone(), 1)],
+                                ),
+                                CmpOp::NotEqual => self.builder.call(
+                                    self.function_map[&func.name],
+                                    self.function_map["_bf_double_is_not_equal"],
+                                    &[(a.clone(), 1), (b.clone(), 1)],
+                                ),
+                                CmpOp::LessThan => self.builder.call(
+                                    self.function_map[&func.name],
+                                    self.function_map["_bf_double_is_less_than"],
+                                    &[(a.clone(), 1), (b.clone(), 1)],
+                                ),
+                                CmpOp::LessOrEqual => self.builder.call(
+                                    self.function_map[&func.name],
+                                    self.function_map["_bf_double_is_less_or_equal"],
+                                    &[(a.clone(), 1), (b.clone(), 1)],
+                                ),
+                                CmpOp::GreaterThan => self.builder.call(
+                                    self.function_map[&func.name],
+                                    self.function_map["_bf_double_is_greater_than"],
+                                    &[(a.clone(), 1), (b.clone(), 1)],
+                                ),
+                                CmpOp::GreaterOrEqual => self.builder.call(
+                                    self.function_map[&func.name],
+                                    self.function_map["_bf_double_is_greater_or_equal"],
+                                    &[(a.clone(), 1), (b.clone(), 1)],
+                                ),
                             }
-                            // TODO:
-                            CmpOp::NotEqual => {
-                                self.builder.is_not_equal(a, b);
-                                self.builder.copy(&IRValue::BefungeStack, out, 1);
-                                continue;
-                            }
-                            CmpOp::LessThan => self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_double_is_less_than"],
-                                &[(a.clone(), 1), (b.clone(), 1)],
-                            ),
-                            CmpOp::LessOrEqual => self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_double_is_less_or_equal"],
-                                &[(a.clone(), 1), (b.clone(), 1)],
-                            ),
-                            CmpOp::GreaterThan => self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_double_is_greater_than"],
-                                &[(a.clone(), 1), (b.clone(), 1)],
-                            ),
-                            CmpOp::GreaterOrEqual => self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_double_is_greater_or_equal"],
-                                &[(a.clone(), 1), (b.clone(), 1)],
-                            ),
-                        }
 
-                        self.builder.load_return_val(out, 1);
+                            self.builder.load_return_val(out, 1);
+                        } else {
+                            // often good enough
+                            match op {
+                                CmpOp::Equal => {
+                                    self.builder.is_equal(a, b);
+                                }
+                                CmpOp::NotEqual => {
+                                    self.builder.is_not_equal(a, b);
+                                }
+                                _ => panic!(
+                                    "Softfloat is not enabled, but a floating point operation was used"
+                                ),
+                            }
+
+                            self.builder.copy(&IRValue::BefungeStack, out, 1);
+                        }
                     }
                 },
                 IROp::Two(op, a, b, out, irtype) => match irtype {

@@ -4,18 +4,6 @@ void exit(int status);
 
 typedef union { uint64_t ui; double f; float64_t s; } i64_f64;
 
-// unary operations
-
-double _bf_double_unary_minus(double a) {
-  exit(76);
-}
-double _bf_double_bitwise_complement(double a) {
-  exit(76);
-}
-double _bf_double_boolean_negate(double a) {
-  exit(76);
-}
-
 // binary operations
 
 double _bf_double_add(double a, double b) {
@@ -29,28 +17,98 @@ double _bf_double_add(double a, double b) {
   return o.f;
 }
 double _bf_double_sub(double a, double b) {
-  exit(76);
+  i64_f64 x;
+  x.f = a;
+  i64_f64 y;
+  y.f = b;
+
+  i64_f64 o;
+  o.ui = f64_sub(x.s, y.s).v;
+  return o.f;
 }
 double _bf_double_multiply(double a, double b) {
-  exit(76);
+  i64_f64 x;
+  x.f = a;
+  i64_f64 y;
+  y.f = b;
+
+  i64_f64 o;
+  o.ui = f64_mul(x.s, y.s).v;
+  return o.f;
 }
 double _bf_double_divide(double a, double b) {
-  exit(76);
+  i64_f64 x;
+  x.f = a;
+  i64_f64 y;
+  y.f = b;
+
+  i64_f64 o;
+  o.ui = f64_div(x.s, y.s).v;
+  return o.f;
 }
+
 double _bf_double_modulo(double a, double b) {
-  exit(76);
+  i64_f64 x;
+  x.f = a;
+  i64_f64 y;
+  y.f = b;
+
+  i64_f64 o;
+  o.ui = f64_rem(x.s, y.s).v;
+  return o.f;
 }
-double _bf_double_is_less_than(double a, double b) {
-  exit(76);
+
+// comparisons
+
+int _bf_double_is_equal(double a, double b) {
+  i64_f64 x;
+  x.f = a;
+  i64_f64 y;
+  y.f = b;
+
+  return f64_eq(y.s, x.s);
+}
+
+int _bf_double_is_not_equal(double a, double b) {
+  i64_f64 x;
+  x.f = a;
+  i64_f64 y;
+  y.f = b;
+
+  return !f64_eq(y.s, x.s);
+}
+
+int _bf_double_is_less_than(double a, double b) {
+  i64_f64 x;
+  x.f = a;
+  i64_f64 y;
+  y.f = b;
+
+  return f64_lt(x.s, y.s);
 }
 double _bf_double_is_less_or_equal(double a, double b) {
-  exit(76);
+  i64_f64 x;
+  x.f = a;
+  i64_f64 y;
+  y.f = b;
+
+  return f64_le(x.s, y.s);
 }
 double _bf_double_is_greater_than(double a, double b) {
-  exit(76);
+  i64_f64 x;
+  x.f = a;
+  i64_f64 y;
+  y.f = b;
+
+  return f64_lt(y.s, x.s);
 }
 double _bf_double_is_greater_or_equal(double a, double b) {
-  exit(76);
+  i64_f64 x;
+  x.f = a;
+  i64_f64 y;
+  y.f = b;
+
+  return f64_le(y.s, x.s);
 }
 
 // casts
@@ -62,5 +120,7 @@ long _bf_f64_to_i64(double a) {
 }
 
 double _bf_i64_to_f64(long a) {
-  exit(76);
+  i64_f64 o;
+  o.ui = i64_to_f64(a).v;
+  return o.f;
 }

@@ -464,6 +464,12 @@ impl OpBuilder {
     pub fn constrain_to_range(&mut self, value: &IRValue, size: IRType, bounded: bool) {
         self.load_val(value);
         match size {
+            // bool
+            IRType::Unsigned(1) | IRType::Signed(1) => {
+                self.char('!');
+                self.char('!');
+            }
+
             // FIXME: handles casts from signed -> unsigned wrong
             IRType::Unsigned(size) => {
                 assert!(size <= 64);
@@ -490,7 +496,7 @@ impl OpBuilder {
                     }
                 }
             }
-            IRType::Double => (),
+            IRType::Double => unreachable!("should be dealt with higher up"),
         }
     }
 
