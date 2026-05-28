@@ -2546,18 +2546,23 @@ impl TopLevelBuilder<'_> {
                             });
                         }
 
+                        let mut casted_args = vec![];
                         for i in 0..args.len() {
-                            self.convert_to(args[i].clone(), &expected_args[i])
-                                .map_err(|err| IRGenerationError {
-                                    err,
-                                    span: expr.node.arguments[i].span,
-                                })?;
+                            casted_args.push(
+                                self.convert_to(args[i].clone(), &expected_args[i])
+                                    .map_err(|err| IRGenerationError {
+                                        err,
+                                        span: expr.node.arguments[i].span,
+                                    })?,
+                            );
                         }
 
                         self.called_functions.insert(ident.node.name.clone());
                         self.push(IROp::Call(
                             ident.node.name.clone(),
-                            args.iter()
+                            casted_args
+                                .iter()
+                                .zip(expected_args)
                                 .map(|x| (x.0.clone(), x.1.sizeof(&self.scope)))
                                 .collect(),
                         ));
