@@ -16,3 +16,4 @@ double _bf_float_is_greater_or_equal(double a, double b);
 // casts
 long _bf_f64_to_i64(double a);
 double _bf_i64_to_f64(long a);
+double _bf_ui64_to_f64(long a);

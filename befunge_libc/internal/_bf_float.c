@@ -124,3 +124,9 @@ double _bf_i64_to_f64(long a) {
   o.ui = i64_to_f64(a).v;
   return o.f;
 }
+
+double _bf_ui64_to_f64(long a) {
+  i64_f64 o;
+  o.ui = ui64_to_f64(a).v;
+  return o.f;
+}

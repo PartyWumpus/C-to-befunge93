@@ -144,10 +144,18 @@ impl CodeGen {
                             );
                             self.builder.load_return_val(output, 1);
                         }
-                        (IRType::Signed(..) | IRType::Unsigned(..), IRType::Double) => {
+                        (IRType::Signed(..), IRType::Double) => {
                             self.builder.call(
                                 self.function_map[&func.name],
                                 self.function_map["_bf_i64_to_f64"],
+                                &[(val.clone(), 1)],
+                            );
+                            self.builder.load_return_val(output, 1);
+                        }
+                        (IRType::Unsigned(..), IRType::Double) => {
+                            self.builder.call(
+                                self.function_map[&func.name],
+                                self.function_map["_bf_ui64_to_f64"],
                                 &[(val.clone(), 1)],
                             );
                             self.builder.load_return_val(output, 1);
