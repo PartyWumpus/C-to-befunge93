@@ -99,7 +99,7 @@ int _bf_double_is_less_than(double a, double b) {
 
   return f64_lt(x.s, y.s);
 }
-double _bf_double_is_less_or_equal(double a, double b) {
+int _bf_double_is_less_or_equal(double a, double b) {
   i64_f64 x;
   x.f = a;
   i64_f64 y;
@@ -107,7 +107,7 @@ double _bf_double_is_less_or_equal(double a, double b) {
 
   return f64_le(x.s, y.s);
 }
-double _bf_double_is_greater_than(double a, double b) {
+int _bf_double_is_greater_than(double a, double b) {
   i64_f64 x;
   x.f = a;
   i64_f64 y;
@@ -115,7 +115,7 @@ double _bf_double_is_greater_than(double a, double b) {
 
   return f64_lt(y.s, x.s);
 }
-double _bf_double_is_greater_or_equal(double a, double b) {
+int _bf_double_is_greater_or_equal(double a, double b) {
   i64_f64 x;
   x.f = a;
   i64_f64 y;

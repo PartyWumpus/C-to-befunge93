@@ -131,6 +131,7 @@ impl CodeGen {
                 }
                 IROp::Cast(irtype, (val, original_irtype), output) => {
                     match (original_irtype, irtype) {
+                        // TODO: this is wrong for -0.0, it should also become 0
                         // bool happens no matter what
                         (_, IRType::Signed(1) | IRType::Unsigned(1)) => {
                             self.builder.constrain_to_range(val, *irtype, false);

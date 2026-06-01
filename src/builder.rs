@@ -876,6 +876,7 @@ impl OpBuilder {
                 self.char(':');
                 self.put_val(&IRValue::Register(61));
                 self.char('0');
+                self.char('\\');
                 self.char('`');
 
                 self.char('\\');
@@ -884,6 +885,7 @@ impl OpBuilder {
                 self.char(':');
                 self.put_val(&IRValue::Register(62));
                 self.char('0');
+                self.char('\\');
                 self.char('`');
 
                 // compare signs
