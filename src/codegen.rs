@@ -137,28 +137,45 @@ impl CodeGen {
                             self.builder.copy(&IRValue::BefungeStack, output, 1);
                         }
                         (IRType::Double, IRType::Signed(..) | IRType::Unsigned(..)) => {
-                            self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_f64_to_i64"],
-                                &[(val.clone(), 1)],
-                            );
-                            self.builder.load_return_val(output, 1);
+                            if let IRValue::Immediate(val) = val {
+                                self.builder.copy(
+                                    &IRValue::int(f64::from_bits(*val as u64) as usize),
+                                    output,
+                                    1,
+                                );
+                            } else {
+                                self.builder.call(
+                                    self.function_map[&func.name],
+                                    self.function_map["_bf_f64_to_i64"],
+                                    &[(val.clone(), 1)],
+                                );
+                                self.builder.load_return_val(output, 1);
+                            }
                         }
                         (IRType::Signed(..), IRType::Double) => {
-                            self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_i64_to_f64"],
-                                &[(val.clone(), 1)],
-                            );
-                            self.builder.load_return_val(output, 1);
+                            if let IRValue::Immediate(val) = val {
+                                self.builder
+                                    .copy(&IRValue::float(*val as isize as f64), output, 1);
+                            } else {
+                                self.builder.call(
+                                    self.function_map[&func.name],
+                                    self.function_map["_bf_i64_to_f64"],
+                                    &[(val.clone(), 1)],
+                                );
+                                self.builder.load_return_val(output, 1);
+                            }
                         }
                         (IRType::Unsigned(..), IRType::Double) => {
-                            self.builder.call(
-                                self.function_map[&func.name],
-                                self.function_map["_bf_ui64_to_f64"],
-                                &[(val.clone(), 1)],
-                            );
-                            self.builder.load_return_val(output, 1);
+                            if let IRValue::Immediate(val) = val {
+                                self.builder.copy(&IRValue::float(*val as f64), output, 1);
+                            } else {
+                                self.builder.call(
+                                    self.function_map[&func.name],
+                                    self.function_map["_bf_ui64_to_f64"],
+                                    &[(val.clone(), 1)],
+                                );
+                                self.builder.load_return_val(output, 1);
+                            }
                         }
                         _ => {
                             self.builder.constrain_to_range(val, *irtype, false);
