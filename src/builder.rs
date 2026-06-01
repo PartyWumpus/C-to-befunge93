@@ -461,6 +461,7 @@ impl OpBuilder {
         self.char('*');
     }
 
+    #[allow(clippy::match_same_arms)]
     pub fn constrain_to_range(&mut self, value: &IRValue, size: IRType, bounded: bool) {
         self.load_val(value);
         match size {
@@ -470,23 +471,26 @@ impl OpBuilder {
                 self.char('!');
             }
 
-            // FIXME: handles casts from signed -> unsigned wrong
-            IRType::Unsigned(size) => {
-                assert!(size <= 64);
-                // jank alert TODO: FIXME:
-                if size < 32 {
+            IRType::Unsigned(size) => match size {
+                64 => (),
+                ..=32 => {
                     self.load_number(2_usize.pow(size as u32));
-                    self.char('%');
+                    self.modulo(&IRValue::BefungeStack, &IRValue::BefungeStack);
+                    self.load_number(2_usize.pow(size as u32));
+                    self.add(&IRValue::BefungeStack, &IRValue::BefungeStack);
+                    self.load_number(2_usize.pow(size as u32));
+                    self.modulo(&IRValue::BefungeStack, &IRValue::BefungeStack);
                 }
-            }
+                _ => unreachable!(),
+            },
             IRType::Signed(size) => {
-                assert!(size <= 64);
-                if size == 64 {
+                match size {
                     // Don't need to do anything if it's signed 64 bit,
                     // because everything already is!
-                } else {
-                    // jank alert TODO: FIXME:
-                    if size < 32 {
+                    64 => (),
+                    // TODO: FIXME:
+                    32 => (),
+                    ..32 => {
                         self.load_number(2_usize.pow(size as u32 - 1));
                         self.add(&IRValue::BefungeStack, &IRValue::BefungeStack);
                         self.load_number(2_usize.pow(size as u32));
@@ -494,6 +498,7 @@ impl OpBuilder {
                         self.load_number(2_usize.pow(size as u32 - 1));
                         self.sub(&IRValue::BefungeStack, &IRValue::BefungeStack);
                     }
+                    _ => unreachable!(),
                 }
             }
             IRType::Double => unreachable!("should be dealt with higher up"),
