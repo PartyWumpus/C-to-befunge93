@@ -187,6 +187,12 @@ impl CType {
     }
 
     pub fn get_common<'a>(type1: &'a Self, type2: &'a Self) -> Result<Self, (&'a Self, &'a Self)> {
+        if type1.is_array() || type2.is_array() {
+            unreachable!(
+                "Array type checked for common type. It should decay to a pointer before it reaches here"
+            )
+        }
+
         // If the same, no conversions are needed
         if type1 == type2 {
             return Ok(type1.clone());
@@ -199,7 +205,6 @@ impl CType {
             }
             _ => (),
         }
-        // TODO: array types!
 
         // If one is a pointer, they must be the same (already checked) or one must be an integer
         if matches!(type1, Self::Pointer(_)) {
@@ -2471,7 +2476,8 @@ impl TopLevelBuilder<'_> {
         let (cond, _cond_type) = self.parse_expression(&expr.node.condition)?;
         // TODO: assert cond_type is booleanish?
         self.push(IROp::CondBranch(BranchType::Zero, else_str, cond));
-        let (temp1, temp1_type) = self.parse_expression(&expr.node.then_expression)?;
+        let temp1 = self.parse_expression(&expr.node.then_expression)?;
+        let (temp1, temp1_type) = self.attempt_array_decay(temp1);
         let out = self.generate_pseudo(temp1_type.sizeof(&self.scope));
         self.push(IROp::Copy(
             temp1,
@@ -2481,7 +2487,8 @@ impl TopLevelBuilder<'_> {
         self.push(IROp::AlwaysBranch(end_str));
 
         self.push(else_lbl);
-        let (temp2, temp2_type) = self.parse_expression(&expr.node.else_expression)?;
+        let temp2 = self.parse_expression(&expr.node.else_expression)?;
+        let (temp2, temp2_type) = self.attempt_array_decay(temp2);
         self.push(IROp::Copy(
             temp2,
             out.clone(),

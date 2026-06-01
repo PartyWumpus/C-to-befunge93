@@ -165,6 +165,10 @@ impl CType {
             _ => unreachable!("type {self:?} cannot be bigness compared"),
         }
     }
+
+    pub const fn is_array(&self) -> bool {
+        matches!(self, Self::Array(..) | Self::ImmediateArray(..))
+    }
 }
 
 #[derive(Debug, Clone)]
