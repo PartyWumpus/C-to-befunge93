@@ -4,6 +4,19 @@ void exit(int status);
 
 typedef union { uint64_t ui; double f; float64_t s; } i64_f64;
 
+double _bf_double_mulAdd(double a, double b, double c) {
+  i64_f64 x;
+  x.f = a;
+  i64_f64 y;
+  y.f = b;
+  i64_f64 z;
+  z.f = c;
+
+  i64_f64 o;
+  o.ui = f64_mulAdd(x.s, y.s, z.s).v;
+  return o.f;
+}
+
 // binary operations
 
 double _bf_double_add(double a, double b) {
