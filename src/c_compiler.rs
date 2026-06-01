@@ -2465,7 +2465,6 @@ impl TopLevelBuilder<'_> {
         Ok((out, CType::UnsignedInt))
     }
 
-    // TODO: check and coerce types properly here
     fn parse_ternary(
         &mut self,
         expr: &Node<ConditionalExpression>,
@@ -2476,44 +2475,57 @@ impl TopLevelBuilder<'_> {
         let (cond, _cond_type) = self.parse_expression(&expr.node.condition)?;
         // TODO: assert cond_type is booleanish?
         self.push(IROp::CondBranch(BranchType::Zero, else_str, cond));
-        let temp1 = self.parse_expression(&expr.node.then_expression)?;
-        let (temp1, temp1_type) = self.attempt_array_decay(temp1);
-        let out = self.generate_pseudo(temp1_type.sizeof(&self.scope));
-        self.push(IROp::Copy(
-            temp1,
-            out.clone(),
-            temp1_type.sizeof(&self.scope),
-        ));
-        self.push(IROp::AlwaysBranch(end_str));
 
+        // First part of 'else' block, done early so type can be known
+        let mut else_ops = vec![];
+        mem::swap(&mut self.ops, &mut else_ops);
         self.push(else_lbl);
-        let temp2 = self.parse_expression(&expr.node.else_expression)?;
-        let (temp2, temp2_type) = self.attempt_array_decay(temp2);
-        self.push(IROp::Copy(
-            temp2,
-            out.clone(),
-            temp2_type.sizeof(&self.scope),
-        ));
-        self.push(end_lbl);
+        let else_val = self.parse_expression(&expr.node.else_expression)?;
+        let (else_val, else_type) = self.attempt_array_decay(else_val);
+        mem::swap(&mut self.ops, &mut else_ops);
+
+        // 'then' block
+        let then_val = self.parse_expression(&expr.node.then_expression)?;
+        let (then_val, then_type) = self.attempt_array_decay(then_val);
 
         let common_type =
-            CType::get_common(&temp2_type, &temp1_type).map_err(|err| IRGenerationError {
+            CType::get_common(&then_type, &else_type).map_err(|err| IRGenerationError {
                 err: IRGenerationErrorType::InvalidCoercion(
                     err.0.display_type(&self.scope),
                     err.1.display_type(&self.scope),
                 ),
                 span: expr.span,
             })?;
-        // TODO: small correctness issue here, but fixing it would require moving
-        // the cast inside both branches, which would require parsing both expressions
-        // before constructing the branches, which would require the same kind of jank
-        // as there is in switch statements w/ mem::swap
-        let out = self
-            .convert_to((out, temp2_type), &common_type)
+        let out = self.generate_pseudo(common_type.sizeof(&self.scope));
+
+        let then_val = self
+            .convert_to((then_val, then_type), &common_type)
             .map_err(|err| IRGenerationError {
                 err,
                 span: expr.span,
             })?;
+        self.push(IROp::Copy(
+            then_val,
+            out.clone(),
+            common_type.sizeof(&self.scope),
+        ));
+        self.push(IROp::AlwaysBranch(end_str));
+
+        // actually inserting and finishing the 'else' block
+        self.ops.extend(else_ops);
+        let else_val = self
+            .convert_to((else_val, else_type), &common_type)
+            .map_err(|err| IRGenerationError {
+                err,
+                span: expr.span,
+            })?;
+        self.push(IROp::Copy(
+            else_val,
+            out.clone(),
+            common_type.sizeof(&self.scope),
+        ));
+
+        self.push(end_lbl);
         Ok((out, common_type))
     }
 
