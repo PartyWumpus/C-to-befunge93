@@ -2090,9 +2090,12 @@ impl TopLevelBuilder<'_> {
                     ctype.zero_init(&self.scope)
                 };
 
-                for (i, init) in inits.into_iter().enumerate() {
-                    assert!(init.1.get() == 1);
-                    builder.push(IROp::CopyWithOffset((init.0, 0), (loc.clone(), i)));
+                let mut i = 0;
+                for (init, width) in inits {
+                    for j in 0..width.get() {
+                        builder.push(IROp::CopyWithOffset((init.clone(), j), (loc.clone(), i)));
+                        i += 1;
+                    }
                 }
 
                 // FIXME: bad bad bad, just have a seperate global counter
@@ -2638,7 +2641,10 @@ impl TopLevelBuilder<'_> {
                     self.push(IROp::AddressOf(val, out.clone()));
                     return Ok(Out::Plain((out, ptrtype)));
                 }
-                Out::Dereferenced(x) => return Ok(Out::Plain(x)),
+                Out::Dereferenced((value, ctype)) => {
+                    let ptrtype = CType::Pointer(Box::new(ctype));
+                    return Ok(Out::Plain((value, ptrtype)));
+                }
                 Out::SubObject {
                     base,
                     subtype,
@@ -2660,7 +2666,8 @@ impl TopLevelBuilder<'_> {
                         out.clone(),
                         CSize::new(1).unwrap(),
                     ));
-                    return Ok(Out::Plain((out, subtype)));
+                    let ptrtype = CType::Pointer(Box::new(subtype));
+                    return Ok(Out::Plain((out, ptrtype)));
                 }
             },
             UnaryOperator::Indirection => {
@@ -2895,10 +2902,12 @@ impl TopLevelBuilder<'_> {
                                 offset,
                             } => {
                                 let out = self.generate_pseudo(subtype.sizeof(&self.scope));
-                                self.push(IROp::CopyWithOffset(
-                                    (base.clone(), offset),
-                                    (out.clone(), 0),
-                                ));
+                                for i in 0..subtype.sizeof(&self.scope).get() {
+                                    self.push(IROp::CopyWithOffset(
+                                        (base.clone(), offset + i),
+                                        (out.clone(), i),
+                                    ));
+                                }
                                 (
                                     out,
                                     subtype,
@@ -3254,7 +3263,12 @@ impl TopLevelBuilder<'_> {
                 ));
             }
             AssignmentStatus::AssigningToSubObject(base, offset) => {
-                self.push(IROp::CopyWithOffset((out.clone(), 0), (base, offset)));
+                for i in 0..out_type.sizeof(&self.scope).get() {
+                    self.push(IROp::CopyWithOffset(
+                        (out.clone(), i),
+                        (base.clone(), offset + i),
+                    ));
+                }
             }
         }
         Ok(ExpressionOutput::Plain((out, out_type)))
