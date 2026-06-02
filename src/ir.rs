@@ -183,7 +183,6 @@ pub enum IROp {
     CondBranch(BranchType, String, IRValue),
     AddressOf(IRValue, IRValue),
     Dereference(IRValue, IRValue, CSize),
-    // do i need a source and destination offset?
     Copy(IRValue, IRValue, CSize),
     Store(IRValue, IRValue, CSize),
     One(UnaryOp, IRValue, IRValue, IRType),

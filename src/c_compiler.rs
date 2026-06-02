@@ -155,7 +155,7 @@ impl CType {
         matches!(self, Self::Pointer(Self::Function(..)))
     }
 
-    pub fn zero_init(&self) -> Vec<(IRValue, CSize)> {
+    pub fn zero_init(&self, scope: &ScopeInfo) -> Vec<(IRValue, CSize)> {
         match self {
             Self::Pointer(..)
             | Self::Bool
@@ -176,11 +176,19 @@ impl CType {
             Self::Array(inner_type, length) | Self::ImmediateArray(inner_type, length) => {
                 let mut out = vec![];
                 for _ in 0..length.get() {
-                    out.extend(inner_type.zero_init());
+                    out.extend(inner_type.zero_init(scope));
                 }
                 out
             }
-            Self::Struct(..) => todo!("zero init of structs"),
+            Self::Struct(tag_id) => {
+                let fields = scope.get_struct_by_id(*tag_id).unwrap().fields;
+                let mut out = vec![];
+                for (_field_name, (inner_type, _offset)) in fields {
+                    // TODO: check offset is right?
+                    out.extend(inner_type.zero_init(scope));
+                }
+                out
+            }
             Self::Void => unreachable!("void in zero init"),
             Self::Function(..) => unreachable!("function type in zero init"),
         }
@@ -1783,7 +1791,7 @@ impl TopLevelBuilder<'_> {
         target_type: &CType,
     ) -> Result<Vec<(IRValue, CSize)>, IRGenerationError> {
         Ok(match (target_type, init_info) {
-            (CType::Struct(..), InitializerInfo::Single((_rhs, rhs_type), span)) => {
+            (CType::Struct(..), InitializerInfo::Single((rhs, rhs_type), span)) => {
                 if *target_type != rhs_type {
                     return Err(IRGenerationError {
                         err: IRGenerationErrorType::IncompatibleTypes(
@@ -1794,10 +1802,7 @@ impl TopLevelBuilder<'_> {
                     });
                 }
 
-                return Err(IRGenerationError {
-                    err: IRGenerationErrorType::TODOComplexInitializers,
-                    span,
-                });
+                vec![(rhs, target_type.sizeof(&self.scope))]
             }
             (
                 CType::Array(_inner_type, _size) | CType::ImmediateArray(_inner_type, _size),
@@ -1840,7 +1845,7 @@ impl TopLevelBuilder<'_> {
                     out.extend(x);
                 }
                 while out.len() < size.get() * inner_type.sizeof(&self.scope).get() {
-                    out.extend(inner_type.zero_init());
+                    out.extend(inner_type.zero_init(&self.scope));
                 }
                 out
             }
@@ -1876,7 +1881,7 @@ impl TopLevelBuilder<'_> {
                     out.extend(x);
                 }
                 for (_field_name, (ctype, offset)) in struct_fields {
-                    out.extend(ctype.zero_init());
+                    out.extend(ctype.zero_init(&self.scope));
                 }
                 out
             }
@@ -2082,7 +2087,7 @@ impl TopLevelBuilder<'_> {
                 } else {
                     // FIXME: this can still run if a variable was initialized earlier, and
                     // then zero it out :(
-                    ctype.zero_init()
+                    ctype.zero_init(&self.scope)
                 };
 
                 for (i, init) in inits.into_iter().enumerate() {
@@ -2107,14 +2112,17 @@ impl TopLevelBuilder<'_> {
                     let init_info = self.parse_initializer(init)?;
                     self.flatten_and_type_check_initializer_info(init_info, &ctype)?
                 } else if self.is_const && !matches!(info.duration, StorageDuration::Extern) {
-                    ctype.zero_init()
+                    ctype.zero_init(&self.scope)
                 } else {
                     continue;
                 };
 
-                for (i, init) in inits.into_iter().enumerate() {
-                    assert!(init.1.get() == 1);
-                    self.push(IROp::CopyWithOffset((init.0, 0), (loc.clone(), i)));
+                let mut i = 0;
+                for (init, width) in inits {
+                    for j in 0..width.get() {
+                        self.push(IROp::CopyWithOffset((init.clone(), j), (loc.clone(), i)));
+                        i += 1;
+                    }
                 }
             }
         }
@@ -2900,8 +2908,8 @@ impl TopLevelBuilder<'_> {
                         };
                     let (rhs, rhs_type) = self.parse_expression(&expr.node.rhs)?;
                     let (mut rhs, rhs_type) = self.attempt_array_decay((rhs, rhs_type));
-                    if !matches!(expr.node.operator.node, CBinOp::AssignMinus)
-                        && !rhs_type.is_pointer()
+                    if !(matches!(expr.node.operator.node, CBinOp::AssignMinus)
+                        && rhs_type.is_pointer())
                     {
                         rhs = self
                             .convert_to((rhs, rhs_type.clone()), &lhs_type)
