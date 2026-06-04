@@ -1,5 +1,5 @@
 use crate::{
-    ARGS,
+    args::ARGS,
     ir::{FuncInfo, IROp, IRTopLevel, IRValue},
 };
 use std::collections::{HashMap, HashSet};

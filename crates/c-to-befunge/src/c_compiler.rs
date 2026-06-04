@@ -30,7 +30,7 @@ use lang_c::{
 };
 
 use crate::{
-    ARGS,
+    args::ARGS,
     errors::{CompilerError, IRGenerationError, IRGenerationErrorType},
     ir::{BinOp, BranchType, CmpOp, IROp, IRTopLevel, IRType, IRValue, UnaryOp},
 };
@@ -62,7 +62,7 @@ pub struct StructData {
     pub size: CSize,
 }
 
-#[derive(Debug, Clone, Eq)]
+#[derive(Debug, Clone, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CType {
     Bool,
 

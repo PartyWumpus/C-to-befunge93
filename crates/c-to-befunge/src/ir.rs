@@ -12,7 +12,7 @@ const TYPE: Style = Style::new().fg_color(Some(Color::Ansi(anstyle::AnsiColor::R
 const IDENT: Style = Style::new().fg_color(Some(Color::Ansi(anstyle::AnsiColor::BrightMagenta)));
 const LABEL: Style = Style::new().fg_color(Some(Color::Ansi(anstyle::AnsiColor::Yellow)));
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum IRValue {
     /// An offset from the current bottom of the stack
     Stack(usize),
@@ -61,7 +61,9 @@ impl IRValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum IRType {
     Signed(u8),
     Unsigned(u8),
@@ -171,7 +173,7 @@ impl CType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum IROp {
     Return(IRValue, CSize),
     GetReturnValue(IRValue, CSize),
@@ -283,7 +285,7 @@ impl fmt::Display for IROp {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum BranchType {
     NonZero,
     Zero,
@@ -298,7 +300,7 @@ impl fmt::Display for BranchType {
     }
 }
 
-#[derive(strum_macros::Display, Debug, Clone, Copy)]
+#[derive(strum_macros::Display, Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[strum(serialize_all = "snake_case")]
 pub enum UnaryOp {
     Minus,
@@ -306,7 +308,7 @@ pub enum UnaryOp {
     BooleanNegate,
 }
 
-#[derive(strum_macros::Display, Debug, Clone, Copy)]
+#[derive(strum_macros::Display, Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[strum(serialize_all = "snake_case")]
 pub enum BinOp {
     Add,
@@ -322,7 +324,7 @@ pub enum BinOp {
     ShiftRight,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum CmpOp {
     Equal,
     NotEqual,
@@ -345,7 +347,7 @@ impl fmt::Display for CmpOp {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, serde::Serialize, serde::Deserialize)]
 pub struct IRTopLevel {
     pub name: String,
     pub stack_frame_size: usize,

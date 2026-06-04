@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    ARGS,
+    args::ARGS,
     ir::{FuncInfo, IRType, IRValue},
     number_generation::int_to_befunge_str,
 };

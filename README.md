@@ -18,7 +18,7 @@ I've been testing this with [BefunExec](https://github.com/Mikescher/BefunExec),
 - 64 bit values in fungespace
 
 ## Important usage note
-Requires being run in this repo, because the preproccessor step (for now) requires the befunge_libc/ folder to exist.
+Requires being run in this repo if you want to use anything from libc, because the preproccessor step (for now) requires the befunge_libc/ folder to exist next to your cwd.
 The befunge_libc folder contains:
 - `stdlib`: a minimal copy of libc
 - `internal`: various c functions that only the compiler should insert calls to
@@ -56,7 +56,6 @@ There's also a static memory space used for globals.
 ### Current Limitations
 None of these are full architectural failures so will eventually be resolved.
 - Enums are incorrectly implemented, but largely functional
-- Doubles can only be created and pointed to
 - Overflow is incorrectly handled for ints and unsigned longs (correct for all chars and signed longs though)
 - No var args
 - Some invalid lvalues are incorrectly allowed (stuff like `func().a = 5`)
@@ -110,11 +109,9 @@ int main(void) {
 
 The normal way the ASM extension works is by templating your string using the inputs/outputs you've defined, but templating befunge is kinda difficult, so instead your inputs are loaded to your given registers before the asm runs and your outputs are loaded from the registers to the c values.
 
-The empty `""` is for 'constraints' which I have not yet properly implemented.
+The exact format for how I'm going to pick register locations, what a register ID actually means etc is subject to change, but currently `r20` is `20g`, `r12` is `12g`, etc.
 
-The exact format for how I'm going to pick register locations, what a register ID actually means etc is subject to change, but currently `r2` is `40g`, `r3` is `50g`, etc.
-
-As well as registers with `[r1]` to `[r97]`, you can use `[bstack]`, which will leave the value on the top of the bstack or read it from the top of the bstack. Again important to note that you should not leak any more values onto the bstack at the end beyond the number of `bstack` values in the listed outputs of the asm.
+As well as registers with `[r1]` to `[r97]`ish, you can use `[bstack]`, which will leave the value on the top of the bstack or read it from the top of the bstack. Again important to note that you should not leak any more values onto the bstack at the end beyond the number of `bstack` values in the listed outputs of the asm.
 
 ##### Register example
 ```c

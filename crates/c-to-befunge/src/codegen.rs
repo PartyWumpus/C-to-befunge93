@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    ARGS,
+    args::ARGS,
     builder::OpBuilder,
     ir::{BinOp, BranchType, CmpOp, FuncInfo, IROp, IRTopLevel, IRType, IRValue, UnaryOp},
 };

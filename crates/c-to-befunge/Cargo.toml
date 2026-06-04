@@ -1,0 +1,26 @@
+[package]
+name = "c-to-befunge"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "c_to_befunge"
+
+[lints]
+workspace = true
+
+[dependencies]
+anstyle = { workspace = true }
+clap = { workspace = true }
+codespan-reporting = { workspace = true }
+codespan_preprocessed = { workspace = true }
+include_dir = { workspace = true }
+indexmap = { workspace = true }
+lang-c = { workspace = true }
+parking_lot = { workspace = true }
+prime_factorization = { workspace = true }
+rand = { workspace = true }
+strum_macros = { workspace = true }
+thiserror = { workspace = true }
+walkdir = { workspace = true }
+serde = { workspace = true }
